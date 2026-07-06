@@ -1,0 +1,117 @@
+import Foundation
+
+// 手動註冊(無 XCTest runtime 探索可用)。新增測試方法時記得加進對應清單。
+
+let iso = ISO8601Tests()
+runSuite("ISO8601Tests", [
+    ("testParseVariants", iso.testParseVariants),
+])
+
+let claude = ClaudeCodeAdapterTests()
+runSuite("ClaudeCodeAdapterTests", [
+    ("testParsesFixture", claude.testParsesFixture),
+    ("testStatuslinePayloadYieldsOfficialRateLimits", claude.testStatuslinePayloadYieldsOfficialRateLimits),
+    ("testIncrementalScanDoesNotDuplicate", claude.testIncrementalScanDoesNotDuplicate),
+])
+
+let codex = CodexAdapterTests()
+runSuite("CodexAdapterTests", [
+    ("testParsesTotalsDeltasAndRateLimits", codex.testParsesTotalsDeltasAndRateLimits),
+    ("testIncrementalPreservesContext", codex.testIncrementalPreservesContext),
+])
+
+let ledger = LedgerTests()
+runSuite("LedgerTests", [
+    ("testDedupeAndPersistence", ledger.testDedupeAndPersistence),
+    ("testQueries", ledger.testQueries),
+])
+
+let limits = LimitEngineTests()
+runSuite("LimitEngineTests", [
+    ("testMonotonicGuardWithinWindow", limits.testMonotonicGuardWithinWindow),
+    ("testWindowRolloverAcceptsLowerAndEmitsReset", limits.testWindowRolloverAcceptsLowerAndEmitsReset),
+    ("testFullReindexAllowsDownwardCorrection", limits.testFullReindexAllowsDownwardCorrection),
+    ("testThresholdCrossingsAndExhausted", limits.testThresholdCrossingsAndExhausted),
+    ("testExpiredWindowShowsRecoveredAndSweepEmitsReset", limits.testExpiredWindowShowsRecoveredAndSweepEmitsReset),
+    ("testClaudeOfficialReadingsBeatBudgetEstimation", limits.testClaudeOfficialReadingsBeatBudgetEstimation),
+    ("testClaudeStaleReadingsFallBackToBudget", limits.testClaudeStaleReadingsFallBackToBudget),
+    ("testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback", limits.testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback),
+    ("testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated", limits.testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated),
+    ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
+    ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
+])
+
+let pricing = PricingTests()
+runSuite("PricingTests", [
+    ("testMatchingAndCost", pricing.testMatchingAndCost),
+    ("testUnknownModelIsNotSilentlyPriced", pricing.testUnknownModelIsNotSilentlyPriced),
+    ("testUserOverrideBeatsBuiltin", pricing.testUserOverrideBeatsBuiltin),
+    ("testBundledPriceListCoversCurrentModels", pricing.testBundledPriceListCoversCurrentModels),
+])
+
+let report = ReportTests()
+runSuite("ReportTests", [
+    ("testReportSectionsAndRedaction", report.testReportSectionsAndRedaction),
+])
+
+let feedingTests = FeedingEngineTests()
+runSuite("FeedingEngineTests", [
+    ("testHungerDecay", feedingTests.testHungerDecay),
+    ("testTokenXPIsCapped", feedingTests.testTokenXPIsCapped),
+    ("testHealthyDayBonusOnRollover", feedingTests.testHealthyDayBonusOnRollover),
+    ("testWarningCancelsHealthyBonus", feedingTests.testWarningCancelsHealthyBonus),
+    ("testTreatEconomyAndFeeding", feedingTests.testTreatEconomyAndFeeding),
+])
+
+let moodTests = MoodEngineTests()
+runSuite("MoodEngineTests", [
+    ("testPriorityOrdering", moodTests.testPriorityOrdering),
+    ("testTransientStatesBeatEverything", moodTests.testTransientStatesBeatEverything),
+    ("testBurnRateDrivesAnimationSpeed", moodTests.testBurnRateDrivesAnimationSpeed),
+    ("testNoDataMakesConfused", moodTests.testNoDataMakesConfused),
+])
+
+let integration = CoordinatorIntegrationTests()
+runSuite("CoordinatorIntegrationTests", [
+    ("testEndToEndRefreshAndExport", integration.testEndToEndRefreshAndExport),
+])
+
+let fileLock = FileLockTests()
+runSuite("FileLockTests", [
+    ("testExclusiveAcquireAndRelease", fileLock.testExclusiveAcquireAndRelease),
+])
+
+let crossProcess = LedgerCrossProcessTests()
+runSuite("LedgerCrossProcessTests", [
+    ("testReloadIfChangedConvergesAndDedupes", crossProcess.testReloadIfChangedConvergesAndDedupes),
+])
+
+let sharedSettings = SharedSettingsTests()
+runSuite("SharedSettingsTests", [
+    ("testCLIReadsGUISettingsFile", sharedSettings.testCLIReadsGUISettingsFile),
+])
+
+let compactionLock = CompactionLockTests()
+runSuite("CompactionLockTests", [
+    ("testInitIsReadOnlyAndCompactionRunsUnderRefresh", compactionLock.testInitIsReadOnlyAndCompactionRunsUnderRefresh),
+])
+
+let refreshLock = RefreshLockTests()
+runSuite("RefreshLockTests", [
+    ("testRefreshSkipsWhenLockHeldByAnotherProcess", refreshLock.testRefreshSkipsWhenLockHeldByAnotherProcess),
+])
+
+let pixel = PixelArtTests()
+runSuite("PixelArtTests", [
+    ("testAllFramesWellFormed", pixel.testAllFramesWellFormed),
+    ("testAnimStateMapping", pixel.testAnimStateMapping),
+    ("testGlyphsWellFormed", pixel.testGlyphsWellFormed),
+    ("testSpeechPhrases", pixel.testSpeechPhrases),
+])
+
+let hourly = HourlyBreakdownTests()
+runSuite("HourlyBreakdownTests", [
+    ("testBucketsCarryBreakdownAndTopProject", hourly.testBucketsCarryBreakdownAndTopProject),
+])
+
+finishTestRun()

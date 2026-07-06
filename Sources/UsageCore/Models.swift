@@ -1,0 +1,369 @@
+import Foundation
+
+// MARK: - Token accounting
+
+/// 正規化的 token 分類。`input` 一律指「非快取」輸入;快取讀寫分開計,方便逐類計價。
+public struct TokenBreakdown: Codable, Hashable, Sendable {
+    public var input: Int
+    public var output: Int
+    public var cacheRead: Int
+    public var cacheWrite5m: Int
+    public var cacheWrite1h: Int
+
+    public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite5m: Int = 0, cacheWrite1h: Int = 0) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite5m = cacheWrite5m
+        self.cacheWrite1h = cacheWrite1h
+    }
+
+    public var cacheWrite: Int { cacheWrite5m + cacheWrite1h }
+    public var total: Int { input + output + cacheRead + cacheWrite5m + cacheWrite1h }
+
+    public static func + (a: TokenBreakdown, b: TokenBreakdown) -> TokenBreakdown {
+        TokenBreakdown(
+            input: a.input + b.input,
+            output: a.output + b.output,
+            cacheRead: a.cacheRead + b.cacheRead,
+            cacheWrite5m: a.cacheWrite5m + b.cacheWrite5m,
+            cacheWrite1h: a.cacheWrite1h + b.cacheWrite1h
+        )
+    }
+
+    public static let zero = TokenBreakdown()
+}
+
+// MARK: - Usage events (ledger rows)
+
+public struct UsageEvent: Codable, Hashable, Sendable, Identifiable {
+    /// 穩定去重鍵(provider 前綴 + 來源內固有識別碼)。
+    public var id: String
+    public var providerId: String
+    public var accountId: String?
+    /// 專案的穩定識別(通常是 cwd 路徑字串);報告預設只顯示 `projectName`。
+    public var projectId: String?
+    public var projectName: String?
+    public var modelId: String?
+    public var timestamp: Date
+    public var tokens: TokenBreakdown
+    public var sourceKind: String
+    public var sourcePath: String?
+
+    public init(id: String, providerId: String, accountId: String? = nil, projectId: String? = nil,
+                projectName: String? = nil, modelId: String? = nil, timestamp: Date,
+                tokens: TokenBreakdown, sourceKind: String, sourcePath: String? = nil) {
+        self.id = id
+        self.providerId = providerId
+        self.accountId = accountId
+        self.projectId = projectId
+        self.projectName = projectName
+        self.modelId = modelId
+        self.timestamp = timestamp
+        self.tokens = tokens
+        self.sourceKind = sourceKind
+        self.sourcePath = sourcePath
+    }
+}
+
+// MARK: - Provider-reported rate limits (source events, not final truth)
+
+public struct RateLimitWindowReading: Codable, Hashable, Sendable {
+    public var usedPercent: Double
+    public var windowMinutes: Int
+    public var resetsAt: Date?
+
+    public init(usedPercent: Double, windowMinutes: Int, resetsAt: Date?) {
+        self.usedPercent = usedPercent
+        self.windowMinutes = windowMinutes
+        self.resetsAt = resetsAt
+    }
+}
+
+public struct RateLimitReading: Codable, Hashable, Sendable {
+    public var providerId: String
+    public var observedAt: Date
+    public var primary: RateLimitWindowReading?
+    public var secondary: RateLimitWindowReading?
+    public var planType: String?
+    public var sourcePath: String?
+
+    public init(providerId: String, observedAt: Date, primary: RateLimitWindowReading?,
+                secondary: RateLimitWindowReading?, planType: String? = nil, sourcePath: String? = nil) {
+        self.providerId = providerId
+        self.observedAt = observedAt
+        self.primary = primary
+        self.secondary = secondary
+        self.planType = planType
+        self.sourcePath = sourcePath
+    }
+}
+
+// MARK: - Normalized provider snapshot (what the pet & UI consume)
+
+public enum ProviderStatus: String, Codable, Sendable {
+    case unavailable
+    case noData
+    case stale
+    case healthy
+    case warning
+    case exhausted
+    case error
+}
+
+public struct UsageSnapshot: Codable, Sendable, Identifiable {
+    public var providerId: String
+    public var displayName: String
+    public var status: ProviderStatus
+    public var sessionUsagePercent: Double?
+    public var weeklyUsagePercent: Double?
+    public var resetAt: Date?
+    public var updatedAt: Date?
+    public var tokenInput: Int?
+    public var tokenOutput: Int?
+    public var tokenCache: Int?
+    public var estimatedCost: Double?
+    public var sourceDescription: String
+    public var errorMessage: String?
+
+    public var id: String { providerId }
+
+    public init(providerId: String, displayName: String, status: ProviderStatus,
+                sessionUsagePercent: Double? = nil, weeklyUsagePercent: Double? = nil,
+                resetAt: Date? = nil, updatedAt: Date? = nil,
+                tokenInput: Int? = nil, tokenOutput: Int? = nil, tokenCache: Int? = nil,
+                estimatedCost: Double? = nil, sourceDescription: String, errorMessage: String? = nil) {
+        self.providerId = providerId
+        self.displayName = displayName
+        self.status = status
+        self.sessionUsagePercent = sessionUsagePercent
+        self.weeklyUsagePercent = weeklyUsagePercent
+        self.resetAt = resetAt
+        self.updatedAt = updatedAt
+        self.tokenInput = tokenInput
+        self.tokenOutput = tokenOutput
+        self.tokenCache = tokenCache
+        self.estimatedCost = estimatedCost
+        self.sourceDescription = sourceDescription
+        self.errorMessage = errorMessage
+    }
+}
+
+// MARK: - Limit state
+
+public enum Confidence: String, Codable, Sendable {
+    case high
+    case estimated
+    case stale
+    case unknown
+}
+
+public enum WarningState: String, Codable, Sendable {
+    case ok
+    case warning
+    case exhausted
+    case stale
+    case noData
+}
+
+public struct LimitWindowState: Codable, Sendable, Hashable {
+    public var usedPercent: Double?
+    public var usedTokens: Int?
+    public var budgetTokens: Int?
+    public var resetAt: Date?
+    public var windowMinutes: Int
+    public var confidence: Confidence
+    /// 同一窗口內曾發生向下修正(僅允許於全量重建索引後),UI 需標示。
+    public var corrected: Bool
+
+    public init(usedPercent: Double? = nil, usedTokens: Int? = nil, budgetTokens: Int? = nil,
+                resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, corrected: Bool = false) {
+        self.usedPercent = usedPercent
+        self.usedTokens = usedTokens
+        self.budgetTokens = budgetTokens
+        self.resetAt = resetAt
+        self.windowMinutes = windowMinutes
+        self.confidence = confidence
+        self.corrected = corrected
+    }
+}
+
+public struct ProviderLimitState: Codable, Sendable, Identifiable {
+    public var providerId: String
+    public var fiveHour: LimitWindowState
+    public var weekly: LimitWindowState
+    public var burnRateTokensPerHour: Double
+    public var projectedExhaustionAt: Date?
+    public var lastEventAt: Date?
+    public var lastReadingAt: Date?
+    public var warning: WarningState
+    public var planType: String?
+    public var lastSourceDescription: String?
+
+    public var id: String { providerId }
+
+    public init(providerId: String, fiveHour: LimitWindowState, weekly: LimitWindowState,
+                burnRateTokensPerHour: Double = 0, projectedExhaustionAt: Date? = nil,
+                lastEventAt: Date? = nil, lastReadingAt: Date? = nil,
+                warning: WarningState = .ok, planType: String? = nil, lastSourceDescription: String? = nil) {
+        self.providerId = providerId
+        self.fiveHour = fiveHour
+        self.weekly = weekly
+        self.burnRateTokensPerHour = burnRateTokensPerHour
+        self.projectedExhaustionAt = projectedExhaustionAt
+        self.lastEventAt = lastEventAt
+        self.lastReadingAt = lastReadingAt
+        self.warning = warning
+        self.planType = planType
+        self.lastSourceDescription = lastSourceDescription
+    }
+}
+
+/// 限額引擎在單次刷新中偵測到的重要轉變(供寵物/通知使用)。
+public enum LimitTransition: Sendable, Hashable {
+    case reset(providerId: String, window: String)
+    case crossedThreshold(providerId: String, window: String, percent: Double, threshold: Double)
+    case exhausted(providerId: String, window: String)
+}
+
+// MARK: - Aggregates for pages & reports
+
+public struct ProjectSummary: Codable, Sendable, Identifiable {
+    public var projectId: String
+    public var projectName: String
+    public var tokens: TokenBreakdown
+    public var cost: CostResult
+    public var providers: [String]
+    public var topModel: String?
+    public var lastActive: Date?
+    public var shareOfPeriod: Double
+
+    public var id: String { projectId }
+
+    public init(projectId: String, projectName: String, tokens: TokenBreakdown, cost: CostResult,
+                providers: [String], topModel: String?, lastActive: Date?, shareOfPeriod: Double) {
+        self.projectId = projectId
+        self.projectName = projectName
+        self.tokens = tokens
+        self.cost = cost
+        self.providers = providers
+        self.topModel = topModel
+        self.lastActive = lastActive
+        self.shareOfPeriod = shareOfPeriod
+    }
+}
+
+public struct ModelUsageSummary: Codable, Sendable, Identifiable {
+    public var providerId: String
+    public var modelId: String
+    public var tokens: TokenBreakdown
+    public var cost: CostResult
+
+    public var id: String { providerId + "/" + modelId }
+
+    public init(providerId: String, modelId: String, tokens: TokenBreakdown, cost: CostResult) {
+        self.providerId = providerId
+        self.modelId = modelId
+        self.tokens = tokens
+        self.cost = cost
+    }
+}
+
+public struct HourBucket: Codable, Sendable, Identifiable {
+    public var start: Date
+    public var tokens: Int
+    public var byProvider: [String: Int]
+    public var breakdown: TokenBreakdown
+    public var topProject: String?
+
+    public var id: Date { start }
+
+    public init(start: Date, tokens: Int, byProvider: [String: Int],
+                breakdown: TokenBreakdown = .zero, topProject: String? = nil) {
+        self.start = start
+        self.tokens = tokens
+        self.byProvider = byProvider
+        self.breakdown = breakdown
+        self.topProject = topProject
+    }
+}
+
+/// 成本計算結果:`known` 為有定價依據的部分;缺定價的 token 歸入 `unknownModelTokens`。
+public struct CostResult: Codable, Sendable, Hashable {
+    public var knownUSD: Double
+    public var unknownModelTokens: Int
+    public var isEstimated: Bool
+
+    public init(knownUSD: Double = 0, unknownModelTokens: Int = 0, isEstimated: Bool = false) {
+        self.knownUSD = knownUSD
+        self.unknownModelTokens = unknownModelTokens
+        self.isEstimated = isEstimated
+    }
+
+    public static func + (a: CostResult, b: CostResult) -> CostResult {
+        CostResult(knownUSD: a.knownUSD + b.knownUSD,
+                   unknownModelTokens: a.unknownModelTokens + b.unknownModelTokens,
+                   isEstimated: a.isEstimated || b.isEstimated)
+    }
+
+    public static let zero = CostResult()
+}
+
+// MARK: - Provider adapter contract
+
+public struct ProviderAvailability: Sendable {
+    public var available: Bool
+    public var detail: String
+
+    public init(available: Bool, detail: String) {
+        self.available = available
+        self.detail = detail
+    }
+}
+
+public struct FileScanMark: Codable, Sendable, Hashable {
+    public var offset: Int64
+    public var size: Int64
+    /// 續讀所需的小型解析上下文(如 Codex 的目前 model/cwd/累計 totals)。
+    public var context: [String: String]?
+
+    public init(offset: Int64, size: Int64, context: [String: String]? = nil) {
+        self.offset = offset
+        self.size = size
+        self.context = context
+    }
+}
+
+/// 每個 adapter 的掃描進度(檔案 path → 已處理位移),持久化以支援增量刷新。
+public struct ScanState: Codable, Sendable {
+    public var files: [String: FileScanMark]
+
+    public init(files: [String: FileScanMark] = [:]) {
+        self.files = files
+    }
+}
+
+public struct AdapterRefreshResult: Sendable {
+    public var events: [UsageEvent]
+    public var rateLimits: [RateLimitReading]
+    public var scannedFiles: Int
+    public var parseErrors: Int
+
+    public init(events: [UsageEvent] = [], rateLimits: [RateLimitReading] = [],
+                scannedFiles: Int = 0, parseErrors: Int = 0) {
+        self.events = events
+        self.rateLimits = rateLimits
+        self.scannedFiles = scannedFiles
+        self.parseErrors = parseErrors
+    }
+}
+
+public protocol ProviderAdapter: Sendable {
+    var providerId: String { get }
+    var displayName: String { get }
+    func detectAvailability() -> ProviderAvailability
+    /// 從 `state` 記錄的位移續讀;回傳新事件與更新後的掃描進度。實作必須只讀。
+    func refreshUsage(state: ScanState) throws -> (AdapterRefreshResult, ScanState)
+    func explainDataSources() -> String
+    func explainRequiredPermissions() -> String
+}

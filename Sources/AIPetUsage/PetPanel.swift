@@ -1,0 +1,452 @@
+import AppKit
+import SwiftUI
+import UsageCore
+import PetCore
+
+/// 漂浮寵物視窗:無邊框、透明、置頂、可拖曳、跨 Spaces,位置持久化。
+/// 選配「螢幕漫遊」:閒置時沿螢幕底部走動(可關閉、遵守減少動態偏好)。
+@MainActor
+final class PetPanelController: NSObject, NSWindowDelegate {
+    private var panel: NSPanel?
+    private weak var model: AppModel?
+    private var wanderTask: Task<Void, Never>?
+    /// 漫遊位移期間為 true,windowDidMove 據此略過位置持久化(避免每秒十餘次寫檔)。
+    private var isWanderMoving = false
+    private var wanderHeading: Int = 1
+    private var wanderPhaseUntil: Date = .distantPast
+
+    init(model: AppModel) {
+        self.model = model
+        super.init()
+    }
+
+    private func makePanel() -> NSPanel {
+        let size = panelSize()
+        let panel = NSPanel(contentRect: NSRect(origin: restoreOrigin(for: size), size: size),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        panel.isMovableByWindowBackground = true
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.ignoresMouseEvents = model?.settings.clickThrough ?? false // 首次建立就套用
+        panel.delegate = self
+        if let model {
+            let host = NSHostingView(rootView: PetView().environment(model))
+            host.frame = NSRect(origin: .zero, size: size)
+            panel.contentView = host
+        }
+        return panel
+    }
+
+    private func panelSize() -> NSSize {
+        let base = model?.settings.petSize ?? 96
+        return NSSize(width: base * 2.2, height: base * 2.0)
+    }
+
+    private func restoreOrigin(for size: NSSize) -> NSPoint {
+        if let x = model?.settings.petPositionX, let y = model?.settings.petPositionY {
+            return NSPoint(x: x, y: y)
+        }
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        return NSPoint(x: screen.maxX - size.width - 24, y: screen.minY + 24)
+    }
+
+    func show() {
+        if panel == nil { panel = makePanel() }
+        panel?.orderFrontRegardless()
+        restartWanderLoop()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+        stopWanderLoop()
+    }
+
+    func destroy() {
+        stopWanderLoop()
+        panel?.delegate = nil
+        panel?.close()
+        panel = nil
+    }
+
+    func apply(settings: AppSettings) {
+        guard let panel else {
+            if settings.petVisible { show() }
+            return
+        }
+        panel.ignoresMouseEvents = settings.clickThrough
+        let newSize = panelSize()
+        if abs(panel.frame.width - newSize.width) > 1 {
+            var frame = panel.frame
+            frame.size = newSize
+            panel.setFrame(frame, display: true)
+            panel.contentView?.frame = NSRect(origin: .zero, size: newSize)
+        }
+        if settings.petVisible { show() } else { hide() }
+        restartWanderLoop()
+    }
+
+    nonisolated func windowDidMove(_ notification: Notification) {
+        Task { @MainActor in
+            guard let panel = self.panel, !self.isWanderMoving else { return }
+            self.model?.savePetPosition(panel.frame.origin)
+        }
+    }
+
+    // MARK: - 漫遊迴圈
+
+    private func stopWanderLoop() {
+        wanderTask?.cancel()
+        wanderTask = nil
+        model?.setWanderDirection(0)
+    }
+
+    private func restartWanderLoop() {
+        stopWanderLoop()
+        guard model?.settings.petWanderEnabled == true else { return }
+        wanderTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 90_000_000) // ~11 Hz,CPU 影響可忽略
+                await self?.wanderTick()
+            }
+        }
+    }
+
+    private func wanderTick() {
+        guard let model, let panel, panel.isVisible else { return }
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let moodOK = [.idle, .happy, .focused].contains(model.mood.mood)
+        guard model.settings.appMode == .full,
+              model.settings.petWanderEnabled,
+              !model.settings.quietMode,
+              !reduceMotion,
+              moodOK
+        else {
+            model.setWanderDirection(0)
+            return
+        }
+
+        let now = Date()
+        if now >= wanderPhaseUntil {
+            // 走 3–8 秒、停 2–6 秒交替,方向隨機
+            if model.wanderDirection == 0 {
+                wanderHeading = Bool.random() ? 1 : -1
+                model.setWanderDirection(wanderHeading)
+                wanderPhaseUntil = now.addingTimeInterval(.random(in: 3...8))
+            } else {
+                model.setWanderDirection(0)
+                wanderPhaseUntil = now.addingTimeInterval(.random(in: 2...6))
+            }
+        }
+        guard model.wanderDirection != 0 else { return }
+
+        guard let screen = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        var origin = panel.frame.origin
+        origin.x += CGFloat(wanderHeading) * 1.4
+        let minX = screen.minX + 12
+        let maxX = screen.maxX - panel.frame.width - 12
+        if origin.x <= minX || origin.x >= maxX {
+            wanderHeading *= -1
+            model.setWanderDirection(wanderHeading)
+            origin.x = min(max(origin.x, minX), maxX)
+        }
+        isWanderMoving = true
+        panel.setFrameOrigin(origin)
+        isWanderMoving = false
+    }
+
+    /// 漫遊結束/隱藏時保存最後位置。
+    func persistPositionNow() {
+        guard let panel else { return }
+        model?.savePetPosition(panel.frame.origin)
+    }
+}
+
+// MARK: - 像素渲染
+
+/// 以 Canvas 最近鄰縮放繪製像素幀;deterministic、無外部資源。
+struct PixelFrameView: View {
+    let rows: [String]
+    let palette: [Character: UInt32]
+    let gridWidth: Int
+    let gridHeight: Int
+    var flipped = false
+
+    var body: some View {
+        Canvas { context, size in
+            let cols = CGFloat(gridWidth)
+            let lines = CGFloat(gridHeight)
+            let cell = min(size.width / cols, size.height / lines)
+            let xInset = (size.width - cell * cols) / 2
+            let yInset = (size.height - cell * lines) / 2
+            for (y, row) in rows.enumerated() {
+                for (x, ch) in row.enumerated() where ch != "." {
+                    guard let rgb = palette[ch] else { continue }
+                    let drawX = flipped ? (cols - 1 - CGFloat(x)) : CGFloat(x)
+                    let rect = CGRect(x: xInset + drawX * cell,
+                                      y: yInset + CGFloat(y) * cell,
+                                      width: cell + 0.5, height: cell + 0.5)
+                    context.fill(Path(rect), with: .color(color(rgb)))
+                }
+            }
+        }
+    }
+
+    private func color(_ rgb: UInt32) -> Color {
+        Color(red: Double((rgb >> 16) & 0xFF) / 255,
+              green: Double((rgb >> 8) & 0xFF) / 255,
+              blue: Double(rgb & 0xFF) / 255)
+    }
+}
+
+/// 心情徽章(像素字形,非 emoji),帶輕微閃爍。
+struct PixelGlyphView: View {
+    let glyph: (rows: [String], color: UInt32)
+
+    var body: some View {
+        Canvas { context, size in
+            let cols = CGFloat(glyph.rows.map(\.count).max() ?? 1)
+            let lines = CGFloat(glyph.rows.count)
+            let cell = min(size.width / cols, size.height / lines)
+            let c = Color(red: Double((glyph.color >> 16) & 0xFF) / 255,
+                          green: Double((glyph.color >> 8) & 0xFF) / 255,
+                          blue: Double(glyph.color & 0xFF) / 255)
+            for (y, row) in glyph.rows.enumerated() {
+                for (x, ch) in row.enumerated() where ch == "#" {
+                    context.fill(Path(CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell,
+                                             width: cell + 0.4, height: cell + 0.4)),
+                                 with: .color(c))
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 寵物本體
+
+struct PetView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var bubbleUntil: Date = .distantPast
+    @State private var bubbleText: String = ""
+    @State private var phraseTick = 0
+
+    var body: some View {
+        let settings = model.settings
+        let mood = model.mood
+        let size = settings.petSize
+        let paused = settings.quietMode || reduceMotion
+
+        TimelineView(.animation(minimumInterval: 1.0 / 10, paused: paused)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let walking = model.wanderDirection != 0
+            let state = PixelPets.animState(for: mood.mood, walking: walking)
+            let sprite = PixelPets.sprite(for: settings.species)
+            let frames = sprite.frames(for: state)
+            let fps = PixelPets.fps(for: state) * mood.animationSpeed
+            let frameIndex = paused ? 0 : Int(t * fps) % max(1, frames.count)
+
+            VStack(spacing: 2) {
+                if context.date < bubbleUntil {
+                    PixelBubble(text: bubbleText)
+                        .transition(.opacity)
+                }
+                ZStack(alignment: .topTrailing) {
+                    PixelFrameView(rows: frames.indices.contains(frameIndex) ? frames[frameIndex] : frames[0],
+                                   palette: sprite.palette,
+                                   gridWidth: sprite.width,
+                                   gridHeight: sprite.height,
+                                   flipped: model.wanderDirection < 0)
+                        .frame(width: size * 1.3, height: size * 1.15)
+                        .saturation(mood.mood == .exhausted ? 0.35 : 1)
+                        .opacity(mood.mood == .sleeping ? 0.85 : 1)
+
+                    if let glyph = PixelGlyphs.glyph(for: mood.mood) {
+                        PixelGlyphView(glyph: glyph)
+                            .frame(width: size * 0.16, height: size * 0.26)
+                            .offset(x: -size * 0.02, y: -size * 0.04)
+                            .opacity(paused ? 1 : 0.55 + 0.45 * abs(sin(t * 3)))
+                    }
+
+                    if mood.mood == .celebration {
+                        ConfettiPixels(t: paused ? 0 : t)
+                            .frame(width: size * 1.3, height: size * 1.15)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                // 每家 provider 各一條迷你量表(同時看到 Claude 與 Codex)
+                VStack(spacing: 2) {
+                    ForEach(model.dashboard.limitStates.prefix(4)) { limit in
+                        HStack(spacing: 4) {
+                            Text(shortProviderCode(limit.providerId))
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Theme.textSecondary)
+                                .frame(width: 16, alignment: .trailing)
+                            GaugeBar(percent: limit.fiveHour.usedPercent ?? 0,
+                                     warn: settings.core.warnThresholdPercent)
+                                .frame(height: 3)
+                                .opacity(limit.fiveHour.usedPercent == nil ? 0.25 : 0.9)
+                        }
+                    }
+                }
+                .frame(width: size * 1.0)
+            }
+            .padding(6)
+        }
+        .opacity(settings.petOpacity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            showBubble(statsText, seconds: 6)
+        }
+        .onChange(of: model.mood.mood) { _, newMood in
+            guard settings.petSpeechEnabled,
+                  let phrases = PetSpeech.phrases(for: newMood), !phrases.isEmpty else { return }
+            phraseTick += 1
+            showBubble(phrases[phraseTick % phrases.count], seconds: 3.5)
+        }
+        .onChange(of: model.feedNotice?.at) { _, _ in
+            if let notice = model.feedNotice {
+                showBubble(notice.text, seconds: 4)
+            }
+        }
+        .help(PetInfo.tooltip)
+        .contextMenu { PetContextMenu() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    }
+
+    private func showBubble(_ text: String, seconds: TimeInterval) {
+        bubbleText = text
+        bubbleUntil = Date().addingTimeInterval(seconds)
+    }
+
+    private var statsText: String {
+        let pet = model.petState
+        return "\(model.mood.summary)\nLv.\(pet.level) · hunger \(Int(pet.hunger))% · treats \(model.treatsAvailable)"
+    }
+}
+
+/// 慶祝彩紙:繞頭頂旋轉的 4 顆像素點(程序化,無素材)。
+struct ConfettiPixels: View {
+    let t: TimeInterval
+
+    var body: some View {
+        Canvas { context, size in
+            let colors: [Color] = [.yellow, .pink, .teal, .orange]
+            for i in 0..<4 {
+                let phase = t * 2.2 + Double(i) * .pi / 2
+                let x = size.width * 0.5 + cos(phase) * size.width * 0.42
+                let y = size.height * 0.28 + sin(phase * 1.4) * size.height * 0.16
+                let cell = max(2.5, size.width / 26)
+                context.fill(Path(CGRect(x: x, y: y, width: cell, height: cell)),
+                             with: .color(colors[i]))
+            }
+        }
+    }
+}
+
+/// 像素風對話泡泡:階梯圓角、粗黑框、白底、階梯尾巴(參考 8-bit 漫畫泡泡風格,自繪)。
+struct PixelBubble: View {
+    let text: String
+
+    private let unit: CGFloat = 3   // 一個「像素」的邊長
+    private let border: CGFloat = 3
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color(red: 0.12, green: 0.12, blue: 0.14))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background { bubbleShape }
+            .padding(.bottom, unit * 3) // 尾巴空間
+    }
+
+    private var bubbleShape: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let u = unit
+            let ink = Color(red: 0.1, green: 0.1, blue: 0.12)
+            let paper = Color(red: 0.98, green: 0.98, blue: 0.96)
+            Canvas { context, _ in
+                // 外層(黑框):階梯圓角矩形 = 三個相疊矩形
+                func steppedRect(_ rect: CGRect, into path: inout Path) {
+                    path.addRect(CGRect(x: rect.minX + u, y: rect.minY, width: rect.width - 2 * u, height: rect.height))
+                    path.addRect(CGRect(x: rect.minX, y: rect.minY + u, width: rect.width, height: rect.height - 2 * u))
+                }
+                var outer = Path()
+                steppedRect(CGRect(x: 0, y: 0, width: w, height: h), into: &outer)
+                // 尾巴(左下,兩階)
+                outer.addRect(CGRect(x: w * 0.28, y: h - u, width: u * 3, height: u * 2))
+                outer.addRect(CGRect(x: w * 0.28 - u, y: h + u, width: u * 2, height: u * 2))
+                context.fill(outer, with: .color(ink))
+
+                var inner = Path()
+                steppedRect(CGRect(x: border, y: border, width: w - 2 * border, height: h - 2 * border), into: &inner)
+                inner.addRect(CGRect(x: w * 0.28 + u * 0.5, y: h - u * 2, width: u * 2, height: u * 2))
+                context.fill(inner, with: .color(paper))
+            }
+            .frame(width: w, height: h + u * 3)
+        }
+    }
+}
+
+struct GaugeBar: View {
+    let percent: Double
+    let warn: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                if percent > 0 {
+                    Capsule()
+                        .fill(color)
+                        .frame(width: max(3, geo.size.width * min(1, percent / 100)))
+                }
+            }
+        }
+    }
+
+    private var color: Color {
+        if percent >= 99.5 { return .red }
+        if percent >= warn { return .orange }
+        return .green
+    }
+}
+
+struct PetContextMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Section("Feed (treats: \(model.treatsAvailable))") {
+            ForEach(FoodItem.starterFoods) { food in
+                Button("\(food.emoji) \(food.name)\(food.treatCost > 0 ? "  — \(food.treatCost)🎟" : "")") {
+                    _ = model.feed(food)
+                }
+            }
+        }
+        Divider()
+        Button("Open Dashboard") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "dashboard")
+        }
+        Button(model.settings.petWanderEnabled ? "Wandering: On" : "Wandering: Off") {
+            model.updateSettings { $0.petWanderEnabled.toggle() }
+        }
+        Button(model.settings.quietMode ? "Quiet Mode: On" : "Quiet Mode: Off") {
+            model.updateSettings { $0.quietMode.toggle() }
+        }
+        Button("Hide Pet") {
+            model.updateSettings { $0.petVisible = false }
+        }
+    }
+}
