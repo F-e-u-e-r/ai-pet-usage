@@ -69,6 +69,12 @@ final class AppModel {
     // MARK: - 生命週期
 
     func start() {
+        if LaunchAtLogin.available {
+            let enabled = LaunchAtLogin.isEnabled
+            if settings.launchAtLogin != enabled {
+                updateSettings { $0.launchAtLogin = enabled }
+            }
+        }
         if settings.notificationsEnabled { Notifier.requestAuthorization() }
         applyModeSideEffects()
         observeAppearanceChanges()
@@ -190,6 +196,11 @@ final class AppModel {
         } else {
             petPanel?.apply(settings: settings)
         }
+    }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        updateSettings { $0.launchAtLogin = on }
+        LaunchAtLogin.setEnabled(on)
     }
 
     /// 模式切換的核心:monitor-only 完全銷毀寵物視窗與動畫(省 RAM),

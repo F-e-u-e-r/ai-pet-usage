@@ -74,6 +74,14 @@ public final class UsageLedger {
                 let handle = try FileHandle(forWritingTo: fileURL)
                 defer { try? handle.close() }
                 let end = try handle.seekToEnd()
+                if end > 0 {
+                    let reader = try FileHandle(forReadingFrom: fileURL)
+                    defer { try? reader.close() }
+                    try reader.seek(toOffset: end - 1)
+                    if try reader.read(upToCount: 1)?.first != 0x0A {
+                        blob.insert(0x0A, at: 0)
+                    }
+                }
                 try handle.write(contentsOf: blob)
                 expectedFileSize = Int64(end) + Int64(blob.count)
             } else {

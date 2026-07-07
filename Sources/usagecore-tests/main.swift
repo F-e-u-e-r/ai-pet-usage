@@ -7,11 +7,17 @@ runSuite("ISO8601Tests", [
     ("testParseVariants", iso.testParseVariants),
 ])
 
+let scanner = JSONLScannerTests()
+runSuite("JSONLScannerTests", [
+    ("testChunkBoundaryScanPreservesOffsetsAndLines", scanner.testChunkBoundaryScanPreservesOffsetsAndLines),
+])
+
 let claude = ClaudeCodeAdapterTests()
 runSuite("ClaudeCodeAdapterTests", [
     ("testParsesFixture", claude.testParsesFixture),
     ("testStatuslinePayloadYieldsOfficialRateLimits", claude.testStatuslinePayloadYieldsOfficialRateLimits),
     ("testIncrementalScanDoesNotDuplicate", claude.testIncrementalScanDoesNotDuplicate),
+    ("testDetectAvailabilityRechecksInjectedRootAfterCreation", claude.testDetectAvailabilityRechecksInjectedRootAfterCreation),
 ])
 
 let codex = CodexAdapterTests()
@@ -30,6 +36,8 @@ let limits = LimitEngineTests()
 runSuite("LimitEngineTests", [
     ("testMonotonicGuardWithinWindow", limits.testMonotonicGuardWithinWindow),
     ("testWindowRolloverAcceptsLowerAndEmitsReset", limits.testWindowRolloverAcceptsLowerAndEmitsReset),
+    ("testNilResetRolloverAcceptsLowerAndEmitsReset", limits.testNilResetRolloverAcceptsLowerAndEmitsReset),
+    ("testHistoryDedupPreservesSlopeAcrossEqualRefreshes", limits.testHistoryDedupPreservesSlopeAcrossEqualRefreshes),
     ("testFullReindexAllowsDownwardCorrection", limits.testFullReindexAllowsDownwardCorrection),
     ("testThresholdCrossingsAndExhausted", limits.testThresholdCrossingsAndExhausted),
     ("testExpiredWindowShowsRecoveredAndSweepEmitsReset", limits.testExpiredWindowShowsRecoveredAndSweepEmitsReset),
@@ -86,6 +94,8 @@ runSuite("FileLockTests", [
 let crossProcess = LedgerCrossProcessTests()
 runSuite("LedgerCrossProcessTests", [
     ("testReloadIfChangedConvergesAndDedupes", crossProcess.testReloadIfChangedConvergesAndDedupes),
+    ("testAppendAfterPartialFinalLinePreservesNewEventOnReload",
+     crossProcess.testAppendAfterPartialFinalLinePreservesNewEventOnReload),
 ])
 
 let sharedSettings = SharedSettingsTests()

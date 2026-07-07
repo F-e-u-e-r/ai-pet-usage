@@ -7,7 +7,10 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     public let providerId = "claude-code"
     public let displayName = "Claude Code"
 
-    public let roots: [URL]
+    private let candidateRoots: [URL]
+    public var roots: [URL] {
+        candidateRoots.filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
     /// Claude Code statusline payload 的落地檔候選位置。Claude Code 每次刷新
     /// 狀態列都會把官方 JSON(含 `rate_limits` 的 5h/週 used_percentage 與
     /// resets_at)餵給 statusline 指令;只要有任何 hook 把它存檔,就能在此讀到
@@ -17,14 +20,14 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     public init(roots: [URL]? = nil, statuslineFiles: [URL]? = nil) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         if let roots {
-            self.roots = roots
+            self.candidateRoots = roots
         } else {
             var candidates = [home.appendingPathComponent(".claude/projects")]
             if let cfg = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] {
                 candidates.append(URL(fileURLWithPath: cfg).appendingPathComponent("projects"))
             }
             candidates.append(home.appendingPathComponent(".config/claude/projects"))
-            self.roots = candidates.filter { FileManager.default.fileExists(atPath: $0.path) }
+            self.candidateRoots = candidates
         }
         if let statuslineFiles {
             self.statuslineFiles = statuslineFiles

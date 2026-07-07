@@ -16,6 +16,7 @@ The repo contains both the working app (SwiftPM, `Sources/`) and the specs it wa
 - `docs/HTML_REPORT_EXPORT_SPEC.md`: local static HTML report export requirements.
 - `docs/DATA_SOURCES.md`: exact local files read by each provider adapter and the limit-calculation policy.
 - `docs/PROVIDER_RESEARCH.md`: research checklists and promotion gates for the Antigravity and Grok Code adapters.
+- `docs/FINAL_PLAN.md`: consolidated execution plan (v0.2 → v1.0) merging the 2026-07-07 full-repo review (bug/security fix list) with the pixel-pet v2 rewrite plan (front-facing mascot style guide, reference research, licensing guardrails) into one milestone timeline.
 
 ## Product Direction
 

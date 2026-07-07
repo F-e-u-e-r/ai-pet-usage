@@ -128,8 +128,10 @@ public final class LimitEngine {
         }
 
         let sameWindow = isSameWindow(current.resetsAt, reading.resetsAt)
+        let looksLikeNilRollover = current.resetsAt == nil && reading.resetsAt == nil
+            && reading.usedPercent < current.percent - 20
 
-        if sameWindow {
+        if sameWindow && !looksLikeNilRollover {
             let previous = current.percent
             if fullReindex {
                 current.corrected = reading.usedPercent < previous - 0.5
@@ -145,7 +147,7 @@ public final class LimitEngine {
                 appendCrossings(previous: previous, now: current.percent, providerId: providerId,
                                 windowName: windowName, settings: settings, transitions: &transitions)
             }
-            if observedAt >= current.observedAt || current.percent != previous {
+            if current.history.last?.percent != current.percent {
                 current.history.append(PercentSample(at: observedAt, percent: current.percent))
                 if current.history.count > 48 { current.history.removeFirst(current.history.count - 48) }
             }
@@ -195,7 +197,9 @@ public final class LimitEngine {
     /// 掃描已過期的窗口(resets_at 已過),觸發一次性的重置轉變。
     public func sweepExpiredWindows(now: Date = Date()) -> [LimitTransition] {
         var transitions: [LimitTransition] = []
+        var changed = false
         for (providerId, var provider) in store {
+            var providerChanged = false
             for keyPath in [\PersistedProvider.primary, \PersistedProvider.secondary] {
                 guard var w = provider[keyPath: keyPath], let resetsAt = w.resetsAt,
                       resetsAt < now, !w.expiryHandled else { continue }
@@ -205,10 +209,14 @@ public final class LimitEngine {
                 }
                 w.expiryHandled = true
                 if keyPath == \PersistedProvider.primary { provider.primary = w } else { provider.secondary = w }
+                providerChanged = true
             }
-            store[providerId] = provider
+            if providerChanged {
+                store[providerId] = provider
+                changed = true
+            }
         }
-        save()
+        if changed { save() }
         return transitions
     }
 
@@ -218,18 +226,31 @@ public final class LimitEngine {
     public func noteEstimatedBlock(providerId: String, blockEnd: Date?, blockTokens: Int, now: Date = Date()) -> [LimitTransition] {
         var provider = store[providerId] ?? PersistedProvider()
         var transitions: [LimitTransition] = []
+        var changed = false
         if let storedEnd = provider.estimatedBlockEnd, now > storedEnd,
            (provider.estimatedBlockTokens ?? 0) > 0, provider.estimatedResetHandled != true {
             transitions.append(.reset(providerId: providerId, window: "5h"))
             provider.estimatedResetHandled = true
+            changed = true
         }
         if let blockEnd {
-            if provider.estimatedBlockEnd != blockEnd { provider.estimatedResetHandled = false }
-            provider.estimatedBlockEnd = blockEnd
-            provider.estimatedBlockTokens = blockTokens
+            if provider.estimatedBlockEnd != blockEnd {
+                provider.estimatedBlockEnd = blockEnd
+                changed = true
+                if provider.estimatedResetHandled != false {
+                    provider.estimatedResetHandled = false
+                    changed = true
+                }
+            }
+            if provider.estimatedBlockTokens != blockTokens {
+                provider.estimatedBlockTokens = blockTokens
+                changed = true
+            }
         }
-        store[providerId] = provider
-        save()
+        if changed {
+            store[providerId] = provider
+            save()
+        }
         return transitions
     }
 

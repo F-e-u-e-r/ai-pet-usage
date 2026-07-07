@@ -45,6 +45,7 @@ struct AppSettings: Codable {
     var quietMode: Bool = false
     var refreshIntervalSeconds: Double = 45
     var notificationsEnabled: Bool = true
+    var launchAtLogin: Bool = false
     var petPositionX: Double?
     var petPositionY: Double?
     /// 選單列徽章顯示模式(Full / Compact / Pet Only)。
@@ -60,7 +61,7 @@ struct AppSettings: Codable {
     private enum CodingKeys: String, CodingKey {
         case appMode, species, petVisible, petSize, petOpacity, clickThrough
         case petWanderEnabled, petSpeechEnabled, quietMode, refreshIntervalSeconds
-        case notificationsEnabled, petPositionX, petPositionY
+        case notificationsEnabled, launchAtLogin, petPositionX, petPositionY
         case menuBarDisplayMode, alertsSnoozedUntil, core
     }
 
@@ -77,6 +78,7 @@ struct AppSettings: Codable {
         quietMode = (try? c.decodeIfPresent(Bool.self, forKey: .quietMode)) ?? false ?? false
         refreshIntervalSeconds = (try? c.decodeIfPresent(Double.self, forKey: .refreshIntervalSeconds)) ?? 45 ?? 45
         notificationsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .notificationsEnabled)) ?? true ?? true
+        launchAtLogin = (try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)) ?? false ?? false
         petPositionX = (try? c.decodeIfPresent(Double.self, forKey: .petPositionX)) ?? nil
         petPositionY = (try? c.decodeIfPresent(Double.self, forKey: .petPositionY)) ?? nil
         menuBarDisplayMode = (try? c.decodeIfPresent(MenuBarDisplayMode.self, forKey: .menuBarDisplayMode)) ?? .full ?? .full

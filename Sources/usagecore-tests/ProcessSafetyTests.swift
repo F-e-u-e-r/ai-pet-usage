@@ -45,6 +45,27 @@ final class LedgerCrossProcessTests: XCTestCase {
         a.reloadIfChanged()
         XCTAssertEqual(a.events.count, 2)
     }
+
+    func testAppendAfterPartialFinalLinePreservesNewEventOnReload() throws {
+        let file = makeTempDir().appendingPathComponent("ledger.jsonl")
+        let encoder = AtomicJSON.encoder()
+        let valid = event("valid-before-partial", "2026-01-15T10:00:00Z")
+        let appended = event("new-after-partial", "2026-01-15T11:00:00Z")
+
+        var seed = Data()
+        seed.append(try encoder.encode(valid))
+        seed.append(0x0A)
+        seed.append(Data(#"{"id":"half-written-event""#.utf8))
+        try seed.write(to: file)
+
+        let ledger = UsageLedger(fileURL: file)
+        XCTAssertEqual(ledger.events.map(\.id), ["valid-before-partial"])
+        XCTAssertEqual(ledger.append([appended]), 1)
+
+        let reloaded = UsageLedger(fileURL: file)
+        XCTAssertTrue(reloaded.events.contains { $0.id == appended.id },
+                      "new append must not be concatenated onto a stale half-line")
+    }
 }
 
 final class SharedSettingsTests: XCTestCase {

@@ -30,6 +30,81 @@ final class ISO8601Tests: XCTestCase {
     }
 }
 
+// MARK: - JSONL scanner
+
+final class JSONLScannerTests: XCTestCase {
+    func testChunkBoundaryScanPreservesOffsetsAndLines() throws {
+        let chunkSize = 4 * 1024 * 1024
+        let filter = "\"match\":\"scanner-regression\""
+
+        func exactLine(label: String, totalLength: Int) -> Data {
+            let prefix = "{\"match\":\"scanner-regression\",\"id\":\"\(label)\",\"payload\":\""
+            let suffix = "\"}"
+            let fixedLength = prefix.utf8.count + suffix.utf8.count
+            precondition(totalLength >= fixedLength)
+            return Data((prefix + String(repeating: "x", count: totalLength - fixedLength) + suffix).utf8)
+        }
+
+        var bytes = Data()
+        var expectedOffsets: [Int64] = []
+        var expectedLines: [Data] = []
+
+        func appendLine(_ line: Data) {
+            expectedOffsets.append(Int64(bytes.count))
+            expectedLines.append(line)
+            bytes.append(line)
+            bytes.append(UInt8(0x0A))
+        }
+
+        let boundaryLineStart = chunkSize - 256
+        let fixedLineLength = 640
+        let minPaddingLineLength = 192
+        var lineNumber = 0
+        while bytes.count + fixedLineLength + 1 <= boundaryLineStart - (minPaddingLineLength + 1) {
+            appendLine(exactLine(label: "pre-\(lineNumber)", totalLength: fixedLineLength))
+            lineNumber += 1
+        }
+
+        let paddingLength = boundaryLineStart - bytes.count - 1
+        XCTAssertGreaterThan(paddingLength, 0)
+        appendLine(exactLine(label: "pad", totalLength: paddingLength))
+        XCTAssertEqual(bytes.count, boundaryLineStart)
+
+        let boundaryOffset = Int64(bytes.count)
+        let boundaryLine = exactLine(label: "boundary", totalLength: 768)
+        XCTAssertTrue(bytes.count < chunkSize)
+        XCTAssertTrue(bytes.count + boundaryLine.count > chunkSize)
+        appendLine(boundaryLine)
+
+        for i in 0..<64 {
+            appendLine(exactLine(label: "post-\(i)", totalLength: 256))
+        }
+
+        let finalExpectedOffset = Int64(bytes.count)
+        bytes.append(exactLine(label: "partial", totalLength: 512))
+
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("scanner.jsonl")
+        try bytes.write(to: file)
+
+        var hits: [JSONLScanner.LineHit] = []
+        let finalOffset = try JSONLScanner.scan(url: file, from: 0, quickFilters: [filter]) { hit in
+            hits.append(hit)
+        }
+
+        XCTAssertEqual(hits.map(\.byteOffset), expectedOffsets)
+        let expectedByOffset = Dictionary(uniqueKeysWithValues: zip(expectedOffsets, expectedLines))
+        let mismatchedOffsets = hits.compactMap { hit in
+            expectedByOffset[hit.byteOffset] == hit.data ? nil : hit.byteOffset
+        }
+        XCTAssertTrue(mismatchedOffsets.isEmpty, "mismatched line bytes at offsets \(Array(mismatchedOffsets.prefix(5)))")
+        let boundaryHit = hits.first { $0.byteOffset == boundaryOffset }
+        XCTAssertTrue(boundaryHit != nil && boundaryHit!.data == boundaryLine, "boundary line was not reassembled intact")
+        XCTAssertEqual(finalOffset, finalExpectedOffset)
+    }
+}
+
 // MARK: - Claude Code adapter
 
 final class ClaudeCodeAdapterTests: XCTestCase {
@@ -123,6 +198,19 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         let (r3, _) = try adapter.refreshUsage(state: s1)
         XCTAssertEqual(r3.events.count, 1)
         XCTAssertTrue(r3.events[0].id.contains("msg_009"))
+    }
+
+    func testDetectAvailabilityRechecksInjectedRootAfterCreation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aipet-tests-\(#function)-\(UUID().uuidString)")
+        try? FileManager.default.removeItem(at: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let adapter = ClaudeCodeAdapter(roots: [root])
+        XCTAssertFalse(adapter.detectAvailability().available)
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertTrue(adapter.detectAvailability().available)
     }
 }
 
@@ -267,6 +355,15 @@ final class LimitEngineTests: XCTestCase {
         )
     }
 
+    func nilResetReading(_ percent: Double, at: String) -> RateLimitReading {
+        RateLimitReading(
+            providerId: "claude-code",
+            observedAt: date(at),
+            primary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 300, resetsAt: nil),
+            secondary: nil
+        )
+    }
+
     func testMonotonicGuardWithinWindow() {
         let engine = LimitEngine(stateURL: nil)
         _ = engine.ingest(readings: [reading(50, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
@@ -298,6 +395,42 @@ final class LimitEngineTests: XCTestCase {
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T14:10:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 5)
+    }
+
+    func testNilResetRolloverAcceptsLowerAndEmitsReset() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [nilResetReading(45, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [nilResetReading(92, at: "2026-01-15T10:30:00Z")], settings: settings)
+        let transitions = engine.ingest(readings: [nilResetReading(8, at: "2026-01-15T15:05:00Z")], settings: settings)
+        XCTAssertTrue(transitions.contains(.reset(providerId: "claude-code", window: "5h")))
+        let state = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T15:10:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 8)
+    }
+
+    func testHistoryDedupPreservesSlopeAcrossEqualRefreshes() {
+        let engine = LimitEngine(stateURL: nil)
+        let start = date("2026-01-15T10:00:00Z")
+        let reset = date("2026-01-15T14:00:00Z")
+        func sample(_ percent: Double, seconds: TimeInterval) -> RateLimitReading {
+            RateLimitReading(
+                providerId: "codex",
+                observedAt: start.addingTimeInterval(seconds),
+                primary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 300, resetsAt: reset),
+                secondary: nil
+            )
+        }
+
+        _ = engine.ingest(readings: [sample(10, seconds: 0)], settings: settings)
+        _ = engine.ingest(readings: [sample(20, seconds: 900)], settings: settings)
+        for i in 1...50 {
+            _ = engine.ingest(readings: [sample(20, seconds: 900 + Double(i) * 10)], settings: settings)
+        }
+        _ = engine.ingest(readings: [sample(21, seconds: 1_420)], settings: settings)
+
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: start.addingTimeInterval(1_430))
+        XCTAssertNotNil(state.projectedExhaustionAt)
     }
 
     func testFullReindexAllowsDownwardCorrection() {

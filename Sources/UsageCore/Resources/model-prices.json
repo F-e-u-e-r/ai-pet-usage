@@ -108,7 +108,7 @@
     "cacheWrite1hPerMillion": 4,
     "currency": "USD",
     "effectiveFrom": "2026-06-24",
-    "source": "docs.claude.com: intro pricing through 2026-08-31, then $3/$15",
+    "source": "docs.claude.com: intro pricing through 2026-08-31; SCHEDULED 2026-09-01 -> $3/$15 (see docs/RELEASE_CHECKLIST.md)",
     "userOverride": false
   },
   {

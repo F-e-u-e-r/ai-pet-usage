@@ -15,7 +15,8 @@ OUT_DIR="$HOME/Library/Application Support/AIPetUsage"
 mkdir -p "$OUT_DIR"
 
 INPUT=$(cat)
-TMP="$OUT_DIR/.claude-statusline.json.tmp"
+TMP=$(mktemp "$OUT_DIR/.claude-statusline.json.XXXXXX")
+trap 'rm -f "$TMP"' EXIT
 printf '%s' "$INPUT" > "$TMP"
 mv -f "$TMP" "$OUT_DIR/claude-statusline.json"
 

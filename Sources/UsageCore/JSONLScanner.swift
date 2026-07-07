@@ -33,18 +33,23 @@ public enum JSONLScanner {
             guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
             carry.append(chunk)
 
+            var lineStartIndex = carry.startIndex
+            var lineStartOffset = carryStart
             var searchFrom = carry.startIndex
             while let nl = carry[searchFrom...].firstIndex(of: 0x0A) {
-                let line = carry[carry.startIndex..<nl]
-                let lineStart = carryStart
-                let lineLen = Int64(carry.distance(from: carry.startIndex, to: nl)) + 1
+                let line = carry[lineStartIndex..<nl]
+                let lineLen = Int64(carry.distance(from: lineStartIndex, to: nl)) + 1
                 if !line.isEmpty, matches(line, filters: filters) {
-                    handler(LineHit(data: Data(line), byteOffset: lineStart))
+                    handler(LineHit(data: Data(line), byteOffset: lineStartOffset))
                 }
-                carry.removeSubrange(carry.startIndex...nl)
-                carryStart += lineLen
-                consumed = carryStart
-                searchFrom = carry.startIndex
+                lineStartOffset += lineLen
+                consumed = lineStartOffset
+                lineStartIndex = carry.index(after: nl)
+                searchFrom = lineStartIndex
+            }
+            if lineStartIndex > carry.startIndex {
+                carry.removeSubrange(carry.startIndex..<lineStartIndex)
+                carryStart = consumed
             }
         }
         return consumed

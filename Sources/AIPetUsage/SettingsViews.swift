@@ -59,10 +59,21 @@ struct GeneralSettings: View {
                 }
                 Toggle("Notifications (thresholds & resets)", isOn: Binding(
                     get: { model.settings.notificationsEnabled },
-                    set: { v in model.updateSettings { $0.notificationsEnabled = v } }
+                    set: { v in
+                        model.updateSettings { $0.notificationsEnabled = v }
+                        if v { Notifier.requestAuthorization() }
+                    }
                 ))
                 if !Notifier.available {
                     Text("System notifications need the bundled app (Scripts/build-app.sh). Running via `swift run` logs to console instead.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("Launch at login at startup", isOn: Binding(
+                    get: { model.settings.launchAtLogin },
+                    set: { v in model.setLaunchAtLogin(v) }
+                ))
+                if !LaunchAtLogin.available {
+                    Text("Launch at login needs the bundled app (Scripts/build-app.sh).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Quiet mode (freeze animations, silence notifications)", isOn: Binding(

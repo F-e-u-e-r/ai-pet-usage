@@ -106,6 +106,7 @@ public actor UsageCoordinator {
     /// 跨行程互斥:app 與 CLI 對同一資料目錄的寫入階段必須互斥。
     private let refreshLock: FileLock
     private let refreshLockTimeout: TimeInterval
+    private var refreshInFlight = false
 
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
     private var pricingOverridesURL: URL { dataDir.appendingPathComponent("pricing-overrides.json") }
@@ -139,11 +140,18 @@ public actor UsageCoordinator {
 
     // MARK: 刷新
 
-    public func refresh(fullReindex: Bool = false) -> RefreshOutcome {
+    public func refresh(fullReindex: Bool = false) async -> RefreshOutcome {
         let now = Date()
+        if refreshInFlight {
+            var dash = dashboard(now: now)
+            dash.dataQuality.append("refresh skipped — a refresh is already in progress")
+            return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true)
+        }
+        refreshInFlight = true
+        defer { refreshInFlight = false }
 
         // 寫入階段需要跨行程互斥(首次索引可達十餘秒,逾時給足裕度)。
-        guard refreshLock.acquire(timeout: refreshLockTimeout) else {
+        guard await refreshLock.acquireAsync(timeout: refreshLockTimeout) else {
             var dash = dashboard(now: now)
             dash.dataQuality.append("refresh skipped — another AI Pet Usage process (app or CLI) holds the data lock")
             return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true)

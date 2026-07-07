@@ -73,6 +73,25 @@ public final class FileLock {
         return false
     }
 
+    /// 在 `timeout` 秒內嘗試取得互斥鎖;等待期間讓出 Swift concurrency 執行緒。
+    public func acquireAsync(timeout: TimeInterval) async -> Bool {
+        if fd < 0 {
+            try? AppPaths.ensureDirectory(url.deletingLastPathComponent())
+            fd = open(url.path, O_CREAT | O_RDWR, 0o644)
+            guard fd >= 0 else { return false }
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return true }
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return false
+            }
+        } while Date() < deadline
+        return false
+    }
+
     public func release() {
         guard fd >= 0 else { return }
         flock(fd, LOCK_UN)

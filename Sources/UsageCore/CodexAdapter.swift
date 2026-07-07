@@ -8,11 +8,14 @@ public struct CodexAdapter: ProviderAdapter {
     public let providerId = "codex"
     public let displayName = "Codex"
 
-    public let roots: [URL]
+    private let candidateRoots: [URL]
+    public var roots: [URL] {
+        candidateRoots.filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
 
     public init(roots: [URL]? = nil) {
         if let roots {
-            self.roots = roots
+            self.candidateRoots = roots
         } else {
             let home = FileManager.default.homeDirectoryForCurrentUser
             let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
@@ -21,7 +24,7 @@ public struct CodexAdapter: ProviderAdapter {
                 codexHome.appendingPathComponent("sessions"),
                 codexHome.appendingPathComponent("archived_sessions"),
             ]
-            self.roots = candidates.filter { FileManager.default.fileExists(atPath: $0.path) }
+            self.candidateRoots = candidates
         }
     }
 
