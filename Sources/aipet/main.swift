@@ -12,6 +12,7 @@ import UsageCore
 //   aipet report [--refresh] [--out FILE] [--days N]   匯出 HTML 報告(預設今日)
 //   aipet sources                         說明各 adapter 讀取哪些本機檔案
 //   aipet reindex                         全量重建帳本索引(寫入,持鎖)
+//   aipet sprites [--out DIR]             匯出像素寵物 PNG contact sheets(預設 dist/sprite-preview)
 
 let args = CommandLine.arguments.dropFirst()
 let command = args.first ?? "status"
@@ -127,8 +128,11 @@ Task {
             print("  permissions: \(info.permissions)")
         }
 
+    case "sprites":
+        SpriteExport.run(outPath: value(for: "--out"))
+
     default:
-        print("usage: aipet [status|report|sources|reindex] [--refresh] [--out FILE] [--days N]")
+        print("usage: aipet [status|report|sources|reindex|sprites] [--refresh] [--out FILE|DIR] [--days N]")
     }
 }
 

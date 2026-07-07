@@ -5,6 +5,9 @@ public enum PetSpecies: String, Codable, CaseIterable, Sendable {
     case cat
 
     public var displayName: String { self == .dog ? "Golden Retriever" : "Black Cat" }
+
+    /// 選單列/面板開頭的物種標記(spec:menu bar 以所選寵物開頭,取代 🐾/警示 emoji)。
+    public var emoji: String { self == .dog ? "🐶" : "🐱" }
 }
 
 /// 規格要求的十種狀態。
@@ -44,6 +47,26 @@ public struct FoodItem: Identifiable, Sendable, Equatable {
         FoodItem(id: "sushi", name: "Sushi", emoji: "🍣", treatCost: 2, satiety: 65),
         FoodItem(id: "feast", name: "Feast", emoji: "🍱", treatCost: 3, satiety: 90),
     ]
+
+    /// 物種化菜單(UIUX spec §10):同一組 id/成本/飽足度,只換名稱與 emoji——
+    /// id 穩定確保 eatingFoodId 等持久化狀態跨物種切換仍有效。
+    public static let dogFoods: [FoodItem] = [
+        FoodItem(id: "kibble", name: "Kibble", emoji: "🥣", treatCost: 0, satiety: 25),
+        FoodItem(id: "cookie", name: "Training Biscuit", emoji: "🦴", treatCost: 1, satiety: 40),
+        FoodItem(id: "sushi", name: "Chicken Bite", emoji: "🍗", treatCost: 2, satiety: 65),
+        FoodItem(id: "feast", name: "Dinner Bowl", emoji: "🍲", treatCost: 3, satiety: 90),
+    ]
+
+    public static let catFoods: [FoodItem] = [
+        FoodItem(id: "kibble", name: "Kibble", emoji: "🥣", treatCost: 0, satiety: 25),
+        FoodItem(id: "cookie", name: "Tuna Bite", emoji: "🐟", treatCost: 1, satiety: 40),
+        FoodItem(id: "sushi", name: "Chicken Shred", emoji: "🍗", treatCost: 2, satiety: 65),
+        FoodItem(id: "feast", name: "Gourmet Bowl", emoji: "🍲", treatCost: 3, satiety: 90),
+    ]
+
+    public static func foods(for species: PetSpecies) -> [FoodItem] {
+        species == .dog ? dogFoods : catFoods
+    }
 }
 
 /// 寵物的持久化狀態(本機 JSON)。

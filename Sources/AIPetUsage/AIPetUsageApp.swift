@@ -15,13 +15,16 @@ struct AIPetUsageApp: App {
     }
 
     var body: some Scene {
+        // .window style:下拉是自訂 SwiftUI 面板(彩色狀態 header + 動作列),
+        // 預設 .menu style 無法做非灰字的自訂 header(UIUX spec §8)。
         MenuBarExtra {
-            MenuBarContent()
+            MenuBarPanel()
                 .environment(model)
         } label: {
             MenuBarLabel()
                 .environment(model)
         }
+        .menuBarExtraStyle(.window)
 
         Window("AI Pet Usage", id: "dashboard") {
             DashboardRoot()
@@ -48,87 +51,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - 選單列
+// MARK: - 選單列 label
 
+/// 彩色徽章 label:🐶 ● CC 91% ● CX 53%(dot = 身分色、% = severity 色)。
+/// 顏色經 ImageRenderer 烤成非 template NSImage;烤製失敗時退回純文字。
 struct MenuBarLabel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Text(model.menuBarTitle)
-            .monospacedDigit()
-    }
-}
-
-struct MenuBarContent: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        // Provider 摘要(不可點,只呈現)
-        ForEach(model.dashboard.snapshots) { snap in
-            let five = snap.sessionUsagePercent.map { String(format: "5h %.0f%%", $0) } ?? "5h —"
-            let week = snap.weeklyUsagePercent.map { String(format: "wk %.0f%%", $0) } ?? "wk —"
-            let reset = snap.resetAt.map { " · resets \(countdown(to: $0))" } ?? ""
-            Text("\(snap.displayName): \(five) · \(week)\(reset)")
-        }
-        if model.dashboard.snapshots.isEmpty {
-            Text("No providers enabled")
-        }
-
-        Divider()
-
-        Button("Open Dashboard") {
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: "dashboard")
-        }
-        .keyboardShortcut("d")
-
-        Button(model.refreshing ? "Refreshing…" : "Refresh Now") {
-            Task { await model.refreshNow() }
-        }
-        .disabled(model.refreshing)
-        .keyboardShortcut("r")
-
-        Button("Export Today's Report…") {
-            model.exportToday()
-        }
-
-        Divider()
-
-        if model.settings.appMode == .full {
-            Menu("Feed \(model.settings.species.displayName)  (treats: \(model.treatsAvailable))") {
-                ForEach(FoodItem.starterFoods) { food in
-                    Button("\(food.emoji) \(food.name)\(food.treatCost > 0 ? " — \(food.treatCost)🎟" : " (free)")") {
-                        _ = model.feed(food)
-                    }
-                }
-                Divider()
-                Text("Hunger \(Int(model.petState.hunger))% · Lv.\(model.petState.level)")
+        // 讀取 appearanceTick,使深/淺色切換時重新烤圖
+        let _ = model.appearanceTick
+        return Group {
+            if let image = MenuBarBadgeRenderer.image(petEmoji: model.menuBarPetEmoji,
+                                                      badges: model.menuBarBadges,
+                                                      showsPlaceholder: model.menuBarShowsPlaceholder) {
+                Image(nsImage: image)
+            } else {
+                Text(model.menuBarTitle).monospacedDigit()
             }
-
-            Toggle("Show Pet", isOn: Binding(
-                get: { model.settings.petVisible },
-                set: { v in model.updateSettings { $0.petVisible = v } }
-            ))
         }
-
-        Toggle("Quiet Mode", isOn: Binding(
-            get: { model.settings.quietMode },
-            set: { v in model.updateSettings { $0.quietMode = v } }
-        ))
-
-        Divider()
-
-        Button("Settings…") {
-            NSApp.activate(ignoringOtherApps: true)
-            openSettings()
-        }
-        .keyboardShortcut(",")
-
-        Button("Quit AI Pet Usage") {
-            NSApp.terminate(nil)
-        }
-        .keyboardShortcut("q")
+        .accessibilityLabel(model.menuBarAccessibilityLabel)
     }
 }

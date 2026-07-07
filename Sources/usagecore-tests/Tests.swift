@@ -475,6 +475,76 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertEqual(state.weekly.confidence, .stale)
     }
 
+    func testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity() {
+        // 5h 窗口 reset 後帳本已有新活動、官方檔卻停在 reset 前 → hook 已停,
+        // 不得顯示 recovered 0% 撐滿 24h,應立即改用預算估算。
+        var s = settings
+        s.claudeFiveHourTokenBudget = 1000
+        let engine = LimitEngine(stateURL: nil)
+        let preResetReading = RateLimitReading(
+            providerId: "claude-code",
+            observedAt: date("2026-01-15T10:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T10:30:00Z")),
+            secondary: nil
+        )
+        _ = engine.ingest(readings: [preResetReading], settings: s)
+
+        let ledger = UsageLedger(fileURL: nil)
+        ledger.append([UsageEvent(id: "e1", providerId: "claude-code",
+                                  timestamp: date("2026-01-15T11:07:00Z"),
+                                  tokens: TokenBreakdown(input: 800), sourceKind: "test")])
+        // reset(10:30)後 37 分鐘就有事件,但官方檔 mtime 停在 10:00 → 立即退回估算
+        let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: s,
+                                      now: date("2026-01-15T12:00:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01,
+                       "reset 後有帳本活動時,過期官方讀值不得以 recovered 0% 蓋掉預算估算")
+        XCTAssertEqual(state.fiveHour.confidence, .estimated)
+        XCTAssertEqual(state.fiveHour.budgetTokens, 1000)
+        XCTAssertEqual(state.fiveHour.resetAt, date("2026-01-15T16:00:00Z"),
+                       "估算路徑應給出 5h 區塊的預估 reset 時間")
+
+        // hook 恢復寫入後,回到官方路徑
+        let fresh = RateLimitReading(
+            providerId: "claude-code",
+            observedAt: date("2026-01-15T12:30:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 12, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T15:30:00Z")),
+            secondary: nil
+        )
+        _ = engine.ingest(readings: [fresh], settings: s)
+        let back = engine.limitState(providerId: "claude-code", ledger: ledger, settings: s,
+                                     now: date("2026-01-15T12:35:00Z"))
+        XCTAssertEqual(back.fiveHour.usedPercent, 12)
+        XCTAssertEqual(back.fiveHour.confidence, .high)
+    }
+
+    func testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset() {
+        // reset 邊界競態:活動只領先官方檔 30 秒(≤ 容差)→ 仍信任官方「已恢復」狀態,
+        // 避免 hook 正常運作時在 reset 當下閃爍成估算值。
+        var s = settings
+        s.claudeFiveHourTokenBudget = 1000
+        let engine = LimitEngine(stateURL: nil)
+        let reading = RateLimitReading(
+            providerId: "claude-code",
+            observedAt: date("2026-01-15T10:29:50Z"),
+            primary: RateLimitWindowReading(usedPercent: 96, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T10:30:00Z")),
+            secondary: nil
+        )
+        _ = engine.ingest(readings: [reading], settings: s)
+
+        let ledger = UsageLedger(fileURL: nil)
+        ledger.append([UsageEvent(id: "e1", providerId: "claude-code",
+                                  timestamp: date("2026-01-15T10:30:20Z"),
+                                  tokens: TokenBreakdown(input: 800), sourceKind: "test")])
+        let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: s,
+                                      now: date("2026-01-15T10:31:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 0, "容差內的競態不應觸發估算後備")
+        XCTAssertEqual(state.fiveHour.confidence, .estimated)
+        XCTAssertNil(state.fiveHour.budgetTokens)
+    }
+
     func testClaudeBudgetPercentAndEstimatedReset() {
         var s = settings
         s.claudeFiveHourTokenBudget = 1000

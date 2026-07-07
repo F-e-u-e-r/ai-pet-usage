@@ -38,6 +38,19 @@ struct GeneralSettings: View {
             }
 
             Section {
+                Picker("Menu bar", selection: Binding(
+                    get: { model.settings.menuBarDisplayMode },
+                    set: { v in model.updateSettings { $0.menuBarDisplayMode = v } }
+                )) {
+                    ForEach(MenuBarDisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                Text("Full lists every detected provider (● CC 91%). Compact keeps only providers at or above the warning threshold. Percent colors: orange ≥ warn, red ≥ alert threshold.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 Slider(value: Binding(
                     get: { model.settings.refreshIntervalSeconds },
                     set: { v in model.updateSettings { $0.refreshIntervalSeconds = v } }
@@ -123,7 +136,7 @@ struct PetSettings: View {
             if model.settings.appMode == .full {
                 Section("Care") {
                     LabeledContent("Level", value: "\(model.petState.level)  (\(Int(model.petState.xp)) XP)")
-                    LabeledContent("Hunger", value: "\(Int(model.petState.hunger))%")
+                    LabeledContent("Fullness", value: "\(Int(model.petState.hunger))%")
                     LabeledContent("Treats available", value: "\(model.treatsAvailable)")
                     LabeledContent("Total feeds", value: "\(model.petState.totalFeeds)")
                     Text("Treats are earned by real work time (1 per 25 active minutes, max 6/day). Token XP caps at 200/day; finishing a day without warnings grants +50 XP. Burning tokens for its own sake earns nothing extra.")
@@ -159,6 +172,22 @@ struct ProviderSettings: View {
                     Text(info.dataSources).font(.caption).foregroundStyle(.secondary)
                     Text(info.permissions).font(.caption2).foregroundStyle(.tertiary)
                 }
+            }
+
+            // 選單列/量表短代號圖例(UIUX spec P2):dot = 身分色,恆定不變
+            Section("Menu bar legend") {
+                ForEach(ProviderBrands.known, id: \.id) { brand in
+                    HStack(spacing: 8) {
+                        ProviderDot(brand: brand)
+                        Text(brand.code)
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                            .frame(width: 24, alignment: .leading)
+                        Text(brand.displayName)
+                        Spacer()
+                    }
+                }
+                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity and Grok Code appear automatically once their adapters ship.")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
         }
         .formStyle(.grouped)

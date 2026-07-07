@@ -37,6 +37,8 @@ runSuite("LimitEngineTests", [
     ("testClaudeStaleReadingsFallBackToBudget", limits.testClaudeStaleReadingsFallBackToBudget),
     ("testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback", limits.testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback),
     ("testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated", limits.testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated),
+    ("testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity", limits.testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity),
+    ("testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset", limits.testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset),
     ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
 ])
@@ -107,6 +109,24 @@ runSuite("PixelArtTests", [
     ("testAnimStateMapping", pixel.testAnimStateMapping),
     ("testGlyphsWellFormed", pixel.testGlyphsWellFormed),
     ("testSpeechPhrases", pixel.testSpeechPhrases),
+    ("testMicroAnimationFramesWellFormed", pixel.testMicroAnimationFramesWellFormed),
+])
+
+let animatorTests = PixelAnimatorTests()
+runSuite("PixelAnimatorTests", [
+    ("testCatFocusTransitionsPlaySequentially", animatorTests.testCatFocusTransitionsPlaySequentially),
+    ("testMicroAnimationFirstFireFallsInConfiguredInterval", animatorTests.testMicroAnimationFirstFireFallsInConfiguredInterval),
+    ("testWalkSuppressesMicroAnimations", animatorTests.testWalkSuppressesMicroAnimations),
+    ("testReduceMotionShowsStaticPoseWithoutTransitions", animatorTests.testReduceMotionShowsStaticPoseWithoutTransitions),
+])
+
+let brandTests = ProviderBrandTests()
+runSuite("ProviderBrandTests", [
+    ("testBadgesAlphabeticalOmitMissingAndSeverity", brandTests.testBadgesAlphabeticalOmitMissingAndSeverity),
+    ("testSeverityThresholdsAndCompactFilter", brandTests.testSeverityThresholdsAndCompactFilter),
+    ("testAccessibilitySummaryUsesFullNames", brandTests.testAccessibilitySummaryUsesFullNames),
+    ("testIdentityDotsAreStableAndDistinct", brandTests.testIdentityDotsAreStableAndDistinct),
+    ("testSpeciesFoodsKeepStableIds", brandTests.testSpeciesFoodsKeepStableIds),
 ])
 
 let hourly = HourlyBreakdownTests()

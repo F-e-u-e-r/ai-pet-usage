@@ -240,8 +240,8 @@ public final class LimitEngine {
         let lastEvent = ledger.newestEvent(providerId: providerId)
         let burn = ledger.burnRatePerHour(providerId: providerId, window: 3600, now: now)
 
-        // Claude Code:官方 statusline 讀值逐窗口優先;某個窗口過期且 24h 未更新時,
-        // 只讓該窗口退回帳本預算估算,避免 weekly 尚未 reset 時卡住 5h 後備。
+        // Claude Code:官方 statusline 讀值逐窗口優先;窗口過期後由 hasUsableWindow
+        // 逐窗口決定何時退回帳本預算估算(閒置寬限 24h;有 reset 後活動則立即退回)。
         if providerId == "claude-code" {
             return claudeStateWithOfficialFallback(ledger: ledger, settings: settings,
                                                    now: now, lastEvent: lastEvent, burn: burn)
@@ -250,18 +250,31 @@ public final class LimitEngine {
                                   lastEvent: lastEvent, burn: burn)
     }
 
-    /// 單一官方窗口是否仍值得信任:窗口尚未 reset,或 reset 後 24h 內仍保留最近狀態。
-    private func hasUsableWindow(_ window: PersistedWindow?, now: Date) -> Bool {
+    /// 過期官方窗口的活動反證容差:帳本活動需領先官方檔觀測時間超過此值,
+    /// 才視為「hook 已停更」。避免 reset 邊界上 hook 與 JSONL 同批寫入的競態誤判。
+    static let expiredEvidenceTolerance: TimeInterval = 60
+
+    /// 單一官方窗口是否仍值得信任:
+    /// 1. 窗口尚未 reset → 可信。
+    /// 2. 已過期,但帳本在 reset 之後有新活動、而官方檔一直沒再更新 → hook 已停,
+    ///    立即不可信(交回預算估算),不得讓 recovered 0% 撐滿 24h。
+    /// 3. 已過期且無活動反證(閒置)→ reset 後 24h 內仍代表「已恢復」的最近狀態。
+    private func hasUsableWindow(_ window: PersistedWindow?, now: Date, lastEventAt: Date?) -> Bool {
         guard let window else { return false }
         if let reset = window.resetsAt, reset > now { return true }
+        if let reset = window.resetsAt, let lastEventAt,
+           lastEventAt > reset,
+           lastEventAt.timeIntervalSince(window.observedAt) > Self.expiredEvidenceTolerance {
+            return false
+        }
         return now.timeIntervalSince(window.observedAt) < 24 * 3600
     }
 
     private func claudeStateWithOfficialFallback(ledger: UsageLedger, settings: CoreSettings,
                                                  now: Date, lastEvent: UsageEvent?, burn: Double) -> ProviderLimitState {
         let provider = store["claude-code"]
-        let useOfficialFiveHour = hasUsableWindow(provider?.primary, now: now)
-        let useOfficialWeekly = hasUsableWindow(provider?.secondary, now: now)
+        let useOfficialFiveHour = hasUsableWindow(provider?.primary, now: now, lastEventAt: lastEvent?.timestamp)
+        let useOfficialWeekly = hasUsableWindow(provider?.secondary, now: now, lastEventAt: lastEvent?.timestamp)
         let estimated = claudeState(ledger: ledger, settings: settings, now: now,
                                     lastEvent: lastEvent, burn: burn)
         guard useOfficialFiveHour || useOfficialWeekly else { return estimated }

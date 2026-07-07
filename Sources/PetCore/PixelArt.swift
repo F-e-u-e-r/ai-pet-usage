@@ -10,6 +10,16 @@ import Foundation
 
 public enum PixelAnimState: String, CaseIterable, Sendable {
     case idle, walk, sit, sleep, eat, jump
+    /// 開心:狗搖尾+喘舌;貓尾尖搖擺。
+    case happy
+    /// 警戒(warning):狗豎耳坐姿;貓沿用坐姿(警示徽章表意)。
+    case alert
+    /// 貓進入專注的 one-shot 轉場(紅粉半瞇眼 → 綠眼張開、耳朵前傾)。
+    case focusStart
+    /// 貓專注迴圈:綠眼 + 亮 core 低頻 pulse。
+    case focusedActive
+    /// 貓退出專注的 one-shot 轉場(較短、較收斂,不得 hard cut)。
+    case focusEnd
 }
 
 public struct PixelSprite: Sendable {
@@ -30,16 +40,20 @@ public enum PixelPets {
         species == .dog ? goldenRetriever : blackCat
     }
 
-    /// mood(+ 是否正在漫遊行走)→ 動畫狀態。
-    public static func animState(for mood: PetMood, walking: Bool) -> PixelAnimState {
+    /// mood(+ 是否正在漫遊行走)→ 動畫狀態。狀態切換一律由 mood 決定性驅動,
+    /// 隨機只用於 idle micro-animation(spec:randomness is for personality)。
+    public static func animState(for mood: PetMood, walking: Bool,
+                                 species: PetSpecies = .dog) -> PixelAnimState {
         if walking, [.idle, .happy, .focused].contains(mood) { return .walk }
         switch mood {
         case .sleeping, .tired: return .sleep
         case .eating: return .eat
         case .celebration: return .jump
-        case .focused: return .sit
-        case .warning, .exhausted, .hungry, .confused: return .sit
-        case .idle, .happy: return .idle
+        case .focused: return species == .cat ? .focusedActive : .sit
+        case .warning: return .alert
+        case .exhausted, .hungry, .confused: return .sit
+        case .idle: return .idle
+        case .happy: return .happy
         }
     }
 
@@ -52,6 +66,68 @@ public enum PixelPets {
         case .sleep: return 0.8
         case .eat: return 3.2
         case .jump: return 4.5
+        case .happy: return 5           // 搖尾一輪 ~0.8s,位移限 1–3px
+        case .alert: return 2           // 豎耳微顫
+        case .focusStart: return 10     // 4 幀 ≈ 0.4s(spec 400–700ms)
+        case .focusedActive: return 1.3 // 2 幀 → core pulse 週期 ≈ 1.5s(spec 1.2–1.8s)
+        case .focusEnd: return 10       // 3 幀 ≈ 0.3s,比進場更快更收斂
+        }
+    }
+
+    /// 進入某狀態時要先播的 one-shot 轉場(deterministic,由 mood 變化觸發)。
+    public static func enterTransition(species: PetSpecies, to state: PixelAnimState) -> PixelAnimState? {
+        if species == .cat, state == .focusedActive { return .focusStart }
+        return nil
+    }
+
+    /// 離開某狀態時要先播的 one-shot 轉場(spec:focused 不得 hard cut 回 idle)。
+    public static func exitTransition(species: PetSpecies, from state: PixelAnimState) -> PixelAnimState? {
+        if species == .cat, state == .focusedActive { return .focusEnd }
+        return nil
+    }
+
+    /// reduce-motion / quiet 模式的靜態代表姿勢:取該狀態第一幀
+    /// (focusedActive 第一幀即「綠眼+耳朵前傾」,不播 pulse 也能讀出狀態)。
+    public static func staticPose(sprite: PixelSprite, state: PixelAnimState) -> [String] {
+        sprite.frames(for: state).first ?? []
+    }
+
+    // MARK: - 隨機 micro-animation(僅 personality,不承載狀態語意)
+
+    public struct MicroAnimation: Sendable, Equatable {
+        public let name: String
+        public let frames: [[String]]
+        public let fps: Double
+        /// 播完後距下次觸發的隨機間隔(秒)。
+        public let interval: ClosedRange<Double>
+    }
+
+    /// 各物種在「安靜 loop 狀態」下可插播的 micro-animation;
+    /// walk / sleep / eat / jump 期間一律不插播。
+    public static func microAnimations(species: PetSpecies, state: PixelAnimState) -> [MicroAnimation] {
+        switch (species, state) {
+        case (.dog, .idle), (.dog, .sit), (.dog, .alert):
+            return [MicroAnimation(name: "earTwitch",
+                                   frames: [dogEarTwitchA, dogEarTwitchA, dogIdleA],
+                                   fps: 10, interval: 3...8)]
+        case (.cat, .idle), (.cat, .sit), (.cat, .alert), (.cat, .happy):
+            return [
+                MicroAnimation(name: "blink",
+                               frames: [catBlinkA, catBlinkA],
+                               fps: 9, interval: 4...9),
+                MicroAnimation(name: "tailFlick",
+                               frames: [catTailFlickA, catTailFlickB],
+                               fps: 6, interval: 3...6),
+                MicroAnimation(name: "whiskerTwitch",
+                               frames: [catWhiskerTwitchA, catIdleA],
+                               fps: 8, interval: 4...8),
+            ]
+        case (.cat, .focusedActive):
+            return [MicroAnimation(name: "whiskerTwitch",
+                                   frames: [catFocusWhiskerA, catFocusedActiveA],
+                                   fps: 8, interval: 4...8)]
+        default:
+            return []
         }
     }
 
@@ -75,6 +151,10 @@ public enum PixelPets {
             .sleep: [dogSleepA, dogSleepB],
             .eat: [dogEatA, dogEatB],
             .jump: [dogJumpA, dogEatB],
+            // 開心:尾巴三段位置(尾根固定)+ 喘舌長短交替(spec §dog tail wag / tongue panting)
+            .happy: [dogHappyA, dogHappyB, dogHappyC, dogHappyB],
+            // 警戒:坐姿豎耳微顫;像素驚嘆號由徽章層以整數位移彈跳
+            .alert: [dogAlertA, dogAlertA, dogAlertB],
         ]
     )
 
@@ -291,6 +371,138 @@ public enum PixelPets {
         "....................",
     ]
 
+    /// 開心搖尾:尾巴高位 + 長舌喘氣(尾根固定於身體接點,位移 ≤2px)
+    static let dogHappyA = [
+        ".............AA.....",
+        ".....MM.....AAAA....",
+        "....MMMMAAAAAAAA....",
+        "....MMMAAAAAAAAAA...",
+        ".....MMAAAAAAKKAA...",
+        ".......AAAAAAKKAAKK.",
+        "AA.....AAAAAAAAAAKK.",
+        "AAA....AAAAAAAAAA...",
+        ".AA....AAAAAAAAPPPP.",
+        ".......KKKKKKKK.PPP.",
+        "...AAAAAAAAAAAA.PP..",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAAAAA.....",
+        "..AAAAAAAAAAAAA.....",
+        "...AACAACAACAA......",
+        "...AA.AA.AA.AA......",
+        "....................",
+    ]
+
+    /// 開心搖尾:尾巴中位(idle 位置)+ 短舌
+    static let dogHappyB = [
+        ".............AA.....",
+        ".....MM.....AAAA....",
+        "....MMMMAAAAAAAA....",
+        "....MMMAAAAAAAAAA...",
+        ".....MMAAAAAAKKAA...",
+        ".......AAAAAAKKAAKK.",
+        ".......AAAAAAAAAAKK.",
+        "AA.....AAAAAAAAAA...",
+        "AAA....AAAAAAAAPP...",
+        ".AA....KKKKKKKK.P...",
+        "...AAAAAAAAAAAA.....",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAAAAA.....",
+        "..AAAAAAAAAAAAA.....",
+        "...AACAACAACAA......",
+        "...AA.AA.AA.AA......",
+        "....................",
+    ]
+
+    /// 開心搖尾:尾巴低位 + 長舌
+    static let dogHappyC = [
+        ".............AA.....",
+        ".....MM.....AAAA....",
+        "....MMMMAAAAAAAA....",
+        "....MMMAAAAAAAAAA...",
+        ".....MMAAAAAAKKAA...",
+        ".......AAAAAAKKAAKK.",
+        ".......AAAAAAAAAAKK.",
+        ".......AAAAAAAAAA...",
+        "AA.....AAAAAAAAPPPP.",
+        "AAA....KKKKKKKK.PPP.",
+        "AA.AAAAAAAAAAAA.PP..",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAAAAA.....",
+        "..AAAAAAAAAAAAA.....",
+        "...AACAACAACAA......",
+        "...AA.AA.AA.AA......",
+        "....................",
+    ]
+
+    /// 耳朵抽動(micro-animation):單耳向上/向後 1px,hold 後回復
+    static let dogEarTwitchA = [
+        "....MM.......AA.....",
+        "....MM......AAAA....",
+        "....MMMMAAAAAAAA....",
+        "....MMMAAAAAAAAAA...",
+        ".....MMAAAAAAKKAA...",
+        ".......AAAAAAKKAAKK.",
+        ".......AAAAAAAAAAKK.",
+        "AA.....AAAAAAAAAA...",
+        "AAA....AAAAAAAAPPP..",
+        ".AA....KKKKKKKK.PP..",
+        "...AAAAAAAAAAAA.PP..",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAACCC.....",
+        "..AAAAAAAAAAAAA.....",
+        "..AAAAAAAAAAAAA.....",
+        "...AACAACAACAA......",
+        "...AA.AA.AA.AA......",
+        "....................",
+    ]
+
+    /// 警戒:坐姿 + 雙耳前豎(垂耳抬起),舌頭收起
+    static let dogAlertA = [
+        "....MM.......AA.....",
+        "....MMM.....AAAA....",
+        "....MMMMAAAAAAAA....",
+        "....MMMAAAAAAAAAA...",
+        ".....MMAAAAAAKKAA...",
+        ".......AAAAAAKKAAKK.",
+        ".......AAAAAAAAAAKK.",
+        ".......AAAAAAAAAA...",
+        ".......AAAAAAAAPPP..",
+        ".......KKKKKKKK.PP..",
+        ".....AAAAAAAAAA.PP..",
+        "....AAAAAAAAAAA.....",
+        "...AAAAAAAAAAAA.....",
+        "...AAAAAAAAACCA.....",
+        "...AAAAAA...AA......",
+        "...AAAAAA...AA......",
+        "....AAAA....AA......",
+        "....................",
+    ]
+
+    /// 警戒:耳尖右移 1px 的微顫幀
+    static let dogAlertB = [
+        ".....MM......AA.....",
+        "....MMM.....AAAA....",
+        "....MMMMAAAAAAAA....",
+        "....MMMAAAAAAAAAA...",
+        ".....MMAAAAAAKKAA...",
+        ".......AAAAAAKKAAKK.",
+        ".......AAAAAAAAAAKK.",
+        ".......AAAAAAAAAA...",
+        ".......AAAAAAAAPPP..",
+        ".......KKKKKKKK.PP..",
+        ".....AAAAAAAAAA.PP..",
+        "....AAAAAAAAAAA.....",
+        "...AAAAAAAAAAAA.....",
+        "...AAAAAAAAACCA.....",
+        "...AAAAAA...AA......",
+        "...AAAAAA...AA......",
+        "....AAAA....AA......",
+        "....................",
+    ]
+
     // MARK: - Black Cat(20×18,正面坐姿胖圓、亮灰外框、綠眼、粉腮紅)
 
     static let blackCat = PixelSprite(
@@ -300,9 +512,12 @@ public enum PixelPets {
             "O": 0x707887, // 外框(深色桌面可見)
             "B": 0x262A31, // 身體
             "S": 0x3D434E, // 條紋/闔眼線
-            "E": 0x7FE08A, // 綠眼
+            "E": 0x7FE08A, // 綠眼(僅 focused 狀態)
+            "G": 0xB9F6C3, // 專注亮綠 core(pulse 用)
+            "D": 0x4E8A5A, // 專注轉場暗綠
+            "R": 0xC96A72, // 常態紅粉半瞇眼(spec:綠眼不得是辨識貓的唯一線索)
             "P": 0xE08BA8, // 腮紅/耳內
-            "W": 0xC9CDD4, // 胸口白斑
+            "W": 0xC9CDD4, // 胸口白斑/鬍鬚
             "U": 0x7A5A3A, // 碗
             "T": 0x8A5A2B, // 零食
         ],
@@ -313,9 +528,21 @@ public enum PixelPets {
             .sleep: [catSleepA, catSleepB],
             .eat: [catEatA, catEatB],
             .jump: [catJumpA, catIdleA],
+            // 開心:尾尖搖擺(貓比狗安靜,只動尾巴)
+            .happy: [catIdleA, catTailFlickA, catIdleB, catTailFlickB],
+            // 警戒:坐姿(徽章表意;貓不做大動作)
+            .alert: [catIdleA, catIdleB],
+            // 進入專注:紅粉眼睜大 → 暗綠 → 綠眼全開+耳朵前傾 → 亮 core(≈0.4s)
+            .focusStart: [catFocusStartA, catFocusStartB, catFocusStartC, catFocusedActiveA],
+            // 專注迴圈:core 亮/暗低頻 pulse(週期 ≈1.5s)
+            .focusedActive: [catFocusedActiveA, catFocusedActiveB],
+            // 退出專注:core 熄 → 暗綠+耳朵回位 → 回常態(≈0.3s,比進場收斂)
+            .focusEnd: [catFocusedActiveB, catFocusEndB, catIdleA],
         ]
     )
 
+    // 常態(common):紅粉半瞇眼 + 左右鬍鬚;眨眼改由 micro-animation 排程
+    // (舊版以 idleB 闔眼 1.4fps 交替 ≈ 每 0.7s 眨一次,遠超 spec 的 4–9s)。
     static let catIdleA = [
         "....O.......O.......",
         "...OPO.....OPO......",
@@ -323,8 +550,74 @@ public enum PixelPets {
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBEEBBBBBBEEBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
         ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 呼吸幀:胸口白斑下移 1px(吐氣),眼睛不變——眨眼獨立排程
+    static let catIdleB = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        ".OBBBBBBBBBBBBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBWWBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 眨眼(micro-animation):闔眼一瞬
+    static let catBlinkA = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        ".OBBBBBBBBBBBBBO....",
+        "WOBSSBBBBBBSSBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 鬍鬚抽動(micro-animation):鬍鬚整組上移 1px
+    static let catWhiskerTwitchA = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        "WOBBBBBBBBBBBBBOWW..",
+        ".OBRRBBBBBBRRBBO....",
+        "WOBPBBBBSBBBBPBOW...",
         ".OBBBBBBBBBBBBBO....",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
@@ -337,16 +630,193 @@ public enum PixelPets {
         "....................",
     ]
 
-    static let catIdleB = [
-        "....O........O......",
+    /// 尾尖外甩(micro-animation / happy 用):只有尾尖 1–2px 動
+    static let catTailFlickA = [
+        "....O.......O.......",
         "...OPO.....OPO......",
         "...OBBO...OBBO......",
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBSSBBBBBBSSBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
         ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBBO.",
+        ".OBBOBBBBBBOBBOO.O..",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 尾尖內收(micro-animation / happy 用)
+    static let catTailFlickB = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBO..",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 專注轉場 1:紅粉眼睜大(1px → 2px)
+    static let catFocusStartA = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        ".OBRRBBBBBBRRBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 專注轉場 2:紅粉 → 暗綠
+    static let catFocusStartB = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        ".OBDDBBBBBBDDBBO....",
+        "WOBDDBBBBBBDDBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 專注轉場 3:綠眼全開 + 耳朵前傾 1px
+    static let catFocusStartC = [
+        ".....O.....O........",
+        "....OPO...OPO.......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        "WOBRRBBBBBBRRBBOWW..",
+        "WOBEEBBBBBBEEBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 專注迴圈 A:綠眼 + 內側亮 core(pulse 亮相)
+    static let catFocusedActiveA = [
+        ".....O.....O........",
+        "....OPO...OPO.......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        "WOBRRBBBBBBRRBBOWW..",
+        "WOBEGBBBBBBGEBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 專注迴圈 B:core 熄(pulse 暗相)
+    static let catFocusedActiveB = [
+        ".....O.....O........",
+        "....OPO...OPO.......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        "WOBRRBBBBBBRRBBOWW..",
+        "WOBEEBBBBBBEEBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 退出專注中段:暗綠 + 耳朵回位
+    static let catFocusEndB = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        ".OBDDBBBBBBDDBBO....",
+        "WOBDDBBBBBBDDBBOWW..",
+        ".OBPBBBBSBBBBPBO....",
+        "WOBBBBBBBBBBBBBOW...",
+        "OBBBBBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBBO...",
+        "OBBWWBBBBBBBBBBOOOO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
+        ".OBBBBBBBBBBBBBOBO..",
+        ".OBBOBBBBBBOBBOO....",
+        "..OBBO..OBBO........",
+        "....................",
+    ]
+
+    /// 專注中的鬍鬚抽動(micro-animation):鬍鬚下移 1px,眼睛維持綠眼+core
+    static let catFocusWhiskerA = [
+        ".....O.....O........",
+        "....OPO...OPO.......",
+        "...OBBO...OBBO......",
+        "..OBBBBBBBBBBBO.....",
+        "..OBBSBBBBBSBBO.....",
+        "WOBRRBBBBBBRRBBOWW..",
+        ".OBEGBBBBBBGEBBO....",
+        "WOBPBBBBSBBBBPBOW...",
+        "WOBBBBBBBBBBBBBOW...",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBOOOO.",
@@ -365,9 +835,9 @@ public enum PixelPets {
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBEEBBBBBBEEBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
         ".OBPBBBBSBBBBPBO....",
-        ".OBBBBBBBBBBBBBO....",
+        "WOBBBBBBBBBBBBBOW...",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBOOOO.",
@@ -386,9 +856,9 @@ public enum PixelPets {
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBEEBBBBBBEEBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
         ".OBPBBBBSBBBBPBO....",
-        ".OBBBBBBBBBBBBBO....",
+        "WOBBBBBBBBBBBBBOW...",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBOOOO.",
@@ -451,7 +921,7 @@ public enum PixelPets {
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBEEBBBBBBEEBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
         ".OBPBBBBSBBBBPBO....",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
@@ -473,7 +943,7 @@ public enum PixelPets {
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBSSBBBBBBSSBBO....",
+        "WOBSSBBBBBBSSBBOWW..",
         ".OBPBBBBSBBBBPBO....",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
@@ -491,9 +961,9 @@ public enum PixelPets {
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
         ".OBBBBBBBBBBBBBO....",
-        ".OBEEBBBBBBEEBBO....",
+        "WOBRRBBBBBBRRBBOWW..",
         ".OBPBBBBSBBBBPBO....",
-        ".OBBBBBBBBBBBBBO....",
+        "WOBBBBBBBBBBBBBOW...",
         "OBBBBBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBOOOO.",
@@ -582,6 +1052,6 @@ public enum PetInfo {
     • focused / idle / sleeping follow recent activity in your local logs
     • warning / exhausted mirror official 5h & weekly limit pressure
     • Lv & XP grow from real work (capped daily; no reward for burning tokens)
-    • hunger is a care mechanic only — feed with treats earned by active work time
+    • fullness is a care mechanic only — feed with treats earned by active work time
     """
 }

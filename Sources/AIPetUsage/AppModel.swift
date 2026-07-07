@@ -71,12 +71,23 @@ final class AppModel {
     func start() {
         if settings.notificationsEnabled { Notifier.requestAuthorization() }
         applyModeSideEffects()
+        observeAppearanceChanges()
         refreshLoop = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshNow()
                 let interval = self?.settings.refreshIntervalSeconds ?? 45
                 try? await Task.sleep(nanoseconds: UInt64(max(15, interval) * 1_000_000_000))
             }
+        }
+    }
+
+    /// 深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
+    private func observeAppearanceChanges() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.appearanceTick += 1 }
         }
     }
 
@@ -136,7 +147,31 @@ final class AppModel {
 
     private func notify(title: String, body: String) {
         guard settings.notificationsEnabled, !settings.quietMode else { return }
+        // Snooze Alerts:期限內靜音通知;追蹤與 UI 照常更新
+        if let until = settings.alertsSnoozedUntil, until > Date() { return }
         Notifier.post(title: title, body: body)
+    }
+
+    // MARK: - Snooze Alerts
+
+    /// 目前有效的 snooze 期限(過期視同未 snooze)。
+    var activeSnoozeUntil: Date? {
+        guard let until = settings.alertsSnoozedUntil, until > Date() else { return nil }
+        return until
+    }
+
+    func snoozeAlerts(for duration: TimeInterval) {
+        updateSettings { $0.alertsSnoozedUntil = Date().addingTimeInterval(duration) }
+    }
+
+    func snoozeAlertsUntilTomorrow() {
+        let cal = Calendar.current
+        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: Date()) ?? Date())
+        updateSettings { $0.alertsSnoozedUntil = tomorrow }
+    }
+
+    func cancelSnooze() {
+        updateSettings { $0.alertsSnoozedUntil = nil }
     }
 
     func providerName(_ id: String) -> String {
@@ -198,7 +233,7 @@ final class AppModel {
             mood = MoodEngine.evaluate(dashboard: dashboard, pet: petState,
                                        warnThreshold: settings.core.warnThresholdPercent)
         case .notHungry:
-            postFeedNotice("I'm full! (hunger \(Int(petState.hunger))%)")
+            postFeedNotice("I'm full! (fullness \(Int(petState.hunger))%)")
         case .noTreats:
             postFeedNotice("no treats — earn 1 per 25 min of real work")
         case .kibbleLimitReached:
@@ -290,16 +325,76 @@ final class AppModel {
 
     // MARK: - 選單列
 
-    /// 選單列同時列出每家 provider 的 5h 百分比(例:🐾 CC47% CX11%)。
-    var menuBarTitle: String {
-        let parts = dashboard.limitStates.compactMap { st -> String? in
-            guard let p = st.fiveHour.usedPercent else { return nil }
-            return "\(shortProviderCode(st.providerId))\(Int(p))%"
+    /// 外觀(深/淺)切換計數:label 讀取它以觸發重烤。
+    private(set) var appearanceTick = 0
+
+    /// 選單列徽章(UIUX spec P0):物種 emoji 開頭、依顯示名稱字母序、
+    /// 略過無資料 provider、identity dot 恆定、severity 只上在百分比。
+    var menuBarBadges: [MenuBadge] {
+        guard settings.menuBarDisplayMode != .petOnly else { return [] }
+        let states = dashboard.limitStates.map { st in
+            (id: st.providerId,
+             displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
+             percent: st.fiveHour.usedPercent)
         }
-        let usage = parts.isEmpty ? "—" : parts.joined(separator: " ")
-        if settings.appMode == .monitorOnly { return "🐾 \(usage)" }
-        let moodBadge = MoodEngine.badge(for: mood.mood) ?? ""
-        return "🐾\(moodBadge) \(usage)"
+        return MenuBadgeBuilder.badges(from: states,
+                                       warn: settings.core.warnThresholdPercent,
+                                       danger: settings.core.dangerThresholdPercent,
+                                       onlyWarnings: settings.menuBarDisplayMode == .compact)
+    }
+
+    /// 選單列開頭標記:full 模式用所選物種,monitor-only 用 🐾。
+    var menuBarPetEmoji: String {
+        settings.appMode == .full ? settings.species.emoji : "🐾"
+    }
+
+    /// Full 模式且完全無資料時顯示「—」佔位;Compact/PetOnly 留空是語意本身。
+    var menuBarShowsPlaceholder: Bool {
+        settings.menuBarDisplayMode == .full && menuBarBadges.isEmpty
+    }
+
+    /// 輔助功能全句(spec §11):全名 + severity,不得只給短代號。
+    var menuBarAccessibilityLabel: String {
+        MenuBadgeBuilder.accessibilitySummary(
+            petName: settings.appMode == .full ? settings.species.displayName : "AI Pet Usage",
+            badges: menuBarBadges)
+    }
+
+    /// 純文字後備(NSImage 烤製失敗時);不再夾帶心情/警示 emoji(spec P0)。
+    var menuBarTitle: String {
+        let parts = menuBarBadges.map { "\($0.code)\($0.percent)%" }
+        let usage = parts.isEmpty ? (menuBarShowsPlaceholder ? "—" : "") : parts.joined(separator: " ")
+        return usage.isEmpty ? menuBarPetEmoji : "\(menuBarPetEmoji) \(usage)"
+    }
+
+    /// 依顯示名稱字母序的穩定排序(選單列、面板、儀表板一致;spec §5)。
+    var orderedLimitStates: [ProviderLimitState] {
+        dashboard.limitStates.sorted {
+            ProviderBrands.brand(for: $0.providerId).displayName.lowercased() <
+            ProviderBrands.brand(for: $1.providerId).displayName.lowercased()
+        }
+    }
+
+    var orderedSnapshots: [UsageSnapshot] {
+        dashboard.snapshots.sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
+    }
+
+    /// 面板 header 的警示摘要(spec §8):取最嚴重的一條,一句話、不加 emoji。
+    var alertSummary: (text: String, isDanger: Bool)? {
+        var worst: (name: String, window: String, percent: Double, reset: Date?)?
+        for st in orderedLimitStates {
+            for (label, w) in [("5h", st.fiveHour), ("weekly", st.weekly)] {
+                guard let p = w.usedPercent, p >= settings.core.warnThresholdPercent else { continue }
+                if worst == nil || p > worst!.percent {
+                    worst = (providerName(st.providerId), label, p, w.resetAt)
+                }
+            }
+        }
+        guard let w = worst else { return nil }
+        let verb = w.percent >= 100 ? "exceeded" : "nearing"
+        var text = "\(w.name) \(verb) \(w.window) limit"
+        if let reset = w.reset { text += " · resets in \(countdown(to: reset))" }
+        return (text, w.percent >= settings.core.dangerThresholdPercent)
     }
 
     // MARK: - 螢幕漫遊(pixel pet)

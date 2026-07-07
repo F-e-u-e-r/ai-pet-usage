@@ -78,10 +78,11 @@ The app should be local-first by default.
 
 ```bash
 Scripts/swiftpm.sh build              # build everything
-Scripts/swiftpm.sh run usagecore-tests  # run the test suite (43 tests)
+Scripts/swiftpm.sh run usagecore-tests  # run the test suite (56 tests)
 Scripts/build-app.sh                  # produce dist/AI Pet Usage.app
 open "dist/AI Pet Usage.app"
 .build/debug/aipet status             # headless status (CLI)
+.build/debug/aipet sprites            # export pixel-pet contact sheets → dist/sprite-preview/
 .build/debug/aipet report --out r.html  # headless HTML export
 ```
 

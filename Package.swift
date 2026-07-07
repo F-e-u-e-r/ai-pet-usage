@@ -24,7 +24,7 @@ let package = Package(
         ),
         .target(name: "PetCore", dependencies: ["UsageCore"], swiftSettings: swift5),
         .executableTarget(name: "AIPetUsage", dependencies: ["UsageCore", "PetCore"], swiftSettings: swift5),
-        .executableTarget(name: "aipet", dependencies: ["UsageCore"], swiftSettings: swift5),
+        .executableTarget(name: "aipet", dependencies: ["UsageCore", "PetCore"], swiftSettings: swift5),
         // 註:此機器的 CLT 不含 XCTest,測試以獨立執行檔跑:`Scripts/swiftpm.sh run usagecore-tests`
         .executableTarget(
             name: "usagecore-tests",

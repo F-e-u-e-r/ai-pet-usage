@@ -235,6 +235,10 @@ struct PetView: View {
     @State private var bubbleUntil: Date = .distantPast
     @State private var bubbleText: String = ""
     @State private var phraseTick = 0
+    /// 點擊泡泡的分頁(0 用量 / 1 寵物 / 2 資料);泡泡顯示中再點會翻頁。
+    @State private var bubblePage = 0
+    /// 動畫狀態機:one-shot 轉場 + 隨機 micro-animation(引用型別,tick 內推進)。
+    @State private var animator = PixelAnimator()
 
     var body: some View {
         let settings = model.settings
@@ -245,11 +249,11 @@ struct PetView: View {
         TimelineView(.animation(minimumInterval: 1.0 / 10, paused: paused)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let walking = model.wanderDirection != 0
-            let state = PixelPets.animState(for: mood.mood, walking: walking)
+            let state = PixelPets.animState(for: mood.mood, walking: walking, species: settings.species)
             let sprite = PixelPets.sprite(for: settings.species)
-            let frames = sprite.frames(for: state)
-            let fps = PixelPets.fps(for: state) * mood.animationSpeed
-            let frameIndex = paused ? 0 : Int(t * fps) % max(1, frames.count)
+            let rows = animator.frame(species: settings.species, target: state, sprite: sprite,
+                                      at: context.date, reduceMotion: paused,
+                                      speed: mood.animationSpeed)
 
             VStack(spacing: 2) {
                 if context.date < bubbleUntil {
@@ -257,7 +261,7 @@ struct PetView: View {
                         .transition(.opacity)
                 }
                 ZStack(alignment: .topTrailing) {
-                    PixelFrameView(rows: frames.indices.contains(frameIndex) ? frames[frameIndex] : frames[0],
+                    PixelFrameView(rows: rows,
                                    palette: sprite.palette,
                                    gridWidth: sprite.width,
                                    gridHeight: sprite.height,
@@ -267,10 +271,14 @@ struct PetView: View {
                         .opacity(mood.mood == .sleeping ? 0.85 : 1)
 
                     if let glyph = PixelGlyphs.glyph(for: mood.mood) {
+                        let isAlert = mood.mood == .warning || mood.mood == .exhausted
+                        // spec:警戒驚嘆號以整數像素彈跳表現(僅 alert 狀態),
+                        // 其餘徽章維持柔和閃爍
+                        let bounce: CGFloat = (!paused && isAlert && !Int(t * 2).isMultiple(of: 2)) ? -2 : 0
                         PixelGlyphView(glyph: glyph)
                             .frame(width: size * 0.16, height: size * 0.26)
-                            .offset(x: -size * 0.02, y: -size * 0.04)
-                            .opacity(paused ? 1 : 0.55 + 0.45 * abs(sin(t * 3)))
+                            .offset(x: -size * 0.02, y: -size * 0.04 + bounce)
+                            .opacity(isAlert || paused ? 1 : 0.55 + 0.45 * abs(sin(t * 3)))
                     }
 
                     if mood.mood == .celebration {
@@ -280,19 +288,23 @@ struct PetView: View {
                     }
                 }
 
-                // 每家 provider 各一條迷你量表(同時看到 Claude 與 Codex)
+                // 每家 provider 各一條迷你量表:識別 dot + 代號 + severity 上色量表
                 VStack(spacing: 2) {
-                    ForEach(model.dashboard.limitStates.prefix(4)) { limit in
+                    ForEach(model.orderedLimitStates.prefix(4)) { limit in
+                        let brand = ProviderBrands.brand(for: limit.providerId)
                         HStack(spacing: 4) {
-                            Text(shortProviderCode(limit.providerId))
+                            ProviderDot(brand: brand, size: 5)
+                            Text(brand.code)
                                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Theme.textSecondary)
                                 .frame(width: 16, alignment: .trailing)
                             GaugeBar(percent: limit.fiveHour.usedPercent ?? 0,
-                                     warn: settings.core.warnThresholdPercent)
+                                     warn: settings.core.warnThresholdPercent,
+                                     danger: settings.core.dangerThresholdPercent)
                                 .frame(height: 3)
                                 .opacity(limit.fiveHour.usedPercent == nil ? 0.25 : 0.9)
                         }
+                        .help("\(brand.displayName) — 5h window usage")
                     }
                 }
                 .frame(width: size * 1.0)
@@ -302,7 +314,12 @@ struct PetView: View {
         .opacity(settings.petOpacity)
         .contentShape(Rectangle())
         .onTapGesture {
-            showBubble(statsText, seconds: 6)
+            if Date() < bubbleUntil {
+                bubblePage = (bubblePage + 1) % 3
+            } else {
+                bubblePage = 0
+            }
+            showBubble(bubblePageText(bubblePage), seconds: 6)
         }
         .onChange(of: model.mood.mood) { _, newMood in
             guard settings.petSpeechEnabled,
@@ -325,9 +342,39 @@ struct PetView: View {
         bubbleUntil = Date().addingTimeInterval(seconds)
     }
 
-    private var statsText: String {
-        let pet = model.petState
-        return "\(model.mood.summary)\nLv.\(pet.level) · hunger \(Int(pet.hunger))% · treats \(model.treatsAvailable)"
+    /// 點擊泡泡三頁(spec「Better Pet Click Bubble」的 tap-to-cycle 版本;
+    /// 每行壓在 ~26 字內以符合面板寬度):用量 / 寵物 / 資料。
+    private func bubblePageText(_ page: Int) -> String {
+        switch page {
+        case 0:
+            let lines = model.orderedLimitStates.prefix(4).map { st -> String in
+                let code = shortProviderCode(st.providerId)
+                guard let p = st.fiveHour.usedPercent else { return "\(code) — no data" }
+                var line = "\(code) \(Int(p.rounded()))% 5h"
+                if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }
+                return line
+            }
+            return lines.isEmpty ? "no usage data yet" : lines.joined(separator: "\n")
+        case 1:
+            let pet = model.petState
+            return "Lv.\(pet.level) · fullness \(Int(pet.hunger))%\n"
+                + "treats \(model.treatsAvailable) · burn \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
+        default:
+            let refreshed = timeAgo(model.dashboard.lastRefreshAt)
+            let flags = model.orderedLimitStates.prefix(4).map { st in
+                "\(shortProviderCode(st.providerId)) \(confidenceWord(st.fiveHour.confidence))"
+            }
+            return (["refreshed \(refreshed)"] + flags).joined(separator: "\n")
+        }
+    }
+
+    private func confidenceWord(_ confidence: Confidence) -> String {
+        switch confidence {
+        case .high: return "official"
+        case .estimated: return "estimated"
+        case .stale: return "stale"
+        case .unknown: return "no source"
+        }
     }
 }
 
@@ -401,6 +448,8 @@ struct PixelBubble: View {
 struct GaugeBar: View {
     let percent: Double
     let warn: Double
+    /// 紅色門檻:與 severity 上色一致改用 danger 閾值(預設維持既有 99.5 相容)。
+    var danger: Double = 99.5
 
     var body: some View {
         GeometryReader { geo in
@@ -416,7 +465,7 @@ struct GaugeBar: View {
     }
 
     private var color: Color {
-        if percent >= 99.5 { return .red }
+        if percent >= danger { return .red }
         if percent >= warn { return .orange }
         return .green
     }
@@ -427,8 +476,8 @@ struct PetContextMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Section("Feed (treats: \(model.treatsAvailable))") {
-            ForEach(FoodItem.starterFoods) { food in
+        Section("Give Treat (\(model.treatsAvailable))") {
+            ForEach(FoodItem.foods(for: model.settings.species)) { food in
                 Button("\(food.emoji) \(food.name)\(food.treatCost > 0 ? "  — \(food.treatCost)🎟" : "")") {
                     _ = model.feed(food)
                 }

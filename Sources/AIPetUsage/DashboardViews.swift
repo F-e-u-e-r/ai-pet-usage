@@ -212,6 +212,7 @@ struct LimitBar: View {
     let title: String
     let window: LimitWindowState
     let warn: Double
+    var danger: Double = 99.5
     var showBudgetAffordance = false
 
     var body: some View {
@@ -221,7 +222,7 @@ struct LimitBar: View {
                 Spacer()
                 Text(valueText).font(.caption).monospacedDigit().foregroundStyle(Theme.textPrimary)
             }
-            GaugeBar(percent: window.usedPercent ?? 0, warn: warn)
+            GaugeBar(percent: window.usedPercent ?? 0, warn: warn, danger: danger)
                 .frame(height: 6)
                 .opacity(window.usedPercent == nil ? 0.25 : 1)
             HStack {
@@ -406,14 +407,14 @@ struct TodayView: View {
                     if model.settings.appMode == .full {
                         StatTile(title: "Pet",
                                  value: "\(model.settings.species.displayName) · \(model.mood.mood.rawValue)",
-                                 caption: "Lv.\(model.petState.level) · hunger \(Int(model.petState.hunger))%")
+                                 caption: "Lv.\(model.petState.level) · fullness \(Int(model.petState.hunger))%")
                             .help(PetInfo.tooltip)
                     }
                 }
 
                 Text("Coding agents").font(Theme.FontScale.cardTitle)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
-                    ForEach(dash.snapshots) { snap in
+                    ForEach(model.orderedSnapshots) { snap in
                         AgentCard(snapshot: snap,
                                   limit: dash.limitStates.first { $0.providerId == snap.providerId })
                     }
@@ -547,12 +548,15 @@ struct AgentCard: View {
     let limit: ProviderLimitState?
 
     var body: some View {
+        let brand = ProviderBrands.brand(for: snapshot.providerId, displayName: snapshot.displayName)
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 6) {
+                ProviderDot(brand: brand)
                 Text(snapshot.displayName).font(Theme.FontScale.cardTitle)
                 Spacer()
                 StatusBadge(status: snapshot.status)
             }
+            .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
             HStack(spacing: 14) {
                 metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
                 metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
@@ -603,10 +607,11 @@ struct LimitsView: View {
         let dash = model.dashboard
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(dash.limitStates) { limit in
+                ForEach(model.orderedLimitStates) { limit in
                     LimitRow(limit: limit,
                              snapshot: dash.snapshots.first { $0.providerId == limit.providerId },
-                             warn: model.settings.core.warnThresholdPercent)
+                             warn: model.settings.core.warnThresholdPercent,
+                             danger: model.settings.core.dangerThresholdPercent)
                 }
 
                 if dash.limitStates.first(where: { $0.providerId == "claude-code" })?.fiveHour.usedPercent == nil {
@@ -625,10 +630,13 @@ struct LimitRow: View {
     let limit: ProviderLimitState
     let snapshot: UsageSnapshot?
     let warn: Double
+    var danger: Double = 99.5
 
     var body: some View {
+        let brand = ProviderBrands.brand(for: limit.providerId, displayName: snapshot?.displayName)
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 6) {
+                ProviderDot(brand: brand)
                 Text(snapshot?.displayName ?? limit.providerId).font(Theme.FontScale.cardTitle)
                 if let plan = limit.planType {
                     Text(plan).font(.caption)
@@ -639,10 +647,11 @@ struct LimitRow: View {
                 Spacer()
                 if let snapshot { StatusBadge(status: snapshot.status) }
             }
+            .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
             HStack(alignment: .top, spacing: 24) {
-                LimitBar(title: "5-hour window", window: limit.fiveHour, warn: warn,
+                LimitBar(title: "5-hour window", window: limit.fiveHour, warn: warn, danger: danger,
                          showBudgetAffordance: limit.providerId == "claude-code")
-                LimitBar(title: "Weekly window", window: limit.weekly, warn: warn,
+                LimitBar(title: "Weekly window", window: limit.weekly, warn: warn, danger: danger,
                          showBudgetAffordance: limit.providerId == "claude-code")
             }
             HStack(spacing: 16) {
