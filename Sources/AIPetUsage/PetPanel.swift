@@ -10,6 +10,8 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private weak var model: AppModel?
     private var wanderTask: Task<Void, Never>?
+    /// 手動拖曳的位置持久化去抖:每個 windowDidMove 取消上一個,拖曳靜止後才寫一次 settings.json。
+    private var positionSaveTask: Task<Void, Never>?
     /// 漫遊位移期間為 true,windowDidMove 據此略過位置持久化(避免每秒十餘次寫檔)。
     private var isWanderMoving = false
     private var wanderHeading: Int = 1
@@ -18,6 +20,20 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     init(model: AppModel) {
         self.model = model
         super.init()
+        // 去抖後直接 ⌘Q 退出時,400ms 排程可能還沒落地就遺失最後位置;
+        // termination path 不會走 destroy(),故在此於 quit 前同步補寫一次。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(flushPositionOnTerminate),
+            name: NSApplication.willTerminateNotification, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    // willTerminate 於主執行緒同步發送,直接同步落地目前位置(不經過去抖排程)。
+    @objc private func flushPositionOnTerminate() {
+        persistPositionNow()
     }
 
     private func makePanel() -> NSPanel {
@@ -49,11 +65,26 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     }
 
     private func restoreOrigin(for size: NSSize) -> NSPoint {
-        if let x = model?.settings.petPositionX, let y = model?.settings.petPositionY {
-            return NSPoint(x: x, y: y)
+        let mainVisible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        let defaultOrigin = NSPoint(x: mainVisible.maxX - size.width - 24, y: mainVisible.minY + 24)
+        guard let x = model?.settings.petPositionX, let y = model?.settings.petPositionY else {
+            return defaultOrigin
         }
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-        return NSPoint(x: screen.maxX - size.width - 24, y: screen.minY + 24)
+        // 夾限到目前仍存在的螢幕:外接螢幕拔除後,舊座標可能整個落在所有螢幕之外。
+        // 跨兩螢幕時挑「交集面積最大」的螢幕(避免 first(where:) 依 screens 順序選錯,
+        // 把仍可見於次螢幕的位置誤夾回主螢幕);全落在所有螢幕之外才退回預設角落。
+        let savedRect = NSRect(origin: NSPoint(x: x, y: y), size: size)
+        func overlapArea(_ vf: NSRect) -> CGFloat {
+            let r = vf.intersection(savedRect)
+            return r.isNull ? 0 : r.width * r.height
+        }
+        guard let vf = NSScreen.screens.map(\.visibleFrame).max(by: { overlapArea($0) < overlapArea($1) }),
+              overlapArea(vf) > 0 else {
+            return defaultOrigin
+        }
+        let clampedX = min(max(x, vf.minX), max(vf.minX, vf.maxX - size.width))
+        let clampedY = min(max(y, vf.minY), max(vf.minY, vf.maxY - size.height))
+        return NSPoint(x: clampedX, y: clampedY)
     }
 
     func show() {
@@ -69,6 +100,12 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     func destroy() {
         stopWanderLoop()
+        // 拖曳去抖尚未落地就 teardown(例如切到 monitor-only)會遺失最後位置,先補寫一次再取消。
+        if positionSaveTask != nil, let panel, !isWanderMoving {
+            model?.savePetPosition(panel.frame.origin)
+        }
+        positionSaveTask?.cancel()
+        positionSaveTask = nil
         panel?.delegate = nil
         panel?.close()
         panel = nil
@@ -94,7 +131,15 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     nonisolated func windowDidMove(_ notification: Notification) {
         Task { @MainActor in
             guard let panel = self.panel, !self.isWanderMoving else { return }
-            self.model?.savePetPosition(panel.frame.origin)
+            // 去抖:拖曳期間每個 move 事件取消上一個排程,靜止 0.4s 後才寫一次 settings.json。
+            let origin = panel.frame.origin
+            self.positionSaveTask?.cancel()
+            self.positionSaveTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled else { return }
+                self?.model?.savePetPosition(origin)
+                self?.positionSaveTask = nil // 完成後清空,destroy() 才不會把已落地的 task 誤判為 pending
+            }
         }
     }
 

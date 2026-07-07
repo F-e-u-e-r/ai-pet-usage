@@ -35,6 +35,7 @@ runSuite("LedgerTests", [
 let limits = LimitEngineTests()
 runSuite("LimitEngineTests", [
     ("testMonotonicGuardWithinWindow", limits.testMonotonicGuardWithinWindow),
+    ("testSameWindowZeroWindowMinutesDoesNotClobberStoredLength", limits.testSameWindowZeroWindowMinutesDoesNotClobberStoredLength),
     ("testWindowRolloverAcceptsLowerAndEmitsReset", limits.testWindowRolloverAcceptsLowerAndEmitsReset),
     ("testNilResetRolloverAcceptsLowerAndEmitsReset", limits.testNilResetRolloverAcceptsLowerAndEmitsReset),
     ("testHistoryDedupPreservesSlopeAcrossEqualRefreshes", limits.testHistoryDedupPreservesSlopeAcrossEqualRefreshes),
@@ -84,6 +85,7 @@ runSuite("MoodEngineTests", [
 let integration = CoordinatorIntegrationTests()
 runSuite("CoordinatorIntegrationTests", [
     ("testEndToEndRefreshAndExport", integration.testEndToEndRefreshAndExport),
+    ("testFullReindexPreservesUnavailableProviderHistory", integration.testFullReindexPreservesUnavailableProviderHistory),
 ])
 
 let fileLock = FileLockTests()

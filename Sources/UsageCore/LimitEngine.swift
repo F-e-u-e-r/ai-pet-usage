@@ -142,7 +142,7 @@ public final class LimitEngine {
             }
             current.observedAt = max(current.observedAt, observedAt)
             if let r = reading.resetsAt { current.resetsAt = r }
-            current.windowMinutes = reading.windowMinutes
+            if reading.windowMinutes > 0 { current.windowMinutes = reading.windowMinutes }
             if current.percent > previous {
                 appendCrossings(previous: previous, now: current.percent, providerId: providerId,
                                 windowName: windowName, settings: settings, transitions: &transitions)

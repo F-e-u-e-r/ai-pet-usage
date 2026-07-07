@@ -231,4 +231,63 @@ final class CoordinatorIntegrationTests: XCTestCase {
         }
         expectation.wait()
     }
+
+    func testFullReindexPreservesUnavailableProviderHistory() throws {
+        let codexRoot = makeTempDir()
+        let codexDay = codexRoot.appendingPathComponent("2026/01/15")
+        try FileManager.default.createDirectory(at: codexDay, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: fixtureURL("codex-rollout.jsonl"),
+                                         to: codexDay.appendingPathComponent("rollout-2026-01-15T09-00-00-x.jsonl"))
+
+        let dataDir = makeTempDir()
+        let missingClaudeRoot = dataDir.appendingPathComponent("missing-claude-root")
+        try? FileManager.default.removeItem(at: missingClaudeRoot)
+
+        let ledger = UsageLedger(fileURL: dataDir.appendingPathComponent("ledger.jsonl"))
+        let unavailableEvent = UsageEvent(
+            id: "cc:preseed-unavailable",
+            providerId: "claude-code",
+            modelId: "claude-sonnet-4-5",
+            timestamp: Date().addingTimeInterval(-3600),
+            tokens: TokenBreakdown(input: 123),
+            sourceKind: "test"
+        )
+        let staleCodexEvent = UsageEvent(
+            id: "cx:stale-before-reindex",
+            providerId: "codex",
+            modelId: "gpt-5-codex",
+            timestamp: Date().addingTimeInterval(-1800),
+            tokens: TokenBreakdown(input: 456),
+            sourceKind: "test"
+        )
+        XCTAssertEqual(ledger.append([unavailableEvent, staleCodexEvent]), 2)
+
+        let coordinator = UsageCoordinator(
+            dataDir: dataDir,
+            settings: CoreSettings(),
+            adapters: [
+                CodexAdapter(roots: [codexRoot]),
+                ClaudeCodeAdapter(roots: [missingClaudeRoot], statuslineFiles: [])
+            ]
+        )
+
+        let expectation = DispatchSemaphore(value: 0)
+        Task {
+            let outcome = await coordinator.refresh(fullReindex: true)
+            let reloaded = UsageLedger(fileURL: dataDir.appendingPathComponent("ledger.jsonl"))
+
+            XCTAssertTrue(reloaded.events.contains { $0.id == unavailableEvent.id },
+                          "unavailable provider history must survive a full reindex")
+            XCTAssertFalse(reloaded.events.contains { $0.id == staleCodexEvent.id },
+                           "available provider history should be cleared before reimport")
+            XCTAssertTrue(reloaded.events.contains { $0.providerId == "codex" && $0.sourceKind == "codex-rollout" },
+                          "available provider events should be rebuilt")
+            XCTAssertTrue(outcome.dashboard.dataQuality.contains {
+                $0 == "claude-code: history kept — provider unavailable during full reindex"
+            })
+
+            expectation.signal()
+        }
+        expectation.wait()
+    }
 }

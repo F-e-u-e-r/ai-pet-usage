@@ -387,6 +387,33 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertEqual(state.fiveHour.usedPercent, 60)
     }
 
+    func testSameWindowZeroWindowMinutesDoesNotClobberStoredLength() {
+        let engine = LimitEngine(stateURL: nil)
+        let reset = date("2026-01-15T14:00:00Z")
+        _ = engine.ingest(readings: [
+            RateLimitReading(
+                providerId: "codex",
+                observedAt: date("2026-01-15T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 25, windowMinutes: 300, resetsAt: reset),
+                secondary: nil
+            )
+        ], settings: settings)
+
+        _ = engine.ingest(readings: [
+            RateLimitReading(
+                providerId: "codex",
+                observedAt: date("2026-01-15T10:05:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 30, windowMinutes: 0,
+                                                resetsAt: reset.addingTimeInterval(30)),
+                secondary: nil
+            )
+        ], settings: settings)
+
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T10:10:00Z"))
+        XCTAssertEqual(state.fiveHour.windowMinutes, 300)
+    }
+
     func testWindowRolloverAcceptsLowerAndEmitsReset() {
         let engine = LimitEngine(stateURL: nil)
         _ = engine.ingest(readings: [reading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)

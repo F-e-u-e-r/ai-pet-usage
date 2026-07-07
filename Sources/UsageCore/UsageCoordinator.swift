@@ -103,6 +103,7 @@ public actor UsageCoordinator {
     private var lastRefreshAt: Date?
     private var refreshErrors: [String: String] = [:]
     private var parseErrorCounts: [String: Int] = [:]
+    private var fullReindexPreservedProviderIds: Set<String> = []
     /// 跨行程互斥:app 與 CLI 對同一資料目錄的寫入階段必須互斥。
     private let refreshLock: FileLock
     private let refreshLockTimeout: TimeInterval
@@ -175,8 +176,13 @@ public actor UsageCoordinator {
         ledger.compact(retentionDays: settings.retentionDays, now: now) // 僅在持鎖時壓縮
 
         if fullReindex {
-            scanStates = [:]
-            ledger.reset()
+            let enabled = Set(adapters.filter { settings.enabledProviders.contains($0.providerId) }.map { $0.providerId })
+            let rescan = Set(adapters.filter {
+                settings.enabledProviders.contains($0.providerId) && $0.detectAvailability().available
+            }.map { $0.providerId })
+            fullReindexPreservedProviderIds = enabled.subtracting(rescan)
+            ledger.clearProviders(rescan)
+            for pid in rescan { scanStates[pid] = ScanState() }
         }
         var transitions: [LimitTransition] = []
         var inserted = 0
@@ -279,6 +285,11 @@ public actor UsageCoordinator {
         }
         for (pid, count) in parseErrorCounts where count > 0 {
             quality.append("\(pid): \(count) unparsable line(s) skipped on last scan")
+        }
+        for pid in fullReindexPreservedProviderIds.sorted()
+        where settings.enabledProviders.contains(pid)
+            && adapters.first(where: { $0.providerId == pid })?.detectAvailability().available == false {
+            quality.append("\(pid): history kept — provider unavailable during full reindex")
         }
         for limit in limitStates {
             if limit.fiveHour.corrected || limit.weekly.corrected {

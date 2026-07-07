@@ -48,6 +48,9 @@ final class AppModel {
     private var petPanel: PetPanelController?
     private var refreshLoop: Task<Void, Never>?
     private var activeMinutesToday: Double = 0
+    /// 設定推送到 coordinator 的序列化尾巴:每次推送先 await 前一個,保證按呼叫順序落地
+    /// (fire-and-forget Task 不保證順序,舊 core 可能覆蓋新 core)。
+    private var settingsPushTask: Task<Void, Never>?
 
     init() {
         dataDir = AppPaths.dataDirectory()
@@ -190,7 +193,13 @@ final class AppModel {
         let oldMode = settings.appMode
         settingsStore.update(mutate)
         settings = settingsStore.settings
-        Task { await coordinator.updateSettings(settings.core) }
+        // 串接成序列:第 N 次推送先 await 第 N-1 次,coordinator 收斂到最後寫入的值。
+        let core = settings.core
+        let previousPush = settingsPushTask
+        settingsPushTask = Task { [weak self] in
+            _ = await previousPush?.value
+            await self?.coordinator.updateSettings(core)
+        }
         if oldMode != settings.appMode {
             applyModeSideEffects()
         } else {

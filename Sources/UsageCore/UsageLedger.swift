@@ -110,6 +110,23 @@ public final class UsageLedger {
         expectedFileSize = Int64(blob.count)
     }
 
+    /// 清除指定 provider 的事件(全量重建索引時只重建目前可用的 provider)。
+    public func clearProviders(_ providerIds: Set<String>) {
+        guard !providerIds.isEmpty else { return }
+        let kept = events.filter { !providerIds.contains($0.providerId) }
+        guard kept.count != events.count else { return }
+        events = kept
+        ids = Set(kept.map(\.id))
+        guard let fileURL else { return }
+        let encoder = AtomicJSON.encoder()
+        var blob = Data()
+        for e in kept {
+            if let d = try? encoder.encode(e) { blob.append(d); blob.append(0x0A) }
+        }
+        try? blob.write(to: fileURL, options: .atomic)
+        expectedFileSize = Int64(blob.count)
+    }
+
     /// 清空(全量重建索引前呼叫)。
     public func reset() {
         events = []
