@@ -9,13 +9,19 @@ BUNDLE_ID="dev.aipetusage.app"
 VERSION="0.1.0"
 
 "$ROOT/Scripts/swiftpm.sh" build -c release --product AIPetUsage
+"$ROOT/Scripts/swiftpm.sh" build -c release --product aipet
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$ROOT/.build/release/AIPetUsage" "$APP/Contents/MacOS/AIPetUsage"
+# aipet CLI 也隨附:排程匯出的 LaunchAgent 以絕對路徑呼叫它(見 ScheduledReportManager)。
+cp "$ROOT/.build/release/aipet" "$APP/Contents/MacOS/aipet"
 
-# SwiftPM 資源(價目表 JSON)必須隨附,否則發佈後會退回過期的編譯內建價。
+# SwiftPM 資源(價目表 JSON)放標準的 Contents/Resources(codesign / 公證合法結構)。
+# UsageCore 的 PricingRegistry.resourceBundle() 以 Bundle.main.resourceURL 穩健定位——
+# app 主程式與獨立執行的 aipet(launchd 排程)都解析到此,不依賴會在資源遺失時 fatalError 的
+# Bundle.module,也不需在 .app 根放非標準檔。
 cp -R "$ROOT/.build/release/AIPetUsage_UsageCore.bundle" "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -40,6 +46,8 @@ EOF
 
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
+# 先簽巢狀的 aipet,再簽外層 app(外層密封含已簽的 helper)。
+codesign --force --sign - "$APP/Contents/MacOS/aipet" 2>/dev/null || true
 codesign --force --sign - "$APP" 2>/dev/null || true
 
 echo "Built: $APP"

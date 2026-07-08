@@ -110,6 +110,21 @@ public struct TrendsData: Sendable {
     }
 }
 
+/// FSEvents 檔案監看計畫:要監看的目錄 + 只在變更路徑命中白名單時才觸發 refresh。
+public struct WatchPlan: Sendable, Equatable {
+    public var dirs: [String]       // FSEvents 監看的目錄
+    public var triggers: [String]   // 變更路徑「等於或位於其下」命中才觸發 refresh
+    /// 是否「所有已啟用的 provider」都已監看到記錄目錄。false 時(全新安裝尚無目錄、只監看到
+    /// statusline 父目錄,或某個啟用的 provider 目錄還沒出現)維持快速輪詢以儘快發現新目錄;
+    /// 全部鎖定後才切到慢速 fallback,避免第二個 provider 的新目錄要等 fallback 才被發現。
+    public var allEnabledRootsWatched: Bool
+    public init(dirs: [String], triggers: [String], allEnabledRootsWatched: Bool) {
+        self.dirs = dirs
+        self.triggers = triggers
+        self.allEnabledRootsWatched = allEnabledRootsWatched
+    }
+}
+
 // MARK: - 協調器
 
 /// 串起 adapters → 帳本 → 限額引擎,對 UI/CLI 提供單一入口。
@@ -159,6 +174,37 @@ public actor UsageCoordinator {
 
     public func adapterInfos() -> [(providerId: String, displayName: String, availability: ProviderAvailability, dataSources: String, permissions: String)] {
         adapters.map { ($0.providerId, $0.displayName, $0.detectAvailability(), $0.explainDataSources(), $0.explainRequiredPermissions()) }
+    }
+
+    /// FSEvents 監看計畫。監看目錄 = 存在的 provider 記錄目錄 + statusline 檔的存在父目錄;
+    /// 觸發白名單 = provider 目錄(整棵樹)+ statusline 檔路徑(精確)。App Support 內我方
+    /// 寫入的帳本/設定雖與 statusline 同目錄而被「監看」,但不在白名單,故不會自我觸發 refresh。
+    /// 每次呼叫重新取得,fallback 迴圈藉此撿到啟動後才建立的目錄/檔。
+    public func watchPlan() -> WatchPlan {
+        let fm = FileManager.default
+        var providerDirs: Set<String> = []
+        var watchDirs: Set<String> = []
+        var triggerFiles: Set<String> = []
+        var anyEnabled = false
+        var allEnabledRootsWatched = true
+        // 只監看已啟用的 provider(refresh() 亦以 enabledProviders 跳過停用者;停用即停止監看其目錄)。
+        for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
+            anyEnabled = true
+            let roots = adapter.roots
+            if roots.isEmpty { allEnabledRootsWatched = false }   // 該 provider 的記錄目錄尚未出現
+            for root in roots {
+                providerDirs.insert(root.path)
+                watchDirs.insert(root.path)
+            }
+            for file in adapter.watchFiles {
+                triggerFiles.insert(file.path)
+                let parent = file.deletingLastPathComponent()
+                if fm.fileExists(atPath: parent.path) { watchDirs.insert(parent.path) }
+            }
+        }
+        return WatchPlan(dirs: watchDirs.sorted(),
+                         triggers: providerDirs.union(triggerFiles).sorted(),
+                         allEnabledRootsWatched: anyEnabled && allEnabledRootsWatched)
     }
 
     // MARK: 刷新

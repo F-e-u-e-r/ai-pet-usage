@@ -78,9 +78,23 @@ Task {
                 kind = .today
             }
             let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
-            let defaultName = "AIPetUsage-Report-\(df.string(from: Date())).html"
-            let out = value(for: "--out") ?? defaultName
-            let url = URL(fileURLWithPath: out)
+            let fileName = "AIPetUsage-Report-\(df.string(from: Date())).html"
+            let url: URL
+            if let dir = value(for: "--out-dir") {
+                // launchd 排程無法做 shell 日期展開,故由 CLI 於執行時產生檔名 + 建立資料夾。
+                let dirURL = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
+                do {
+                    try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+                } catch {
+                    print("export failed: cannot create --out-dir \(dirURL.path): \(error)")
+                    exit(1)
+                }
+                url = dirURL.appendingPathComponent(fileName)
+            } else if let out = value(for: "--out") {
+                url = URL(fileURLWithPath: (out as NSString).expandingTildeInPath)
+            } else {
+                url = URL(fileURLWithPath: fileName)
+            }
             do {
                 try await coordinator.exportReport(kind: kind, to: url)
                 print("report written: \(url.path)  (\(headline))")

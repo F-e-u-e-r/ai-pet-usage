@@ -158,6 +158,29 @@ final class TrendsDataTests: XCTestCase {
     }
 }
 
+// MARK: - 排程匯出 plist
+
+final class ScheduledReportTests: XCTestCase {
+    func testPlistXMLContentAndEscaping() {
+        let spec = ScheduledReportSpec(
+            label: "dev.aipetusage.app.report",
+            programPath: "/Apps/AI Pet Usage.app/Contents/MacOS/aipet",
+            days: 0, outDir: "/Users/x/Reports & Logs",
+            hour: 99, minute: 5, homePath: "/Users/x",
+            stdoutLog: "/tmp/o.log", stderrLog: "/tmp/e.log",
+            extraEnv: ["CODEX_HOME": "/Users/x/.codex"])
+        XCTAssertEqual(spec.days, 1)     // clamp
+        XCTAssertEqual(spec.hour, 23)    // clamp
+        let xml = spec.plistXML()
+        XCTAssertTrue(xml.contains("<key>Label</key><string>dev.aipetusage.app.report</string>"))
+        XCTAssertTrue(xml.contains("<string>--out-dir</string><string>/Users/x/Reports &amp; Logs</string>"))
+        XCTAssertTrue(xml.contains("<string>--refresh</string>"))
+        XCTAssertTrue(xml.contains("<key>Hour</key><integer>23</integer><key>Minute</key><integer>5</integer>"))
+        XCTAssertTrue(xml.contains("<key>CODEX_HOME</key><string>/Users/x/.codex</string>"))
+        XCTAssertFalse(xml.contains("& Logs"), "未 escape 的 & 不應出現")
+    }
+}
+
 // MARK: - Claude Code adapter
 
 final class ClaudeCodeAdapterTests: XCTestCase {

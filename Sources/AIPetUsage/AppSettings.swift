@@ -52,6 +52,12 @@ struct AppSettings: Codable {
     var menuBarDisplayMode: MenuBarDisplayMode = .full
     /// Snooze Alerts:此時刻前不發系統通知(追蹤照常);nil / 過期 = 未 snooze。
     var alertsSnoozedUntil: Date?
+    /// 每日自動匯出 HTML 報告(由 launchd 排程跑 aipet report)。
+    var dailyExportEnabled: Bool = false
+    var dailyExportHour: Int = 9
+    var dailyExportMinute: Int = 0
+    var dailyExportRangeDays: Int = 30
+    var dailyExportFolderPath: String?
     var core = CoreSettings()
 
     init() {}
@@ -62,7 +68,9 @@ struct AppSettings: Codable {
         case appMode, species, petVisible, petSize, petOpacity, clickThrough
         case petWanderEnabled, petSpeechEnabled, quietMode, refreshIntervalSeconds
         case notificationsEnabled, launchAtLogin, petPositionX, petPositionY
-        case menuBarDisplayMode, alertsSnoozedUntil, core
+        case menuBarDisplayMode, alertsSnoozedUntil
+        case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
+        case core
     }
 
     init(from decoder: Decoder) throws {
@@ -83,6 +91,11 @@ struct AppSettings: Codable {
         petPositionY = (try? c.decodeIfPresent(Double.self, forKey: .petPositionY)) ?? nil
         menuBarDisplayMode = (try? c.decodeIfPresent(MenuBarDisplayMode.self, forKey: .menuBarDisplayMode)) ?? .full ?? .full
         alertsSnoozedUntil = (try? c.decodeIfPresent(Date.self, forKey: .alertsSnoozedUntil)) ?? nil
+        dailyExportEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .dailyExportEnabled)) ?? false ?? false
+        dailyExportHour = (try? c.decodeIfPresent(Int.self, forKey: .dailyExportHour)) ?? 9 ?? 9
+        dailyExportMinute = (try? c.decodeIfPresent(Int.self, forKey: .dailyExportMinute)) ?? 0 ?? 0
+        dailyExportRangeDays = (try? c.decodeIfPresent(Int.self, forKey: .dailyExportRangeDays)) ?? 30 ?? 30
+        dailyExportFolderPath = (try? c.decodeIfPresent(String.self, forKey: .dailyExportFolderPath)) ?? nil
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
     }
 }

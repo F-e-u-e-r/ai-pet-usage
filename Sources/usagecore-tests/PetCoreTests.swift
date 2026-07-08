@@ -290,4 +290,32 @@ final class CoordinatorIntegrationTests: XCTestCase {
         }
         expectation.wait()
     }
+
+    func testWatchPlanWatchesExistingDirsAndStatuslineTriggers() throws {
+        let codexRoot = makeTempDir()   // 存在
+        let missing = makeTempDir().appendingPathComponent("nope-\(UUID().uuidString)")
+        try? FileManager.default.removeItem(at: missing)   // 確保不存在
+        let statusDir = makeTempDir()   // statusline 檔的存在父目錄
+        let statusFile = statusDir.appendingPathComponent("claude-statusline.json")
+        let coordinator = UsageCoordinator(
+            dataDir: makeTempDir(), settings: CoreSettings(),
+            adapters: [CodexAdapter(roots: [codexRoot]),
+                       ClaudeCodeAdapter(roots: [missing], statuslineFiles: [statusFile])]
+        )
+        let expectation = DispatchSemaphore(value: 0)
+        Task {
+            let plan = await coordinator.watchPlan()
+            // 監看目錄:存在的 codex 目錄 + statusline 的存在父目錄;不含不存在的 claude 目錄
+            XCTAssertTrue(plan.dirs.contains(codexRoot.path), "existing provider dir should be watched")
+            XCTAssertTrue(plan.dirs.contains(statusDir.path), "statusline parent dir should be watched")
+            XCTAssertFalse(plan.dirs.contains(missing.path), "missing dir must be excluded")
+            // 觸發白名單:provider 目錄 + statusline 檔精確路徑
+            XCTAssertTrue(plan.triggers.contains(codexRoot.path))
+            XCTAssertTrue(plan.triggers.contains(statusFile.path), "statusline file should be a trigger")
+            // claude 已啟用但其記錄目錄不存在 → 尚未全部鎖定 → 應維持快速輪詢
+            XCTAssertFalse(plan.allEnabledRootsWatched, "an enabled provider with a missing root means not all roots are watched")
+            expectation.signal()
+        }
+        expectation.wait()
+    }
 }

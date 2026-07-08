@@ -55,6 +55,13 @@ final class AppModel {
     /// 設定推送到 coordinator 的序列化尾巴:每次推送先 await 前一個,保證按呼叫順序落地
     /// (fire-and-forget Task 不保證順序,舊 core 可能覆蓋新 core)。
     private var settingsPushTask: Task<Void, Never>?
+    /// FSEvents 檔案監看:provider 記錄變更即 refresh(取代 45s 輪詢);nil = 未啟用/建立失敗。
+    private var fileWatcher: FileWatcher?
+    /// refresh 進行中又有新變更 → 記錄待處理,跑完再補一次(coalesce 檔案事件突發)。
+    private var refreshPending = false
+    /// 是否所有已啟用的 provider 都已監看到記錄目錄。false 時維持快速輪詢以儘快發現新目錄,
+    /// 全部鎖定後才切到 300s 慢速 fallback。
+    private var allProviderRootsWatched = false
 
     init() {
         dataDir = AppPaths.dataDirectory()
@@ -85,13 +92,45 @@ final class AppModel {
         if settings.notificationsEnabled { Notifier.requestAuthorization() }
         applyModeSideEffects()
         observeAppearanceChanges()
+        // 排程匯出:啟動時重套(修正 app 被移動後 plist 內失效的絕對路徑);僅 bundle 版有效。
+        if ScheduledReportManager.available { applyScheduledExport() }
+        // 初次刷新 → 啟動 FSEvents 檔案監看 → 慢速 fallback 迴圈(補漏事件 + 撿後來出現的目錄)。
         refreshLoop = Task { [weak self] in
+            await self?.refreshNow()
+            await self?.startFileWatching()
             while !Task.isCancelled {
+                // 慢速 fallback 只在「FSEvents 已鎖定至少一個 provider 記錄目錄」時採用;
+                // 只監看 statusline 父目錄(尚無 provider 目錄)時維持快速輪詢以儘快發現新目錄。
+                let watching = (self?.fileWatcher?.isActive ?? false) && (self?.allProviderRootsWatched ?? false)
+                let poll = max(15, self?.settings.refreshIntervalSeconds ?? 45)
+                let delay = watching ? 300.0 : poll
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                if Task.isCancelled { break }
+                await self?.startFileWatching()   // rebuild roots:撿啟動後才建立的目錄
                 await self?.refreshNow()
-                let interval = self?.settings.refreshIntervalSeconds ?? 45
-                try? await Task.sleep(nanoseconds: UInt64(max(15, interval) * 1_000_000_000))
             }
         }
+    }
+
+    /// (重)啟動 FSEvents 監看目前存在的 provider 記錄目錄。變更 → 跳 MainActor 觸發 refresh。
+    private func startFileWatching() async {
+        let plan = await coordinator.watchPlan()
+        allProviderRootsWatched = plan.allEnabledRootsWatched
+        if fileWatcher == nil {
+            fileWatcher = FileWatcher(debounce: 1.0) { [weak self] in
+                Task { @MainActor in await self?.refreshNow() }
+            }
+        }
+        fileWatcher?.start(dirs: plan.dirs, triggers: plan.triggers)
+    }
+
+    /// 停止背景活動(app 終止時呼叫)。
+    func stop() {
+        refreshLoop?.cancel()
+        refreshLoop = nil
+        fileWatcher?.stop()
+        fileWatcher = nil
+        settingsPushTask?.cancel()
     }
 
     /// 深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
@@ -105,31 +144,36 @@ final class AppModel {
     }
 
     func refreshNow() async {
-        guard !refreshing else { return }
+        // 進行中又被要求 → 記錄待處理,由目前這輪跑完後補一次(coalesce 檔案事件突發)。
+        guard !refreshing else { refreshPending = true; return }
         refreshing = true
         defer { refreshing = false }
 
-        let outcome = await coordinator.refresh()
-        dashboard = outcome.dashboard
-        activeMinutesToday = await coordinator.activeMinutesToday()
+        repeat {
+            refreshPending = false
 
-        handleTransitions(outcome.transitions)
+            let outcome = await coordinator.refresh()
+            dashboard = outcome.dashboard
+            activeMinutesToday = await coordinator.activeMinutesToday()
 
-        if settings.appMode == .full {
-            let engine = feedingEngine
-            engine.tick(activeMinutesToday: activeMinutesToday, tokensToday: dashboard.todayTotals.total)
-            if dashboard.limitStates.contains(where: { $0.warning == .warning || $0.warning == .exhausted }) {
-                engine.noteWarningSeen()
+            handleTransitions(outcome.transitions)
+
+            if settings.appMode == .full {
+                let engine = feedingEngine
+                engine.tick(activeMinutesToday: activeMinutesToday, tokensToday: dashboard.todayTotals.total)
+                if dashboard.limitStates.contains(where: { $0.warning == .warning || $0.warning == .exhausted }) {
+                    engine.noteWarningSeen()
+                }
+                petState = engine.state
+                treatsAvailable = engine.treatsAvailable(activeMinutesToday: activeMinutesToday)
+                mood = MoodEngine.evaluate(dashboard: dashboard, pet: petState,
+                                           warnThreshold: settings.core.warnThresholdPercent)
             }
-            petState = engine.state
-            treatsAvailable = engine.treatsAvailable(activeMinutesToday: activeMinutesToday)
-            mood = MoodEngine.evaluate(dashboard: dashboard, pet: petState,
-                                       warnThreshold: settings.core.warnThresholdPercent)
-        }
 
-        // 任何範圍(含 custom)都要跟著刷新,否則專案表會停留在舊資料。
-        await reloadProjectPage()
-        await reloadTrends()
+            // 任何範圍(含 custom)都要跟著刷新,否則專案表會停留在舊資料。
+            await reloadProjectPage()
+            await reloadTrends()
+        } while refreshPending
     }
 
     func fullReindex() async {
@@ -197,6 +241,7 @@ final class AppModel {
 
     func updateSettings(_ mutate: (inout AppSettings) -> Void) {
         let oldMode = settings.appMode
+        let oldProviders = settings.core.enabledProviders
         settingsStore.update(mutate)
         settings = settingsStore.settings
         // 串接成序列:第 N 次推送先 await 第 N-1 次,coordinator 收斂到最後寫入的值。
@@ -211,11 +256,25 @@ final class AppModel {
         } else {
             petPanel?.apply(settings: settings)
         }
+        // 啟用的 provider 變更 → 等設定推送到 coordinator 後立即重建 FSEvents 監看,
+        // 不必等 300s fallback 才開始監看新啟用 provider 的目錄(watchPlan 依 coordinator 設定)。
+        if oldProviders != settings.core.enabledProviders {
+            let push = settingsPushTask
+            Task { [weak self] in
+                _ = await push?.value
+                await self?.startFileWatching()
+            }
+        }
     }
 
     func setLaunchAtLogin(_ on: Bool) {
         updateSettings { $0.launchAtLogin = on }
         LaunchAtLogin.setEnabled(on)
+    }
+
+    /// 套用目前的每日排程匯出設定到 launchd(啟用/停用/改時間或資料夾後呼叫)。
+    func applyScheduledExport() {
+        ScheduledReportManager.apply(settings: settings)
     }
 
     /// 模式切換的核心:monitor-only 完全銷毀寵物視窗與動畫(省 RAM),

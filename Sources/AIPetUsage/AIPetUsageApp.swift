@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AppDelegate.sharedModel?.start()
         }
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AppDelegate.sharedModel?.stop() }
+    }
 }
 
 // MARK: - 選單列 label

@@ -18,6 +18,11 @@ runSuite("TrendsDataTests", [
     ("testUsageStreakCurrentAndLongest", trends.testUsageStreakCurrentAndLongest),
 ])
 
+let scheduled = ScheduledReportTests()
+runSuite("ScheduledReportTests", [
+    ("testPlistXMLContentAndEscaping", scheduled.testPlistXMLContentAndEscaping),
+])
+
 let claude = ClaudeCodeAdapterTests()
 runSuite("ClaudeCodeAdapterTests", [
     ("testParsesFixture", claude.testParsesFixture),
@@ -93,6 +98,7 @@ let integration = CoordinatorIntegrationTests()
 runSuite("CoordinatorIntegrationTests", [
     ("testEndToEndRefreshAndExport", integration.testEndToEndRefreshAndExport),
     ("testFullReindexPreservesUnavailableProviderHistory", integration.testFullReindexPreservesUnavailableProviderHistory),
+    ("testWatchPlanWatchesExistingDirsAndStatuslineTriggers", integration.testWatchPlanWatchesExistingDirsAndStatuslineTriggers),
 ])
 
 let fileLock = FileLockTests()

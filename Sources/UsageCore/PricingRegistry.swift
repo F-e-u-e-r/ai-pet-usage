@@ -66,8 +66,23 @@ public struct PricingRegistry: Sendable {
 
     /// 讀取隨 app 打包的價目表(repo 的 Sources/UsageCore/Resources/*.json;
     /// generated 檔以 Scripts/update-price-list.py 重新產生)。
+    /// 穩健定位 SwiftPM 資源包,不呼叫會在資源遺失時 fatalError 的 Bundle.module。
+    /// 依序找 Bundle.main 的 resourceURL(合法 .app 結構的 Contents/Resources,app 主程式與
+    /// 獨立執行的 aipet 皆解析於此;開發 / 測試時為 .build/release)與 bundleURL;
+    /// 都找不到回 nil,交由呼叫端退回編譯內建價(不 crash)。
+    static func resourceBundle() -> Bundle? {
+        let name = "AIPetUsage_UsageCore.bundle"
+        var candidates: [URL] = []
+        if let res = Bundle.main.resourceURL { candidates.append(res.appendingPathComponent(name)) }
+        candidates.append(Bundle.main.bundleURL.appendingPathComponent(name))
+        for c in candidates where FileManager.default.fileExists(atPath: c.path) {
+            if let b = Bundle(url: c) { return b }
+        }
+        return nil
+    }
+
     public static func bundledPrices(named name: String) -> [ModelPrice]? {
-        guard let url = Bundle.module.url(forResource: name, withExtension: "json"),
+        guard let url = resourceBundle()?.url(forResource: name, withExtension: "json"),
               let prices = AtomicJSON.read([ModelPrice].self, from: url),
               !prices.isEmpty else { return nil }
         return prices

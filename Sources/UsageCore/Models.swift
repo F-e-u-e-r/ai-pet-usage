@@ -390,9 +390,18 @@ public struct AdapterRefreshResult: Sendable {
 public protocol ProviderAdapter: Sendable {
     var providerId: String { get }
     var displayName: String { get }
+    /// 本機資料來源目錄(已即時存在性過濾);供 FSEvents 檔案監看列出要看的路徑。
+    var roots: [URL] { get }
+    /// 額外要監看的獨立檔(如 Claude statusline 落地檔):其父目錄會被監看,
+    /// 檔路徑本身作為「觸發白名單」——同目錄下我方寫入的檔(帳本/設定)不會誤觸 refresh。
+    var watchFiles: [URL] { get }
     func detectAvailability() -> ProviderAvailability
     /// 從 `state` 記錄的位移續讀;回傳新事件與更新後的掃描進度。實作必須只讀。
     func refreshUsage(state: ScanState) throws -> (AdapterRefreshResult, ScanState)
     func explainDataSources() -> String
     func explainRequiredPermissions() -> String
+}
+
+public extension ProviderAdapter {
+    var watchFiles: [URL] { [] }
 }

@@ -11,6 +11,8 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     public var roots: [URL] {
         candidateRoots.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
+    /// 官方限額來源:statusline 落地檔也要監看(父目錄監看 + 檔路徑作為觸發白名單)。
+    public var watchFiles: [URL] { statuslineFiles }
     /// Claude Code statusline payload 的落地檔候選位置。Claude Code 每次刷新
     /// 狀態列都會把官方 JSON(含 `rate_limits` 的 5h/週 used_percentage 與
     /// resets_at)餵給 statusline 指令;只要有任何 hook 把它存檔,就能在此讀到

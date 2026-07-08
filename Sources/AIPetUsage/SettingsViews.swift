@@ -346,6 +346,57 @@ struct DataPrivacySettings: View {
                 Text("Full reindex rebuilds the local ledger from provider logs. It is the only operation allowed to lower a usage percent inside an active window; any such correction is labelled in the UI and reports.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Scheduled export") {
+                Toggle("Daily auto-export (HTML report)", isOn: Binding(
+                    get: { model.settings.dailyExportEnabled },
+                    set: { v in
+                        model.updateSettings { $0.dailyExportEnabled = v }
+                        model.applyScheduledExport()
+                    }
+                ))
+                if model.settings.dailyExportEnabled {
+                    DatePicker("Time", selection: Binding(
+                        get: {
+                            var c = DateComponents()
+                            c.hour = model.settings.dailyExportHour
+                            c.minute = model.settings.dailyExportMinute
+                            return Calendar.current.date(from: c) ?? Date()
+                        },
+                        set: { d in
+                            let comps = Calendar.current.dateComponents([.hour, .minute], from: d)
+                            model.updateSettings {
+                                $0.dailyExportHour = comps.hour ?? 9
+                                $0.dailyExportMinute = comps.minute ?? 0
+                            }
+                            model.applyScheduledExport()
+                        }
+                    ), displayedComponents: .hourAndMinute)
+
+                    Picker("Range", selection: Binding(
+                        get: { model.settings.dailyExportRangeDays },
+                        set: { v in
+                            model.updateSettings { $0.dailyExportRangeDays = v }
+                            model.applyScheduledExport()
+                        }
+                    )) {
+                        Text("7 days").tag(7)
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                    }
+
+                    HStack {
+                        Text("Folder")
+                        Spacer()
+                        Text(model.settings.dailyExportFolderPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "Not set")
+                            .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Button("Choose…") { chooseExportFolder() }
+                    }
+                }
+                if !ScheduledReportManager.available {
+                    Text("Scheduled export needs the bundled app (Scripts/build-app.sh); it runs the bundled aipet CLI via a per-user LaunchAgent.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Privacy") {
                 Text("""
                 • All parsing and storage happen on this Mac. Nothing is uploaded; there is no telemetry and no account login.
@@ -357,5 +408,17 @@ struct DataPrivacySettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func chooseExportFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        if panel.runModal() == .OK, let url = panel.url {
+            model.updateSettings { $0.dailyExportFolderPath = url.path }
+            model.applyScheduledExport()
+        }
     }
 }
