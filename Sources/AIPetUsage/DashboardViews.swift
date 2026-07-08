@@ -43,7 +43,7 @@ func timeAgo(_ date: Date?, now: Date = Date()) -> String {
 // MARK: - 根視圖(工具列統一 Export,依分頁切換行為)
 
 enum DashboardTab: Hashable {
-    case today, limits, projects
+    case today, limits, projects, trends
 }
 
 struct DashboardRoot: View {
@@ -55,6 +55,7 @@ struct DashboardRoot: View {
             TodayView().tabItem { Label("Today", systemImage: "sun.max") }.tag(DashboardTab.today)
             LimitsView().tabItem { Label("Limits", systemImage: "gauge.with.needle") }.tag(DashboardTab.limits)
             ProjectsView().tabItem { Label("Projects", systemImage: "folder") }.tag(DashboardTab.projects)
+            TrendsView().tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }.tag(DashboardTab.trends)
         }
         .frame(minWidth: 860, minHeight: 600)
         .toolbar {
@@ -76,6 +77,7 @@ struct DashboardRoot: View {
                     switch tab {
                     case .today, .limits: model.exportToday()
                     case .projects: model.exportCurrentRange()
+                    case .trends: model.exportTrends()
                     }
                 } label: {
                     Label(exportLabel, systemImage: "square.and.arrow.up")
@@ -90,6 +92,7 @@ struct DashboardRoot: View {
         case .today: return "Export Today"
         case .limits: return "Export Snapshot"
         case .projects: return "Export Range"
+        case .trends: return "Export Trends"
         }
     }
 }

@@ -178,7 +178,9 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
 
     public init(usedPercent: Double? = nil, usedTokens: Int? = nil, budgetTokens: Int? = nil,
                 resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, corrected: Bool = false) {
-        self.usedPercent = usedPercent
+        // 使用率天花板 100%:官方讀值或預算估算(tokens/budget×100)可能回報 >100,
+        // 對外一律夾到 [0, 100],避免 UI 出現 101% / 103%。
+        self.usedPercent = usedPercent.map { min(100, max(0, $0)) }
         self.usedTokens = usedTokens
         self.budgetTokens = budgetTokens
         self.resetAt = resetAt
@@ -285,6 +287,33 @@ public struct HourBucket: Codable, Sendable, Identifiable {
         self.byProvider = byProvider
         self.breakdown = breakdown
         self.topProject = topProject
+    }
+}
+
+/// 單日用量聚合(Trends 曲線與日曆熱圖共用)。`day` 為行事曆本地日的起點(午夜)。
+public struct DayBucket: Codable, Sendable, Identifiable {
+    public var day: Date
+    public var tokens: Int
+    public var byProvider: [String: Int]
+
+    public var id: Date { day }
+
+    public init(day: Date, tokens: Int, byProvider: [String: Int] = [:]) {
+        self.day = day
+        self.tokens = tokens
+        self.byProvider = byProvider
+    }
+}
+
+/// 使用連續天數:current = 以今天(或今天尚無用量時以昨天)結尾的連續活躍日;
+/// longest = 整段紀錄中最長的連續活躍日。
+public struct UsageStreak: Codable, Sendable, Hashable {
+    public var current: Int
+    public var longest: Int
+
+    public init(current: Int, longest: Int) {
+        self.current = current
+        self.longest = longest
     }
 }
 

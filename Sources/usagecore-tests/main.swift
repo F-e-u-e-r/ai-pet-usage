@@ -12,6 +12,12 @@ runSuite("JSONLScannerTests", [
     ("testChunkBoundaryScanPreservesOffsetsAndLines", scanner.testChunkBoundaryScanPreservesOffsetsAndLines),
 ])
 
+let trends = TrendsDataTests()
+runSuite("TrendsDataTests", [
+    ("testDailyBucketsAggregateByLocalDay", trends.testDailyBucketsAggregateByLocalDay),
+    ("testUsageStreakCurrentAndLongest", trends.testUsageStreakCurrentAndLongest),
+])
+
 let claude = ClaudeCodeAdapterTests()
 runSuite("ClaudeCodeAdapterTests", [
     ("testParsesFixture", claude.testParsesFixture),
@@ -35,6 +41,7 @@ runSuite("LedgerTests", [
 let limits = LimitEngineTests()
 runSuite("LimitEngineTests", [
     ("testMonotonicGuardWithinWindow", limits.testMonotonicGuardWithinWindow),
+    ("testUsedPercentCappedAtHundred", limits.testUsedPercentCappedAtHundred),
     ("testSameWindowZeroWindowMinutesDoesNotClobberStoredLength", limits.testSameWindowZeroWindowMinutesDoesNotClobberStoredLength),
     ("testWindowRolloverAcceptsLowerAndEmitsReset", limits.testWindowRolloverAcceptsLowerAndEmitsReset),
     ("testNilResetRolloverAcceptsLowerAndEmitsReset", limits.testNilResetRolloverAcceptsLowerAndEmitsReset),

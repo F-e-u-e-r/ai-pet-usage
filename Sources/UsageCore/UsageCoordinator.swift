@@ -88,6 +88,28 @@ public struct ProjectPageData: Sendable {
     public var cost: CostResult
 }
 
+/// Trends 分頁 / 熱圖所需的聚合(純本機、跨 actor 傳遞的不可變值)。
+public struct TrendsData: Sendable {
+    public var rangeDays: Int
+    public var startDay: Date          // 範圍第一天(本地日午夜)
+    public var endDay: Date            // 今天(本地日午夜)
+    public var daily: [DayBucket]      // 範圍內有用量的日,依日升序
+    public var streak: UsageStreak
+    public var thisWeekTokens: Int     // 最近 7 天
+    public var lastWeekTokens: Int     // 前一個 7 天
+
+    public init(rangeDays: Int, startDay: Date, endDay: Date, daily: [DayBucket],
+                streak: UsageStreak, thisWeekTokens: Int, lastWeekTokens: Int) {
+        self.rangeDays = rangeDays
+        self.startDay = startDay
+        self.endDay = endDay
+        self.daily = daily
+        self.streak = streak
+        self.thisWeekTokens = thisWeekTokens
+        self.lastWeekTokens = lastWeekTokens
+    }
+}
+
 // MARK: - 協調器
 
 /// 串起 adapters → 帳本 → 限額引擎,對 UI/CLI 提供單一入口。
@@ -332,6 +354,21 @@ public actor UsageCoordinator {
         )
     }
 
+    /// Trends 分頁資料:近 `days` 天的日聚合 + 使用連續天數 + 週對比。純本機、零新依賴。
+    public func trendsData(days: Int, now: Date = Date()) -> TrendsData {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: now)
+        let start = cal.date(byAdding: .day, value: -(max(1, days) - 1), to: today) ?? today
+        let daily = ledger.dailyBuckets(in: DateInterval(start: start, end: now))
+        let streak = ledger.usageStreak(now: now)
+        let thisWeekStart = cal.date(byAdding: .day, value: -6, to: today) ?? today
+        let lastWeekStart = cal.date(byAdding: .day, value: -13, to: today) ?? today
+        let thisWeek = ledger.totals(in: DateInterval(start: thisWeekStart, end: now)).total
+        let lastWeek = ledger.totals(in: DateInterval(start: lastWeekStart, end: thisWeekStart)).total
+        return TrendsData(rangeDays: days, startDay: start, endDay: today, daily: daily,
+                          streak: streak, thisWeekTokens: thisWeek, lastWeekTokens: lastWeek)
+    }
+
     // MARK: 報告
 
     public func reportData(kind: ReportKind, now: Date = Date(), petSummary: String? = nil) -> ReportData {
@@ -397,7 +434,9 @@ public actor UsageCoordinator {
             pricingRows: pricingRows,
             unknownModels: unknown,
             dataQuality: dash.dataQuality,
-            petSummary: petSummary
+            petSummary: petSummary,
+            streak: ledger.usageStreak(now: now),
+            dailyHeat: ledger.dailyBuckets(in: period)
         )
     }
 

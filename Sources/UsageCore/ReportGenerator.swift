@@ -16,12 +16,16 @@ public struct ReportData: Sendable {
     public var unknownModels: [(String, Int)]
     public var dataQuality: [String]
     public var petSummary: String?
+    public var streak: UsageStreak
+    public var dailyHeat: [DayBucket]
 
     public init(title: String, period: DateInterval, generatedAt: Date, timezoneName: String,
                 totals: TokenBreakdown, cost: CostResult, byProvider: [ProviderDaySummary],
                 limitStates: [ProviderLimitState], projects: [ProjectSummary], models: [ModelUsageSummary],
                 buckets: [(String, Int)], pricingRows: [ModelPrice], unknownModels: [(String, Int)],
-                dataQuality: [String], petSummary: String?) {
+                dataQuality: [String], petSummary: String?,
+                streak: UsageStreak = UsageStreak(current: 0, longest: 0),
+                dailyHeat: [DayBucket] = []) {
         self.title = title
         self.period = period
         self.generatedAt = generatedAt
@@ -37,6 +41,8 @@ public struct ReportData: Sendable {
         self.unknownModels = unknownModels
         self.dataQuality = dataQuality
         self.petSummary = petSummary
+        self.streak = streak
+        self.dailyHeat = dailyHeat
     }
 }
 
@@ -126,6 +132,8 @@ public enum ReportGenerator {
             html += "</tbody></table>"
         }
         html += "</section>"
+
+        html += activitySection(data)
 
         // 模型與計價假設
         html += "<section><h2>Model pricing assumptions</h2><table><thead><tr><th>Model</th><th>Tokens</th><th>Est. cost</th><th>Input $/M</th><th>Output $/M</th><th>Cache read $/M</th><th>Source</th><th>Effective</th></tr></thead><tbody>"
@@ -262,6 +270,15 @@ public enum ReportGenerator {
     .chart .barcell { width: auto; }
     .chart .bar { background: var(--accent); border-radius: 4px; height: 12px; min-width: 2px; }
     .chart .val { width: 70px; text-align: right; font-size: 12px; color: var(--muted); }
+    .heatwrap { overflow-x: auto; padding: 4px 0; }
+    .heatmap { display: inline-grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px); gap: 3px; }
+    .heatmap span { width: 11px; height: 11px; border-radius: 2px; }
+    .heatmap .pad { background: transparent; }
+    .heatmap .l0 { background: var(--line); }
+    .heatmap .l1 { background: var(--accent); opacity: .30; }
+    .heatmap .l2 { background: var(--accent); opacity: .50; }
+    .heatmap .l3 { background: var(--accent); opacity: .72; }
+    .heatmap .l4 { background: var(--accent); opacity: .95; }
     footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line);
              color: var(--muted); font-size: 12.5px; }
     @media print { body { background: #fff; } main { max-width: none; padding: 0; } }
@@ -269,5 +286,48 @@ public enum ReportGenerator {
 
     private static func tile(_ k: String, _ v: String) -> String {
         "<div><div class=\"k\">\(esc(k))</div><div class=\"v\">\(esc(v))</div></div>"
+    }
+
+    /// Activity section:使用連續天數 + 日曆熱圖(每格一天,依相對用量分 4 級上色)。
+    private static func activitySection(_ data: ReportData) -> String {
+        let cal = Calendar.current
+        let s = data.streak
+        var html = "<section><h2>Activity</h2>"
+        html += "<p class=\"meta\">Current streak: <strong>\(s.current) day\(s.current == 1 ? "" : "s")</strong> · Longest: <strong>\(s.longest) day\(s.longest == 1 ? "" : "s")</strong></p>"
+        guard data.period.duration > 48 * 3600, !data.dailyHeat.isEmpty else {
+            return html + "</section>"
+        }
+        let byDay = Dictionary(data.dailyHeat.map { ($0.day, $0.tokens) }, uniquingKeysWith: +)
+        let maxV = data.dailyHeat.map(\.tokens).max() ?? 0
+        // period 為半開區間 [start, end);end 若正好落在午夜(排他邊界)需退一天,
+        // 否則熱圖會多出一個範圍外的空格。取 end 前一瞬的當日即最後一個可能有事件的日。
+        let lastDay = cal.startOfDay(for: data.period.end.addingTimeInterval(-1))
+        // 熱圖最多顯示約一年,避免超長期間(如 all-time)產生巨大格點。
+        let yearAgo = cal.date(byAdding: .day, value: -370, to: lastDay) ?? lastDay
+        let firstDay = max(cal.startOfDay(for: data.period.start), yearAgo)
+        let leadingPad = (cal.component(.weekday, from: firstDay) - cal.firstWeekday + 7) % 7
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
+        html += "<div class=\"heatwrap\"><div class=\"heatmap\">"
+        for _ in 0..<leadingPad { html += "<span class=\"pad\"></span>" }
+        var d = firstDay
+        while d <= lastDay {
+            let tokens = byDay[d] ?? 0
+            let title = "\(df.string(from: d)) · \(fmtTokens(tokens)) tokens"
+            html += "<span class=\"l\(heatLevel(tokens, maxV: maxV))\" title=\"\(esc(title))\"></span>"
+            guard let next = cal.date(byAdding: .day, value: 1, to: d) else { break }
+            d = next
+        }
+        html += "</div></div>"
+        html += "<p class=\"note\">Each cell is one day; darker = more tokens (relative to the busiest day in range).</p></section>"
+        return html
+    }
+
+    private static func heatLevel(_ tokens: Int, maxV: Int) -> Int {
+        guard tokens > 0, maxV > 0 else { return 0 }
+        let ratio = Double(tokens) / Double(maxV)
+        if ratio > 0.66 { return 4 }
+        if ratio > 0.33 { return 3 }
+        if ratio > 0.10 { return 2 }
+        return 1
     }
 }

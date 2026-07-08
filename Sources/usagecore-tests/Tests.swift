@@ -105,6 +105,59 @@ final class JSONLScannerTests: XCTestCase {
     }
 }
 
+// MARK: - Trends 資料層(dailyBuckets / usageStreak)
+
+final class TrendsDataTests: XCTestCase {
+    private var utc: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }
+    private func ev(_ id: String, _ provider: String, _ ts: String, _ tokens: Int) -> UsageEvent {
+        UsageEvent(id: id, providerId: provider, timestamp: date(ts),
+                   tokens: TokenBreakdown(input: tokens), sourceKind: "test")
+    }
+
+    func testDailyBucketsAggregateByLocalDay() {
+        let ledger = UsageLedger(fileURL: nil)
+        _ = ledger.append([
+            ev("a", "codex", "2026-01-15T10:00:00Z", 100),
+            ev("b", "claude-code", "2026-01-15T20:00:00Z", 50),
+            ev("c", "codex", "2026-01-16T09:00:00Z", 30),
+        ])
+        let interval = DateInterval(start: date("2026-01-15T00:00:00Z"), end: date("2026-01-17T00:00:00Z"))
+        let buckets = ledger.dailyBuckets(in: interval, calendar: utc)
+        XCTAssertEqual(buckets.count, 2)
+        XCTAssertEqual(buckets[0].day, date("2026-01-15T00:00:00Z"))
+        XCTAssertEqual(buckets[0].tokens, 150)
+        XCTAssertEqual(buckets[0].byProvider["codex"], 100)
+        XCTAssertEqual(buckets[0].byProvider["claude-code"], 50)
+        XCTAssertEqual(buckets[1].day, date("2026-01-16T00:00:00Z"))
+        XCTAssertEqual(buckets[1].tokens, 30)
+    }
+
+    func testUsageStreakCurrentAndLongest() {
+        let ledger = UsageLedger(fileURL: nil)
+        _ = ledger.append([
+            ev("x0", "codex", "2026-01-10T12:00:00Z", 10),   // 孤立日
+            ev("x1", "codex", "2026-01-13T12:00:00Z", 10),
+            ev("x2", "codex", "2026-01-14T12:00:00Z", 10),
+            ev("x3", "codex", "2026-01-15T12:00:00Z", 10),
+        ])
+        // 今天 = 15(有用量):current 往回數 15,14,13 = 3;longest = 3
+        let s1 = ledger.usageStreak(now: date("2026-01-15T20:00:00Z"), calendar: utc)
+        XCTAssertEqual(s1.current, 3)
+        XCTAssertEqual(s1.longest, 3)
+        // 今天 = 16(空)但昨天 15 有 → current 仍為 3
+        let s2 = ledger.usageStreak(now: date("2026-01-16T08:00:00Z"), calendar: utc)
+        XCTAssertEqual(s2.current, 3)
+        // 今天 = 17、昨天 16 都空 → current 0,longest 仍 3
+        let s3 = ledger.usageStreak(now: date("2026-01-17T08:00:00Z"), calendar: utc)
+        XCTAssertEqual(s3.current, 0)
+        XCTAssertEqual(s3.longest, 3)
+    }
+}
+
 // MARK: - Claude Code adapter
 
 final class ClaudeCodeAdapterTests: XCTestCase {
@@ -362,6 +415,20 @@ final class LimitEngineTests: XCTestCase {
             primary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 300, resetsAt: nil),
             secondary: nil
         )
+    }
+
+    func testUsedPercentCappedAtHundred() {
+        let engine = LimitEngine(stateURL: nil)
+        // 官方讀值或估算可能 >100;對外一律夾到 100(避免 UI 出現 103%)。
+        _ = engine.ingest(readings: [
+            RateLimitReading(providerId: "codex", observedAt: date("2026-01-15T10:00:00Z"),
+                             primary: RateLimitWindowReading(usedPercent: 103, windowMinutes: 300,
+                                                             resetsAt: date("2026-01-15T14:00:00Z")),
+                             secondary: nil)
+        ], settings: settings)
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T10:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 100)
     }
 
     func testMonotonicGuardWithinWindow() {

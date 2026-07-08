@@ -39,6 +39,10 @@ final class AppModel {
     var customEnd: Date = Date()
     private(set) var projectPage: ProjectPageData?
 
+    // Trends 頁狀態(7 / 30 / 90 天)
+    var trendsRangeDays: Int = 30
+    private(set) var trends: TrendsData?
+
     // 內部
     let coordinator: UsageCoordinator
     private let settingsStore: SettingsStore
@@ -125,6 +129,7 @@ final class AppModel {
 
         // 任何範圍(含 custom)都要跟著刷新,否則專案表會停留在舊資料。
         await reloadProjectPage()
+        await reloadTrends()
     }
 
     func fullReindex() async {
@@ -133,6 +138,7 @@ final class AppModel {
         let outcome = await coordinator.refresh(fullReindex: true)
         dashboard = outcome.dashboard
         await reloadProjectPage()
+        await reloadTrends()
     }
 
     private func handleTransitions(_ transitions: [LimitTransition]) {
@@ -146,7 +152,7 @@ final class AppModel {
                 notify(title: "Quota reset 🎉", body: "\(providerName(providerId)) \(window) window has reset.")
             case let .crossedThreshold(providerId, window, percent, threshold):
                 notify(title: "Usage warning",
-                       body: "\(providerName(providerId)) \(window) window at \(Int(percent))% (threshold \(Int(threshold))%).")
+                       body: "\(providerName(providerId)) \(window) window at \(Int(min(100, percent)))% (threshold \(Int(threshold))%).")
             case let .exhausted(providerId, window):
                 notify(title: "Quota exhausted",
                        body: "\(providerName(providerId)) \(window) window is fully used.")
@@ -300,6 +306,10 @@ final class AppModel {
         projectPage = await coordinator.projectPage(range: currentRange())
     }
 
+    func reloadTrends() async {
+        trends = await coordinator.trendsData(days: trendsRangeDays)
+    }
+
     // MARK: - 匯出
 
     func exportReport(kind: ReportKind, suggestedName: String) {
@@ -341,6 +351,16 @@ final class AppModel {
         let range = currentRange()
         let name = "AIPetUsage-Report-\(df.string(from: range.start))-to-\(df.string(from: range.end)).html"
         exportReport(kind: .range(range, title: "Usage Report — \(rangePreset.displayName)"), suggestedName: name)
+    }
+    func exportTrends() {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = cal.date(byAdding: .day, value: -(max(1, trendsRangeDays) - 1), to: today) ?? today
+        let range = DateInterval(start: start, end: Date())
+        let name = "AIPetUsage-Trends-\(trendsRangeDays)d-\(df.string(from: Date())).html"
+        exportReport(kind: .range(range, title: "Usage Trends — last \(trendsRangeDays) days"), suggestedName: name)
     }
 
     // MARK: - 選單列

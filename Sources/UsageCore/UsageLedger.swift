@@ -198,6 +198,59 @@ public final class UsageLedger {
         }
     }
 
+    /// 依行事曆本地日聚合事件(hourlyBuckets 的日粒度版本);只回傳有用量的日、依日升序。
+    /// 熱圖需要含零用量的日,由呼叫端在日期範圍上逐日查表補零。
+    public func dailyBuckets(in interval: DateInterval, calendar: Calendar = .current) -> [DayBucket] {
+        let evs = events(in: interval)
+        var buckets: [Date: (tokens: Int, byProvider: [String: Int])] = [:]
+        for e in evs {
+            let day = calendar.startOfDay(for: e.timestamp)
+            var acc = buckets[day] ?? (0, [:])
+            acc.tokens += e.tokens.total
+            acc.byProvider[e.providerId, default: 0] += e.tokens.total
+            buckets[day] = acc
+        }
+        return buckets.keys.sorted().map { day in
+            let acc = buckets[day]!
+            return DayBucket(day: day, tokens: acc.tokens, byProvider: acc.byProvider)
+        }
+    }
+
+    /// 使用連續天數(current + longest)。以「有事件的本地日」集合計算;
+    /// 相鄰判斷用日差(對 DST 安全),current 允許今天尚未使用時以昨天結尾。
+    public func usageStreak(now: Date = Date(), calendar: Calendar = .current) -> UsageStreak {
+        let days = Set(events.map { calendar.startOfDay(for: $0.timestamp) })
+        guard !days.isEmpty else { return UsageStreak(current: 0, longest: 0) }
+
+        let sorted = days.sorted()
+        var longest = 1, run = 1
+        if sorted.count > 1 {
+            for i in 1..<sorted.count {
+                if calendar.dateComponents([.day], from: sorted[i - 1], to: sorted[i]).day == 1 {
+                    run += 1
+                    longest = max(longest, run)
+                } else {
+                    run = 1
+                }
+            }
+        }
+
+        let today = calendar.startOfDay(for: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        var cursor: Date
+        if days.contains(today) { cursor = today }
+        else if days.contains(yesterday) { cursor = yesterday }
+        else { return UsageStreak(current: 0, longest: longest) }
+
+        var current = 0
+        while days.contains(cursor) {
+            current += 1
+            guard let prev = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = prev
+        }
+        return UsageStreak(current: current, longest: longest)
+    }
+
     public func projectSummaries(in interval: DateInterval, pricing: PricingRegistry) -> [ProjectSummary] {
         let evs = events(in: interval)
         let periodTotal = max(1, evs.reduce(0) { $0 + $1.tokens.total })
