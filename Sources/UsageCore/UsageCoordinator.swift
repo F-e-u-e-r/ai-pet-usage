@@ -405,7 +405,7 @@ public actor UsageCoordinator {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let start = cal.date(byAdding: .day, value: -(max(1, days) - 1), to: today) ?? today
-        let daily = ledger.dailyBuckets(in: DateInterval(start: start, end: now))
+        let daily = ledger.dailyBuckets(in: DateInterval(start: start, end: now), pricing: pricing)
         let streak = ledger.usageStreak(now: now)
         let thisWeekStart = cal.date(byAdding: .day, value: -6, to: today) ?? today
         let lastWeekStart = cal.date(byAdding: .day, value: -13, to: today) ?? today

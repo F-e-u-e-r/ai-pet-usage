@@ -200,19 +200,33 @@ public final class UsageLedger {
 
     /// 依行事曆本地日聚合事件(hourlyBuckets 的日粒度版本);只回傳有用量的日、依日升序。
     /// 熱圖需要含零用量的日,由呼叫端在日期範圍上逐日查表補零。
-    public func dailyBuckets(in interval: DateInterval, calendar: Calendar = .current) -> [DayBucket] {
+    public func dailyBuckets(in interval: DateInterval, calendar: Calendar = .current,
+                             pricing: PricingRegistry? = nil) -> [DayBucket] {
         let evs = events(in: interval)
-        var buckets: [Date: (tokens: Int, byProvider: [String: Int])] = [:]
+        struct Acc {
+            var tokens = 0
+            var byProvider: [String: Int] = [:]
+            var byProject: [String: Int] = [:]
+            var byModel: [String: Int] = [:]
+            var events: [UsageEvent] = []
+        }
+        var buckets: [Date: Acc] = [:]
         for e in evs {
             let day = calendar.startOfDay(for: e.timestamp)
-            var acc = buckets[day] ?? (0, [:])
+            var acc = buckets[day] ?? Acc()
             acc.tokens += e.tokens.total
             acc.byProvider[e.providerId, default: 0] += e.tokens.total
+            acc.byProject[e.projectName ?? "(unknown)", default: 0] += e.tokens.total
+            acc.byModel[e.modelId ?? "unknown", default: 0] += e.tokens.total
+            if pricing != nil { acc.events.append(e) }   // 僅需計價時才留事件(省記憶體)
             buckets[day] = acc
         }
         return buckets.keys.sorted().map { day in
             let acc = buckets[day]!
-            return DayBucket(day: day, tokens: acc.tokens, byProvider: acc.byProvider)
+            return DayBucket(day: day, tokens: acc.tokens, byProvider: acc.byProvider,
+                             topProject: acc.byProject.max { $0.value < $1.value }?.key,
+                             topModel: acc.byModel.max { $0.value < $1.value }?.key,
+                             cost: pricing.map { $0.cost(of: acc.events) } ?? .zero)
         }
     }
 

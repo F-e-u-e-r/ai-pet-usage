@@ -156,6 +156,35 @@ final class TrendsDataTests: XCTestCase {
         XCTAssertEqual(s3.current, 0)
         XCTAssertEqual(s3.longest, 3)
     }
+
+    func testDailyBucketsTopProjectModelAndCost() {
+        let ledger = UsageLedger(fileURL: nil)
+        _ = ledger.append([
+            UsageEvent(id: "d1", providerId: "codex", projectName: "big-app", modelId: "gpt-5.5",
+                       timestamp: date("2026-01-15T10:00:00Z"), tokens: TokenBreakdown(input: 1000), sourceKind: "test"),
+            UsageEvent(id: "d2", providerId: "codex", projectName: "small", modelId: "gpt-5.5",
+                       timestamp: date("2026-01-15T11:00:00Z"), tokens: TokenBreakdown(input: 100), sourceKind: "test"),
+        ])
+        let interval = DateInterval(start: date("2026-01-15T00:00:00Z"), end: date("2026-01-16T00:00:00Z"))
+        let pricing = PricingRegistry(entries: [
+            ModelPrice(providerId: "codex", modelId: "gpt-5.5", displayName: "GPT-5.5",
+                       inputPerMillion: 5, outputPerMillion: 30, effectiveFrom: "2026-01-01", source: "test")
+        ])
+        let buckets = ledger.dailyBuckets(in: interval, calendar: utc, pricing: pricing)
+        XCTAssertEqual(buckets.count, 1)
+        XCTAssertEqual(buckets[0].topProject, "big-app")   // 1000 > 100 tokens
+        XCTAssertEqual(buckets[0].topModel, "gpt-5.5")
+        XCTAssertGreaterThan(buckets[0].cost.knownUSD, 0)  // 1100 input @ $5/M ≈ $0.0055
+        XCTAssertEqual(buckets[0].cost.unknownModelTokens, 0)   // 有定價 → 無未定價 tokens
+        // 空 pricing(model 未定價)→ knownUSD 0 但 unknownModelTokens 反映用量(不看起來像零花費)
+        let unpriced = ledger.dailyBuckets(in: interval, calendar: utc, pricing: PricingRegistry(entries: []))
+        XCTAssertEqual(unpriced[0].cost.knownUSD, 0)
+        XCTAssertGreaterThan(unpriced[0].cost.unknownModelTokens, 0)
+        // 不傳 pricing → cost .zero,但 top project/model 仍算
+        let noPrice = ledger.dailyBuckets(in: interval, calendar: utc)
+        XCTAssertEqual(noPrice[0].cost.knownUSD, 0)
+        XCTAssertEqual(noPrice[0].topProject, "big-app")
+    }
 }
 
 // MARK: - 排程匯出 plist

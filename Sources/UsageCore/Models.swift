@@ -295,13 +295,23 @@ public struct DayBucket: Codable, Sendable, Identifiable {
     public var day: Date
     public var tokens: Int
     public var byProvider: [String: Int]
+    /// 當日用量最多的 project / model(依 tokens);Trends hover 顯示用。
+    public var topProject: String?
+    public var topModel: String?
+    /// 當日估算成本(含 unknownModelTokens/isEstimated,避免未定價用量顯示成 $0);
+    /// 需傳入 pricing 才計算,否則 .zero。
+    public var cost: CostResult
 
     public var id: Date { day }
 
-    public init(day: Date, tokens: Int, byProvider: [String: Int] = [:]) {
+    public init(day: Date, tokens: Int, byProvider: [String: Int] = [:],
+                topProject: String? = nil, topModel: String? = nil, cost: CostResult = .zero) {
         self.day = day
         self.tokens = tokens
         self.byProvider = byProvider
+        self.topProject = topProject
+        self.topModel = topModel
+        self.cost = cost
     }
 }
 

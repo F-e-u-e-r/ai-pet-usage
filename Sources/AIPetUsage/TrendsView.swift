@@ -1,10 +1,13 @@
 import SwiftUI
 import UsageCore
 
-/// Trends 分頁:近 7 / 30 / 90 天的每日用量曲線、週對比、使用連續天數與日曆熱圖。
-/// 純本機、零新依賴;資料由 AppModel.trends(UsageCoordinator.trendsData)提供。
+/// Trends 分頁:近 7 / 30 / 90 天的每日用量曲線(tokens 或 est. cost)、週對比、
+/// 使用連續天數與日曆熱圖。每個 bar/熱圖格 hover 顯示當日 top project / top model /
+/// tokens / est. cost。純本機、零新依賴;資料由 AppModel.trends(coordinator.trendsData)提供。
 struct TrendsView: View {
     @Environment(AppModel.self) private var model
+    /// 曲線的度量:tokens 或估算成本(CodexBar 概念:用量 vs 花費一起看)。
+    @State private var metric: TrendMetric = .tokens
 
     var body: some View {
         @Bindable var model = model
@@ -25,10 +28,21 @@ struct TrendsView: View {
                         StatTile(title: "This week",
                                  value: tokenLabel(trends.thisWeekTokens),
                                  caption: weekDeltaCaption(trends))
+                        StatTile(title: "Est. cost (\(trends.rangeDays)d)",
+                                 value: costLabel(trends.daily.reduce(CostResult.zero) { $0 + $1.cost }),
+                                 caption: trends.daily.contains { $0.cost.unknownModelTokens > 0 }
+                                     ? "+ has unpriced models" : "known-priced models")
                     }
 
-                    section("Daily tokens (\(trends.rangeDays) days)") {
-                        DailyBarChart(daily: trends.daily, startDay: trends.startDay, endDay: trends.endDay)
+                    section("Daily usage (\(trends.rangeDays) days) · hover a bar for details") {
+                        Picker("Metric", selection: $metric) {
+                            Text("Tokens").tag(TrendMetric.tokens)
+                            Text("Est. cost").tag(TrendMetric.cost)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 220)
+                        DailyBarChart(daily: trends.daily, startDay: trends.startDay,
+                                      endDay: trends.endDay, metric: metric)
                             .frame(height: 150)
                     }
 
@@ -72,6 +86,8 @@ struct TrendsView: View {
     }
 }
 
+enum TrendMetric { case tokens, cost }
+
 /// token 精簡格式(1.2M / 3.4K / 950)。
 func tokenLabel(_ n: Int) -> String {
     if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
@@ -79,40 +95,74 @@ func tokenLabel(_ n: Int) -> String {
     return "\(n)"
 }
 
-// MARK: - 每日 token bar chart(補零到完整日期範圍)
+/// 成本精簡格式($3.40 / $3.40+);「+」表示當範圍含未定價 model 的用量(不讓缺定價看起來像零花費)。
+func costLabel(_ c: CostResult) -> String {
+    var s = String(format: "$%.2f", c.knownUSD)
+    if c.unknownModelTokens > 0 { s += "+" }
+    return s
+}
+
+private let trendDayFormatter: DateFormatter = {
+    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f
+}()
+
+/// 單日 hover tooltip:日期 + tokens + est. cost + top project + top model。
+func dayTooltip(day: Date, bucket: DayBucket?) -> String {
+    let dateStr = trendDayFormatter.string(from: day)
+    guard let b = bucket, b.tokens > 0 else { return "\(dateStr) · no usage" }
+    var lines = [dateStr, "\(tokenLabel(b.tokens)) tokens · \(costLabel(b.cost)) est."]
+    if let p = b.topProject { lines.append("top project: \(p)") }
+    if let m = b.topModel { lines.append("top model: \(m)") }
+    return lines.joined(separator: "\n")
+}
+
+// MARK: - 每日 bar chart(tokens / cost;補零到完整日期範圍;每 bar hover 顯示明細)
 
 struct DailyBarChart: View {
     let daily: [DayBucket]
     let startDay: Date
     let endDay: Date
+    let metric: TrendMetric
     private let calendar = Calendar.current
 
     var body: some View {
-        let values = dailyValues()
-        let maxV = max(1, values.max() ?? 1)
+        let byDay = Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
+        let days = TrendCalendar.days(from: startDay, to: endDay, calendar: calendar)
+        let maxV = max(0.0001, days.map { value(byDay[$0]) }.max() ?? 0)
         GeometryReader { geo in
-            let n = max(1, values.count)
-            let gap: CGFloat = values.count > 45 ? 1 : 2
+            let n = max(1, days.count)
+            let gap: CGFloat = days.count > 45 ? 1 : 2
             let barW = max(1, (geo.size.width - gap * CGFloat(n - 1)) / CGFloat(n))
             HStack(alignment: .bottom, spacing: gap) {
-                ForEach(Array(values.enumerated()), id: \.offset) { _, v in
+                ForEach(days, id: \.self) { day in
+                    let b = byDay[day]
+                    let hasUsage = (b?.tokens ?? 0) > 0
+                    let v = value(b)
+                    // 成本模式下「有用量但已知成本為 0」(整日未定價)不可畫成無用量的灰條;
+                    // 以橘色固定小高度條表示「有活動、成本未知」。
+                    let unpricedOnly = metric == .cost && hasUsage && v <= 0
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(v > 0 ? Color.accentColor.opacity(0.85) : Color.secondary.opacity(0.12))
+                        .fill(!hasUsage ? Color.secondary.opacity(0.12)
+                              : unpricedOnly ? Color.orange.opacity(0.55)
+                              : Color.accentColor.opacity(0.85))
                         .frame(width: barW,
-                               height: max(v > 0 ? 2 : 1, geo.size.height * CGFloat(v) / CGFloat(maxV)))
+                               height: !hasUsage ? 1
+                                   : unpricedOnly ? 6
+                                   : max(2, geo.size.height * CGFloat(v / maxV)))
+                        .help(dayTooltip(day: day, bucket: b))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
     }
 
-    private func dailyValues() -> [Int] {
-        let byDay = Dictionary(daily.map { ($0.day, $0.tokens) }, uniquingKeysWith: +)
-        return TrendCalendar.days(from: startDay, to: endDay, calendar: calendar).map { byDay[$0] ?? 0 }
+    private func value(_ b: DayBucket?) -> Double {
+        guard let b else { return 0 }
+        return metric == .tokens ? Double(b.tokens) : b.cost.knownUSD
     }
 }
 
-// MARK: - 日曆熱圖(GitHub 貢獻圖風格;週為欄、週幾為列)
+// MARK: - 日曆熱圖(GitHub 貢獻圖風格;週為欄、週幾為列;強度依 tokens,hover 顯示明細)
 
 struct UsageHeatmap: View {
     let daily: [DayBucket]
@@ -123,7 +173,7 @@ struct UsageHeatmap: View {
     private let gap: CGFloat = 3
 
     var body: some View {
-        let byDay = Dictionary(daily.map { ($0.day, $0.tokens) }, uniquingKeysWith: +)
+        let byDay = Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
         let maxV = daily.map(\.tokens).max() ?? 0
         let weeks = weekColumns()
         VStack(alignment: .leading, spacing: 8) {
@@ -143,13 +193,14 @@ struct UsageHeatmap: View {
         }
     }
 
-    private func cellView(_ day: Date?, byDay: [Date: Int], maxV: Int) -> some View {
-        let tokens = day.flatMap { byDay[$0] } ?? 0
+    private func cellView(_ day: Date?, byDay: [Date: DayBucket], maxV: Int) -> some View {
+        let bucket = day.flatMap { byDay[$0] }
+        let tokens = bucket?.tokens ?? 0
         let level = day == nil ? -1 : heatLevel(tokens, maxV: maxV)
         return RoundedRectangle(cornerRadius: 2)
             .fill(Self.color(for: level))
             .frame(width: cell, height: cell)
-            .help(day.map { "\(Self.dayFormatter.string(from: $0)) · \(tokenLabel(tokens)) tokens" } ?? "")
+            .help(day.map { dayTooltip(day: $0, bucket: bucket) } ?? "")
     }
 
     private func legend() -> some View {
@@ -181,10 +232,6 @@ struct UsageHeatmap: View {
         default: return Color.accentColor.opacity(0.95)
         }
     }
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f
-    }()
 
     /// 以週為欄:每欄 7 格(週幾為列),前導/尾隨用 nil 補齊。
     private func weekColumns() -> [[Date?]] {

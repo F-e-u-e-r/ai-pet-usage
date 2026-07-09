@@ -16,6 +16,7 @@ let trends = TrendsDataTests()
 runSuite("TrendsDataTests", [
     ("testDailyBucketsAggregateByLocalDay", trends.testDailyBucketsAggregateByLocalDay),
     ("testUsageStreakCurrentAndLongest", trends.testUsageStreakCurrentAndLongest),
+    ("testDailyBucketsTopProjectModelAndCost", trends.testDailyBucketsTopProjectModelAndCost),
 ])
 
 let scheduled = ScheduledReportTests()

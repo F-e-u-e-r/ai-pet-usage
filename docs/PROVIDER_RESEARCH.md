@@ -4,6 +4,8 @@ Status of the two v1 research/stretch providers from `ROADMAP.md` Phase 2 and `d
 
 Both providers stay **documentation-only** until a reliable, user-owned local data source is confirmed. We do not ship an adapter based on guessed file formats, and we never call network APIs for usage data (privacy boundary in `docs/EXPECTATIONS.md`).
 
+**Research status (2026-07-09, gate G5 NOT passed):** web research (below) surfaced plausible local data locations for both tools, but the development machine has neither installed, so the real field shapes are **unverified**. Per the rule above, no adapter is written yet — the leads are recorded so verification can happen quickly on a machine that has the tool.
+
 ## What an adapter needs (gate for promotion)
 
 From `ProviderAdapter` in `Sources/UsageCore/Models.swift`, a candidate source must provide, locally and without credentials:
@@ -23,6 +25,9 @@ Research checklist (unverified — to be done on a machine with Antigravity inst
 - Watch for a statusline/quota surface in the IDE — if the IDE displays quota, the value exists somewhere local; trace which file changes when it updates (`fs_usage` or `find -newer`).
 - Determine whether records carry model ids (Gemini variants) and workspace paths.
 
+Web-research leads (2026-07-09, **unverified on-machine**):
+- Conversation transcripts appear to be JSONL under `~/.gemini/antigravity*/…/brain/<conversation-id>/.system_generated/logs/transcript.jsonl` (plus a full `transcript_full.jsonl`); a token-monitor cache lives under `.token-monitor/rpc-cache/v1/`. If confirmed, the JSONL path could reuse `JSONLScanner`. Verify per-record token fields + timestamps + model ids before writing anything.
+
 Decision gate: if only aggregate UI state exists (no per-event records), Antigravity ships as a **limits-only** adapter (percent + reset), with no ledger events.
 
 ## Grok Code (xAI)
@@ -33,6 +38,9 @@ Research checklist (unverified):
 - For a CLI client: inspect `~/.grok*/` / `~/Library/Application Support/grok*/` for session JSONL or history databases; confirm token fields.
 - Check whether the client exposes rate-limit headers/snapshots in its logs (as Codex does); that would enable high-confidence limits.
 - Confirm license/ToS allows reading its local files for personal tooling (reading user-owned local files is normally fine; note anything unusual).
+
+Web-research leads (2026-07-09, **unverified on-machine**):
+- One Grok CLI variant stores session metrics in `~/.grok-cli/session.db` (**SQLite**, so it needs a new read-only SQLite reader — not `JSONLScanner`); auth in `~/.grok-cli/auth.json`; settings in `~/.grok*/user-settings.json`. Note there are several unrelated "grok-cli" projects — pin down which client the user runs first, then confirm the `session.db` schema (token columns + timestamps) before writing an adapter.
 
 Decision gate: same as Antigravity.
 

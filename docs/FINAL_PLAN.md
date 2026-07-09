@@ -201,8 +201,15 @@ filter 決定且不再重算，與 OnboardingCard 文案（run one session → R
    plist，執行既有 `aipet report --days N`。
 3. **儲存層決策閘門** ✋：以真實資料量 profile 全量載入＋排序；若載入 >1–2s 或
    RAM >100 MB → `UsageLedger` 後端換 SQLite（介面已隔離，替換成本低）。
+   **G4 已決（2026-07-09）**：真實 ledger 13,882 事件 / 6.8 MB → 全量載入+dashboard
+   0.13s、最重操作(report --days 92)1.55s、峰值 RAM ~37 MB，遠低於門檻 → **維持 JSONL，
+   不遷移**。未來若超門檻，換的是**嵌入式 SQLite 單檔**（放 App Support，非 localhost server；
+   Postgres 這類主從式對本機優先的選單列 app 過重且更易失效）。
 4. **Antigravity／Grok Code adapter 促轉**：照 `docs/PROVIDER_RESEARCH.md` checklist
    確認資料源，過閘門才實作（合成 fixture → adapter → 測試 → 註冊；pet/UI 零改動）。
+   **G5 待驗（2026-07-09）**：web 研究顯示兩者其實有本機記錄（Antigravity JSONL transcript、
+   Grok CLI `~/.grok-cli/session.db` SQLite，詳見 PROVIDER_RESEARCH），但需在**裝有該工具的
+   機器**上確認真實欄位/格式才實作;開發機未安裝，暫維持 documentation-only。
 5. **FSEvents 檔案監看取代 45s 輪詢**：監看 `~/.claude/projects` 與 `~/.codex/sessions`，
    變更觸發 refresh。省電、寵物反應即時——**Pet Phase-2 的 `working` 狀態依賴此項**。
 
@@ -239,8 +246,8 @@ filter 決定且不再重算，與 OnboardingCard 文案（run one session → R
 | G1 | M2 Phase 0 | 本計畫 §3 風格規格簽核 |
 | G2 | M2 Phase A | 狗 idle+blink contact sheet 風格鎖定 |
 | G3 | M2 Phase D | Pet v2 全套 sheet + 實機冒煙簽核合併 |
-| G4 | M3-3 | ledger 是否遷移 SQLite（依 profile 數據） |
-| G5 | M3-4 | Antigravity／Grok Code 資料源是否過促轉閘門 |
+| G4 | M3-3 | ledger 是否遷移 SQLite（依 profile 數據）— **已決 2026-07-09：維持 JSONL**（0.13s/37MB，遠低門檻） |
+| G5 | M3-4 | Antigravity／Grok Code 資料源是否過促轉閘門 — **待在裝有工具的機器上驗證格式**（研究線索已入 PROVIDER_RESEARCH） |
 | G6 | M4 | 首個對外 release 的 go/no-go（簽章鏈 + onboarding 完備） |
 
 ## 6. 風險
