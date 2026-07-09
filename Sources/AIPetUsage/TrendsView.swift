@@ -6,7 +6,7 @@ import UsageCore
 /// tokens / est. cost。純本機、零新依賴;資料由 AppModel.trends(coordinator.trendsData)提供。
 struct TrendsView: View {
     @Environment(AppModel.self) private var model
-    /// 曲線的度量:tokens 或估算成本(CodexBar 概念:用量 vs 花費一起看)。
+    /// 曲線的度量:tokens 或估算成本(兩種檢視可切換)。
     @State private var metric: TrendMetric = .tokens
 
     var body: some View {

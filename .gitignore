@@ -26,8 +26,8 @@ notes-private/
 *.draft.md
 *.working.md
 *.work.md
-# 一次性本機審查稿(內容已併入 docs/FINAL_PLAN.md),不入庫
-/fable review.txt
+# 內部規劃/流程文件 — 僅存本機,不入庫(檔名含 .internal 即忽略)
+*.internal.md
 
 # Local environment and secrets
 .env

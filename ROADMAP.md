@@ -13,14 +13,12 @@ Deliverables:
 - Choose pet style and initial pet species.
 - Define privacy policy and local data-source boundary.
 - Select initial pet states and usage signals.
-- Decide whether any referenced code can be reused based on license compatibility.
-- Adopt the clean-room workflow in `docs/LICENSING_STRATEGY.md` for any feature inspired by copyleft or unclear sources.
-- Finalize the scratch MVP scope in `docs/MVP_FEATURE_SPEC.md`.
-- Finalize the alpha information architecture in `docs/ALPHA_PRODUCT_SPEC.md`.
+- Finalize the scratch MVP scope.
+- Finalize the alpha information architecture (Today, Limits, Projects).
 
 Acceptance criteria:
 
-- `docs/EXPECTATIONS.md` has no blocking open questions.
+- Product expectations have no blocking open questions.
 - MVP feature list is short enough to build in one focused pass.
 - Technical stack is selected.
 

@@ -442,7 +442,7 @@ struct ConfettiPixels: View {
     }
 }
 
-/// 像素風對話泡泡:階梯圓角、粗黑框、白底、階梯尾巴(參考 8-bit 漫畫泡泡風格,自繪)。
+/// 像素風對話泡泡:階梯圓角、粗黑框、白底、階梯尾巴(8-bit 漫畫風,自繪)。
 struct PixelBubble: View {
     let text: String
 

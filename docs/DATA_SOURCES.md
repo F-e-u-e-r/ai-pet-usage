@@ -50,7 +50,7 @@ Deduplication key is `message.id + requestId` (streaming rewrites the same messa
 
 ## Limit calculation policy
 
-Per `docs/ALPHA_PRODUCT_SPEC.md`:
+Policy:
 
 - Provider-wide aggregates win over any single terminal panel.
 - Within one active window, a usage percent never goes **down** because an older/stale source event appeared. Newer readings can only raise it.

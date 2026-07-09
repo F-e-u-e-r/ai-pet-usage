@@ -20,7 +20,7 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
   > ^ <        next reset     in 2h 14m
 ```
 
-**Implemented and running.** A SwiftUI/AppKit menu-bar app with a floating pixel pet, built from scratch against the specs in [`docs/`](docs). The repo contains both the working app (SwiftPM, [`Sources/`](Sources)) and the product/planning documents that drove the build: what stays local, how limits are calculated, and how the roadmap is sequenced.
+**Implemented and running.** A SwiftUI/AppKit menu-bar app with a floating pixel pet, built from scratch. The repo contains the working app (SwiftPM, [`Sources/`](Sources)) plus the docs that matter most: exactly which local files are read and why ([`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)) and where the project is headed ([`ROADMAP.md`](ROADMAP.md)).
 
 ## ✨ Highlights
 
@@ -105,28 +105,16 @@ macOS-first; Windows and Linux are planned as the next platform step after the m
 
 Provider priority: **v1 core** — Codex and Claude Code · **v1 stretch/research** — Antigravity and Grok Code, if reliable local data sources are available · **v2** — OpenCode.
 
-## 📚 Planning documents
-
-The specs that drove the build, kept under [`docs/`](docs):
+## 📚 Documentation
 
 | Document | Contents |
 | --- | --- |
 | [`ROADMAP.md`](ROADMAP.md) | Phased delivery plan from product definition through distribution. |
-| [`docs/EXPECTATIONS.md`](docs/EXPECTATIONS.md) | Product expectations, target behavior, non-goals, and open decisions. |
-| [`docs/MVP_FEATURE_SPEC.md`](docs/MVP_FEATURE_SPEC.md) | First buildable product spec for a scratch implementation. |
-| [`docs/ALPHA_PRODUCT_SPEC.md`](docs/ALPHA_PRODUCT_SPEC.md) | Three-page alpha product structure for Today, Limits, and Projects. |
-| [`docs/HTML_REPORT_EXPORT_SPEC.md`](docs/HTML_REPORT_EXPORT_SPEC.md) | Local static HTML report export requirements. |
 | [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) | Exact local files read by each provider adapter and the limit-calculation policy. |
-| [`docs/PROVIDER_RESEARCH.md`](docs/PROVIDER_RESEARCH.md) | Research checklists and promotion gates for the Antigravity and Grok Code adapters. |
-| [`docs/LICENSING_STRATEGY.md`](docs/LICENSING_STRATEGY.md) | Clean-room and license-risk policy for using reference repositories. |
-| [`docs/REFERENCE_USAGE_PLAN.md`](docs/REFERENCE_USAGE_PLAN.md) | How to consolidate ideas from usage-monitor references without merging their source code. |
-| [`docs/FINAL_PLAN.md`](docs/FINAL_PLAN.md) | Consolidated execution plan (v0.2 → v1.0) merging the 2026-07-07 full-repo review (bug/security fix list) with the pixel-pet v2 rewrite plan (front-facing mascot style guide, reference research, licensing guardrails) into one milestone timeline. |
+| [`docs/HTML_REPORT_EXPORT_SPEC.md`](docs/HTML_REPORT_EXPORT_SPEC.md) | Local static HTML report export requirements. |
 
-## ⚖️ Licensing & clean-room policy
+## ⚖️ License
 
-> [!NOTE]
-> Before asking a coding agent to implement from reference repositories, read [`docs/LICENSING_STRATEGY.md`](docs/LICENSING_STRATEGY.md). Rewriting another repository is **not** a reliable way to avoid license obligations if the new implementation is derived from that code.
+Copyright (C) 2026 F-e-u-e-r
 
-The intended approach is **feature extraction, not source merging**: use reference apps to identify strong product ideas, document those ideas in this repo, and implement the MVP from scratch.
-
-This project is licensed under [AGPL-3.0](LICENSE).
+This project is licensed under the [GNU AGPL-3.0](LICENSE). All code and pixel art are original to this repository.
