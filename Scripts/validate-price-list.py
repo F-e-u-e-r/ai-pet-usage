@@ -11,7 +11,10 @@
     基準中不存在該檔案時略過漂移閘門(首次引入)。
 
 exit 0 = 全過;exit 1 = 任一閘門失敗(stdout 印出原因)。
-與每日定價 routine 的代理端閘門相同,此處為 PR 上的機械強制版本。
+與每日定價 routine 的代理端閘門相同,此處為 PR 上的機械強制版本;
+CI 會以 base ref 的腳本副本執行(防止同一 PR 先弱化驗證器再夾帶壞資料)。
+另註:動到價目 JSON 的 PR 也會跑 swift-tests —— Swift Codable 解碼是對
+資料更嚴格的端對端驗證,公開 repo 的 macOS runner 免費且僅約 30 秒。
 """
 import argparse
 import json
@@ -50,9 +53,11 @@ def parse_entries(raw, label):
             if key not in e:
                 check(False, f"{label}[{i}] ({e.get('modelId', '?')}): 缺少欄位 {key}")
         for key in ("inputPerMillion", "outputPerMillion"):
-            v = e.get(key)
-            if v is not None:
-                check(isinstance(v, (int, float)) and v >= 0,
+            # null / bool(Python 的 bool 是 int 子類)都不是合法價格;
+            # 缺鍵已由上方回報,這裡只驗證「存在但型別/值不合法」。
+            if key in e:
+                v = e[key]
+                check(isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0,
                       f"{label}[{i}] ({e.get('modelId', '?')}): {key} 必須為非負數,得到 {v!r}")
         ident = (e.get("providerId"), e.get("modelId"))
         check(ident not in seen, f"{label}: 重複條目 {ident}")
