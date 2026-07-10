@@ -1,0 +1,28 @@
+# 價目表機械閘門:任何動到打包價目 JSON 的 PR(含每日定價 routine 的自動 PR)
+# 都必須通過 schema + 漂移驗證。與 Scripts/validate-price-list.py 共用同一套規則。
+name: pricing-validate
+
+on:
+  pull_request:
+    paths:
+      - 'Sources/UsageCore/Resources/model-prices*.json'
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/UsageCore/Resources/model-prices*.json'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 漂移閘門需要 base commit 的檔案內容
+      - name: Validate price lists
+        run: |
+          BASE_ARGS=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_ARGS="--base ${{ github.event.pull_request.base.sha }}"
+          fi
+          python3 Scripts/validate-price-list.py $BASE_ARGS
