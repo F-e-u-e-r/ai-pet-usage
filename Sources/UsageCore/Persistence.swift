@@ -5,6 +5,11 @@ public enum AppPaths {
     public static let appFolderName = "AIPetUsage"
 
     public static func dataDirectory() -> URL {
+        // 測試/驗證縫:允許以環境變數指向隔離的資料目錄(系統路徑走 getpwuid,
+        // 不吃 $HOME),避免對照實驗誤寫正式狀態。
+        if let override = ProcessInfo.processInfo.environment["AIPET_DATA_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent(appFolderName, isDirectory: true)

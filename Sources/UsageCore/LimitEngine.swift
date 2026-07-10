@@ -49,6 +49,15 @@ public final class LimitEngine {
         var percent: Double
     }
 
+    /// 換窗候選:窗口翻轉需連續兩筆同窗讀數確認(見 fold);跨批次/重啟持久化。
+    struct PendingWindow: Codable {
+        var percent: Double
+        var resetsAt: Date?
+        var observedAt: Date
+        var windowMinutes: Int
+        var count: Int
+    }
+
     struct PersistedWindow: Codable {
         var percent: Double
         var resetsAt: Date?
@@ -57,6 +66,8 @@ public final class LimitEngine {
         var corrected: Bool
         var expiryHandled: Bool
         var history: [PercentSample]
+        /// 舊版 state 檔沒有此欄位 → 解碼為 nil。
+        var pending: PendingWindow? = nil
     }
 
     struct PersistedProvider: Codable {
@@ -132,6 +143,9 @@ public final class LimitEngine {
             && reading.usedPercent < current.percent - 20
 
         if sameWindow && !looksLikeNilRollover {
+            // 只有「晚於候選最後觀測」的現任讀數才能證明現任在候選之後仍存活 →
+            // 候選作廢;亂序/重放的較舊現任讀數不得打斷進行中的確認。
+            if let p = current.pending, observedAt > p.observedAt { current.pending = nil }
             let previous = current.percent
             if fullReindex {
                 current.corrected = reading.usedPercent < previous - 0.5
@@ -154,23 +168,81 @@ public final class LimitEngine {
             return current
         }
 
-        // 窗口不同:只接受更新的窗口(resetsAt 較晚);較舊窗口的殘留讀值一律忽略。
-        let newIsLater: Bool
-        switch (current.resetsAt, reading.resetsAt) {
-        case let (a?, b?): newIsLater = b > a
-        case (nil, _?): newIsLater = true
-        case (_?, nil): newIsLater = observedAt > current.observedAt
-        case (nil, nil): newIsLater = observedAt > current.observedAt
+        if looksLikeNilRollover {
+            // nil-reset 來源沒有窗口邊界可比對,維持既有行為:>20 點驟降即視為翻轉。
+            guard observedAt > current.observedAt else { return current }
+            if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled {
+                transitions.append(.reset(providerId: providerId, window: windowName))
+            }
+            return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
+                                   observedAt: observedAt, windowMinutes: reading.windowMinutes,
+                                   corrected: false, expiryHandled: false,
+                                   history: [PercentSample(at: observedAt, percent: reading.usedPercent)])
         }
-        guard newIsLater else { return current }
 
-        if current.percent >= 30, reading.usedPercent < current.percent - 20 {
-            transitions.append(.reset(providerId: providerId, window: windowName))
+        // 窗口不同(resets_at 相差 ≥120s)。後端偶發「假重置」抖動:單筆讀數宣稱窗口
+        // 剛重置(used≈0、resets_at 更晚),數秒後回滾 — 故不能以「resets_at 較晚者勝」
+        // 仲裁(最後一次抖動會永久佔住槽位、擋掉之後所有真讀數)。改為:
+        //   1) 只考慮不舊於現任觀測的讀數(重掃舊檔天然被擋);
+        //   2) 觀測當下已過期的「新窗口」必為殘留資料,不採信;
+        //   3) 換窗需連續兩筆同窗讀數確認(pending 持久化,可跨批次/重啟累計);
+        //   4) 現任窗口一旦有新讀數即作廢候選(見上方同窗分支)。
+        guard observedAt >= current.observedAt else { return current }
+        if let candidateReset = reading.resetsAt, candidateReset <= observedAt { return current }
+
+        // 換窗需兩筆確認的唯一情境:現任窗口「可證明存活」(有具體 resets_at 且尚未到期)
+        // 卻收到不同窗讀數 — 這正是後端抖動的形態。其餘情況維持原有的第一筆即接管:
+        // 現任已過期 = 預期中的翻轉(hook 恢復不必多等一筆);現任無 resets_at = 無從
+        // 證明存活,snapshot 型來源(如 statusline 落地檔)可能長時間不產生第二筆新觀測。
+        // 若抖動恰在這些間隙搶佔,佔位窗隨即成為「可證明存活」的現任,真讀數兩筆內
+        // 即可換回,不會如舊制永久卡死。
+        let incumbentProvablyLive = current.resetsAt.map { $0 > observedAt } ?? false
+        if !incumbentProvablyLive {
+            if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled {
+                transitions.append(.reset(providerId: providerId, window: windowName))
+            }
+            return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
+                                   observedAt: observedAt, windowMinutes: reading.windowMinutes,
+                                   corrected: false, expiryHandled: false,
+                                   history: [PercentSample(at: observedAt, percent: reading.usedPercent)])
         }
-        return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
-                               observedAt: observedAt, windowMinutes: reading.windowMinutes,
-                               corrected: false, expiryHandled: false,
-                               history: [PercentSample(at: observedAt, percent: reading.usedPercent)])
+
+        // 現任窗口可證明存活卻收到「不同窗」讀數:抖動的唯一形態 → 需兩筆確認。
+        //
+        // 刻意「不」要求候選的 resets_at 晚於現任(舊制的 b > a):抖動窗的 resets_at
+        // 永遠較晚(觀測時刻+整窗長),若要求較晚才可接管,抖動一旦搶佔成功,真實窗
+        // (resets_at 較早)就永遠無法奪回 — 這正是本次修正的原始事故。反向風險
+        // (殘留來源把存活現任回滾到較早窗)被兩道既有防線壓低:現任只要再發聲一筆
+        // 就作廢候選,且萬一誤接管,真實窗同樣兩筆內奪回,不會永久卡死。
+        if var p = current.pending, isSameWindow(p.resetsAt, reading.resetsAt) {
+            // 同一筆讀數的重放(observedAt 未前進)不得自我確認。
+            guard observedAt > p.observedAt else { return current }
+            p.count += 1
+            // 候選窗內同樣適用單調防護:亂序的較低樣本不得拉低接管值。
+            p.percent = max(p.percent, reading.usedPercent)
+            p.resetsAt = reading.resetsAt
+            p.observedAt = observedAt
+            if reading.windowMinutes > 0 { p.windowMinutes = reading.windowMinutes }
+            if p.count >= 2 {
+                // 已確認換窗。expiryHandled 表示 sweepExpiredWindows 已為此窗發過重置,不重複。
+                if current.percent >= 30, p.percent < current.percent - 20, !current.expiryHandled {
+                    transitions.append(.reset(providerId: providerId, window: windowName))
+                }
+                return PersistedWindow(percent: p.percent, resetsAt: p.resetsAt,
+                                       observedAt: p.observedAt, windowMinutes: p.windowMinutes,
+                                       corrected: false, expiryHandled: false,
+                                       history: [PercentSample(at: p.observedAt, percent: p.percent)])
+            }
+            current.pending = p
+            return current
+        }
+
+        // 新候選(尚無 pending,或與 pending 屬不同窗):同樣要求觀測時間前進。
+        if let p = current.pending, observedAt <= p.observedAt { return current }
+        current.pending = PendingWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
+                                        observedAt: observedAt, windowMinutes: reading.windowMinutes,
+                                        count: 1)
+        return current
     }
 
     private func isSameWindow(_ a: Date?, _ b: Date?) -> Bool {

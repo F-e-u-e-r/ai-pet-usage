@@ -533,14 +533,263 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertEqual(state.fiveHour.windowMinutes, 300)
     }
 
-    func testWindowRolloverAcceptsLowerAndEmitsReset() {
+    // MARK: 換窗兩筆確認(後端「假重置」抖動防護)
+
+    func windowReading(_ percent: Double, at: String, resetsAt: String) -> RateLimitReading {
+        RateLimitReading(
+            providerId: "codex",
+            observedAt: date(at),
+            primary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 300, resetsAt: date(resetsAt)),
+            secondary: nil
+        )
+    }
+
+    func weeklyReading(_ percent: Double, at: String, resetsAt: String) -> RateLimitReading {
+        RateLimitReading(
+            providerId: "codex",
+            observedAt: date(at),
+            primary: nil,
+            secondary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 10080, resetsAt: date(resetsAt))
+        )
+    }
+
+    func testExpiredWindowRolloverAdoptsFirstReading() {
         let engine = LimitEngine(stateURL: nil)
-        _ = engine.ingest(readings: [reading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
-        let transitions = engine.ingest(readings: [reading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 現任窗口已過期 → 預期中的翻轉,第一筆讀數即接管並發出重置(原有行為)。
+        let transitions = engine.ingest(readings: [windowReading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
         XCTAssertTrue(transitions.contains(.reset(providerId: "codex", window: "5h")))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T14:10:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 5)
+    }
+
+    func testLiveWindowTakeoverNeedsSecondReading() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 現任窗口仍存活卻宣稱換窗 = 抖動的唯一形態 → 第一筆只成為候選。
+        let first = engine.ingest(readings: [windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertFalse(first.contains(.reset(providerId: "codex", window: "5h")))
+        let mid = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                    settings: settings, now: date("2026-01-15T13:00:30Z"))
+        XCTAssertEqual(mid.fiveHour.usedPercent, 80, "未確認前現任窗口不動")
+        // 第二筆同窗讀數確認接管,重置轉變只發一次。
+        let second = engine.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertTrue(second.contains(.reset(providerId: "codex", window: "5h")))
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T13:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 6)
+        XCTAssertEqual(state.fiveHour.resetAt, date("2026-01-15T19:00:00Z"))
+    }
+
+    func testBackendFlapSingleReadingCannotPoisonWindow() {
+        // 真實案例(2026-07-08 的 codex rollout):weekly 讀數途中多次被單筆「假重置」
+        // (used≈0、resets_at = 觀測+7d)打斷,數秒後回滾。修正前,最後一次抖動的
+        // resets_at 較晚,會永久佔住槽位並把之後所有真讀數當舊窗殘值丟棄。
+        let engine = LimitEngine(stateURL: nil)
+        let trueReset = "2026-01-14T03:51:00Z"
+        var transitions: [LimitTransition] = []
+        let sequence: [(Double, String, String)] = [
+            (46, "2026-01-08T05:00:40Z", trueReset),
+            (0, "2026-01-08T05:01:03Z", "2026-01-15T05:00:00Z"), // 抖動
+            (46, "2026-01-08T05:01:17Z", trueReset), // 回滾
+            (54, "2026-01-08T05:36:21Z", trueReset),
+            (1, "2026-01-08T05:36:34Z", "2026-01-15T05:01:00Z"), // 抖動
+            (54, "2026-01-08T05:36:50Z", trueReset), // 回滾
+            (63, "2026-01-08T13:19:31Z", trueReset),
+            (80, "2026-01-08T21:38:41Z", trueReset),
+        ]
+        for (percent, at, resets) in sequence {
+            transitions += engine.ingest(readings: [weeklyReading(percent, at: at, resetsAt: resets)], settings: settings)
+        }
+        XCTAssertFalse(transitions.contains(.reset(providerId: "codex", window: "weekly")))
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-08T22:00:00Z"))
+        XCTAssertEqual(state.weekly.usedPercent, 80)
+        XCTAssertEqual(state.weekly.resetAt, date(trueReset))
+    }
+
+    func testPendingConfirmationSurvivesEngineReload() {
+        let stateURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("limits-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: stateURL) }
+
+        let e1 = LimitEngine(stateURL: stateURL)
+        _ = e1.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        _ = e1.ingest(readings: [windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+
+        // FSEvents 高頻批次下每批可能只有一筆新讀數:確認必須跨引擎實例/重啟累計。
+        let e2 = LimitEngine(stateURL: stateURL)
+        let transitions = e2.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertTrue(transitions.contains(.reset(providerId: "codex", window: "5h")))
+        let state = e2.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                  settings: settings, now: date("2026-01-15T13:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 6)
+    }
+
+    func testDuplicateReplayCannotConfirmPending() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        let flap = windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")
+        _ = engine.ingest(readings: [flap], settings: settings)
+        let replay = engine.ingest(readings: [flap], settings: settings)
+        XCTAssertFalse(replay.contains(.reset(providerId: "codex", window: "5h")))
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T13:30:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 80, "同一筆讀數重放不得完成換窗確認")
+    }
+
+    func testOldObservationsAreFullyInert() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 觀測時間早於現任的殘留讀數:不得成為候選、不得確認、不得影響現值。
+        var transitions = engine.ingest(readings: [windowReading(1, at: "2026-01-15T08:00:00Z", resetsAt: "2026-01-15T09:00:00Z")], settings: settings)
+        transitions += engine.ingest(readings: [windowReading(2, at: "2026-01-15T08:30:00Z", resetsAt: "2026-01-15T09:00:00Z")], settings: settings)
+        XCTAssertTrue(transitions.isEmpty)
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T10:30:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 80)
+    }
+
+    func testStaleCandidateWindowRejected() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 「新窗口」的 resets_at 在觀測當下已過期 → 必為殘留資料,連兩筆也不得接管。
+        var transitions = engine.ingest(readings: [windowReading(3, at: "2026-01-15T10:30:00Z", resetsAt: "2026-01-15T10:20:00Z")], settings: settings)
+        transitions += engine.ingest(readings: [windowReading(4, at: "2026-01-15T10:31:00Z", resetsAt: "2026-01-15T10:20:00Z")], settings: settings)
+        XCTAssertTrue(transitions.isEmpty)
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T10:35:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 80)
+    }
+
+    func testSweepThenAdoptEmitsSingleReset() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        let sweep = engine.sweepExpiredWindows(now: date("2026-01-15T14:01:00Z"))
+        XCTAssertTrue(sweep.contains(.reset(providerId: "codex", window: "5h")))
+        // sweep 已為過期發過重置 → 之後的接管不得重複通知。
+        let adopt = engine.ingest(readings: [windowReading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertFalse(adopt.contains(.reset(providerId: "codex", window: "5h")), "sweep 已發過重置,接管不得重複通知")
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T14:10:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 5)
+    }
+
+    func testOldSameWindowReplayKeepsPendingAlive() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        // 現任窗的「舊」重放(觀測時間倒退)不是現任存活的證據,不得作廢候選。
+        _ = engine.ingest(readings: [windowReading(79, at: "2026-01-15T09:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        let confirm = engine.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")))
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T13:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 6)
+    }
+
+    func testEarlierResetWindowRecoversFlapCapturedSlot() {
+        // 抖動窗一旦搶佔(resets_at 永遠比真實窗晚),真實窗必須能以兩筆確認奪回 —
+        // 若要求「resets_at 較晚者才可接管」,此槽位將凍結到假窗過期(原始事故)。
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [weeklyReading(1, at: "2026-01-08T21:24:00Z", resetsAt: "2026-01-15T05:01:00Z")], settings: settings) // 佔位的假窗
+        var transitions = engine.ingest(readings: [weeklyReading(92, at: "2026-01-09T16:46:00Z", resetsAt: "2026-01-14T03:51:00Z")], settings: settings)
+        transitions += engine.ingest(readings: [weeklyReading(93, at: "2026-01-09T16:47:00Z", resetsAt: "2026-01-14T03:51:00Z")], settings: settings)
+        XCTAssertFalse(transitions.contains(.reset(providerId: "codex", window: "weekly")), "1%→93% 是奪回不是重置,不得誤發通知")
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-09T17:00:00Z"))
+        XCTAssertEqual(state.weekly.usedPercent, 93, "resets_at 較早的真實窗必須能奪回被抖動佔位的槽位")
+        XCTAssertEqual(state.weekly.resetAt, date("2026-01-14T03:51:00Z"))
+    }
+
+    func testPendingKeepsMonotonicMaxWithinCandidateWindow() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [windowReading(10, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        // 候選窗內亂序的較低樣本:接管值取單調最大,與同窗防護一致。
+        let confirm = engine.ingest(readings: [windowReading(5, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")))
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T13:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 10, "接管值不得被候選窗內較低的亂序樣本拉低")
+    }
+
+    func testOutOfOrderIncumbentReadingKeepsNewerPending() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        // 亂序抵達的現任讀數(晚於現任觀測、但早於候選)不能證明現任在候選之後仍存活,
+        // 不得作廢候選(稀疏來源否則永遠湊不滿兩筆)。
+        _ = engine.ingest(readings: [windowReading(79, at: "2026-01-15T12:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        let confirm = engine.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")), "候選不得被亂序的較舊現任讀數打斷")
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T13:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 6)
+    }
+
+    func testNilResetIncumbentAdoptsResetBearingReadingImmediately() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [nilResetReading(45, at: "2026-01-15T10:00:00Z")], settings: settings)
+        // 現任窗口無 resets_at → 無從證明存活;snapshot 來源可能長時間沒有第二筆新觀測,
+        // 帶 resets_at 的重置後讀數必須第一筆即接管(原有行為)。
+        let fresh = RateLimitReading(
+            providerId: "claude-code",
+            observedAt: date("2026-01-15T11:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 12, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T15:00:00Z")),
+            secondary: nil
+        )
+        let transitions = engine.ingest(readings: [fresh], settings: settings)
+        XCTAssertTrue(transitions.contains(.reset(providerId: "claude-code", window: "5h")))
+        let state = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T11:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 12)
+        XCTAssertEqual(state.fiveHour.resetAt, date("2026-01-15T15:00:00Z"))
+    }
+
+    func testFreshIncumbentReadingCancelsPending() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [windowReading(0, at: "2026-01-15T10:30:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings) // 抖動 → 候選
+        _ = engine.ingest(readings: [windowReading(81, at: "2026-01-15T10:31:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings) // 現任存活 → 候選作廢
+        let after = engine.ingest(readings: [windowReading(1, at: "2026-01-15T10:32:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        XCTAssertFalse(after.contains(.reset(providerId: "codex", window: "5h")), "候選已被現任讀數作廢,新讀數需重新累計")
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T10:35:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 81)
+    }
+
+    func testThirdWindowCandidateReplacesPending() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [windowReading(5, at: "2026-01-15T12:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
+        // 與候選不同的第三個窗:重新累計,不得沿用前一候選的次數。
+        _ = engine.ingest(readings: [windowReading(4, at: "2026-01-15T12:10:00Z", resetsAt: "2026-01-15T21:00:00Z")], settings: settings)
+        let state1 = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                       settings: settings, now: date("2026-01-15T12:15:00Z"))
+        XCTAssertEqual(state1.fiveHour.usedPercent, 80, "候選未確認前,存活的現任窗口不動")
+        let confirm = engine.ingest(readings: [windowReading(6, at: "2026-01-15T12:20:00Z", resetsAt: "2026-01-15T21:00:00Z")], settings: settings)
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")))
+        let state2 = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                       settings: settings, now: date("2026-01-15T12:25:00Z"))
+        XCTAssertEqual(state2.fiveHour.usedPercent, 6)
+        XCTAssertEqual(state2.fiveHour.resetAt, date("2026-01-15T21:00:00Z"))
+    }
+
+    func testLegacyStateFileWithoutPendingKeyDecodes() {
+        let stateURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("limits-legacy-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: stateURL) }
+        let legacy = """
+        {"codex":{"primary":{"corrected":false,"expiryHandled":false,"history":[{"at":"2026-01-15T10:00:00Z","percent":42}],"observedAt":"2026-01-15T10:00:00Z","percent":42,"resetsAt":"2026-01-15T14:00:00Z","windowMinutes":300}}}
+        """
+        try? legacy.data(using: .utf8)?.write(to: stateURL)
+        let engine = LimitEngine(stateURL: stateURL)
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T10:05:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 42, "舊版 state 檔(無 pending 欄位)必須可解碼")
     }
 
     func testNilResetRolloverAcceptsLowerAndEmitsReset() {
