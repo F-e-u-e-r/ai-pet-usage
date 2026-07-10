@@ -1243,3 +1243,262 @@ final class ReportTests: XCTestCase {
         XCTAssertFalse(html.lowercased().contains("<script src"), "不得引用外部資源")
     }
 }
+
+// MARK: - Grok Code adapter
+
+final class GrokCodeAdapterTests: XCTestCase {
+    let encCwd = "%2FUsers%2Fdev%2Fprojects%2Fgrok-demo"
+    let sessionUUID = "11111111-1111-1111-1111-111111111111"
+    let sentinel = "SENTINEL_DO_NOT_LEAK_9f3a"
+    let summaryJSON = "{\"info\":{\"id\":\"11111111-1111-1111-1111-111111111111\",\"cwd\":\"/Users/dev/projects/grok-demo\"},\"current_model_id\":\"grok-4.5\"}"
+
+    // 建 <root>/sessions/<encCwd>/<uuid>/ 結構,寫入給定 updates.jsonl 行與可選 meta,回傳 sessions 目錄。
+    func writeSession(lines: [String], summary: String?, signals: String?) throws -> URL {
+        let root = makeTempDir()
+        let sessions = root.appendingPathComponent("sessions")
+        let dir = sessions.appendingPathComponent(encCwd).appendingPathComponent(sessionUUID)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try (lines.joined(separator: "\n") + "\n").data(using: .utf8)!
+            .write(to: dir.appendingPathComponent("updates.jsonl"))
+        if let summary { try summary.data(using: .utf8)!.write(to: dir.appendingPathComponent("summary.json")) }
+        if let signals { try signals.data(using: .utf8)!.write(to: dir.appendingPathComponent("signals.json")) }
+        return sessions
+    }
+
+    func updatesURL(inSessions sessions: URL) -> URL {
+        sessions.appendingPathComponent(encCwd).appendingPathComponent(sessionUUID)
+            .appendingPathComponent("updates.jsonl")
+    }
+
+    // 合成一筆帶 totalTokens 的 token 行;ts 為頂層 timestamp。
+    func tokenLine(ts: Int, total: Int, eventId: String?, agentMs: Int? = nil, text: String = "synthetic") -> String {
+        var meta = "\"totalTokens\":\(total)"
+        if let eventId { meta += ",\"eventId\":\"\(eventId)\"" }
+        if let agentMs { meta += ",\"agentTimestampMs\":\(agentMs)" }
+        return "{\"timestamp\":\(ts),\"method\":\"session/update\",\"params\":{\"sessionId\":\"\(sessionUUID)\","
+            + "\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"\(text)\"}},"
+            + "\"_meta\":{\(meta)}}}"
+    }
+
+    func appendLine(_ line: String, to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: (line + "\n").data(using: .utf8)!)
+        try handle.close()
+    }
+
+    // 把 Fixtures/grok/* 複製進臨時 session 結構,回傳 sessions 目錄。
+    func makeFixtureSessions() throws -> URL {
+        let root = makeTempDir()
+        let dir = root.appendingPathComponent("sessions").appendingPathComponent(encCwd)
+            .appendingPathComponent(sessionUUID)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for name in ["updates.jsonl", "summary.json", "signals.json"] {
+            try FileManager.default.copyItem(at: fixtureURL("grok/\(name)"),
+                                             to: dir.appendingPathComponent(name))
+        }
+        return root.appendingPathComponent("sessions")
+    }
+
+    // 1) 成長 / 壓縮倒退 / 非 token 行 / model / URL-decoded cwd。
+    func testParsesGrowthCompactionModelAndProject() throws {
+        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()])
+        let (result, state) = try adapter.refreshUsage(state: ScanState())
+
+        // 成長 1000→2500→2900、非 token 行略過、壓縮倒退到 400(不產生事件、重設基準)、再成長到 900。
+        // 期望差值:1000, 1500, 400, 500;id 取 eventId。
+        XCTAssertEqual(result.events.count, 4)
+        XCTAssertEqual(result.events.map { $0.tokens.input }, [1000, 1500, 400, 500])
+        XCTAssertEqual(result.events.map { $0.id }, ["gk:evt-1", "gk:evt-2", "gk:evt-3", "gk:evt-6"])
+        for e in result.events {
+            XCTAssertEqual(e.providerId, "grok-code")
+            XCTAssertEqual(e.tokens.output, 0)
+            XCTAssertEqual(e.tokens.cacheRead, 0)
+            XCTAssertEqual(e.tokens.total, e.tokens.input)
+            XCTAssertEqual(e.modelId, "grok-4.5")
+            XCTAssertEqual(e.projectId, "/Users/dev/projects/grok-demo")
+            XCTAssertEqual(e.projectName, "grok-demo")
+            XCTAssertEqual(e.sourceKind, "grok-session")
+        }
+        // 頂層 timestamp 為 epoch 秒
+        XCTAssertEqual(result.events[0].timestamp.timeIntervalSince1970, 1783692000)
+        XCTAssertEqual(result.events[3].timestamp.timeIntervalSince1970, 1783692400)
+        // grok 無本機限額
+        XCTAssertEqual(result.rateLimits.count, 0)
+        // 掃描進度記錄了單一 updates.jsonl 的位移
+        XCTAssertEqual(state.files.count, 1)
+        XCTAssertGreaterThan(state.files.values.first!.offset, 0)
+    }
+
+    // 2) 壓縮倒退:不產生負/零事件,基準重設。
+    func testCompactionRegressionEmitsNoNegativeOrZero() throws {
+        let lines = [tokenLine(ts: 1_000_000_000, total: 1000, eventId: "a"),
+                     tokenLine(ts: 1_000_000_100, total: 400, eventId: "b"),   // 倒退
+                     tokenLine(ts: 1_000_000_200, total: 900, eventId: "c")]   // 由 400 成長 → 500
+        let adapter = GrokCodeAdapter(roots: [try writeSession(lines: lines, summary: summaryJSON, signals: nil)])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+
+        XCTAssertEqual(result.events.count, 2, "倒退那筆不得產生事件")
+        XCTAssertEqual(result.events.map { $0.tokens.input }, [1000, 500])
+        XCTAssertEqual(result.events.map { $0.id }, ["gk:a", "gk:c"])
+        for e in result.events { XCTAssertGreaterThan(e.tokens.total, 0) }
+        XCTAssertFalse(result.events.contains { $0.id == "gk:b" })
+    }
+
+    // 3) 增量:第二次無新事件;追加一行後只回傳新差值。
+    func testIncrementalEmitsOnlyNewDelta() throws {
+        let sessions = try makeFixtureSessions()
+        let adapter = GrokCodeAdapter(roots: [sessions])
+        let (r1, s1) = try adapter.refreshUsage(state: ScanState())
+        let (r2, s2) = try adapter.refreshUsage(state: s1)
+        XCTAssertFalse(r1.events.isEmpty)
+        XCTAssertTrue(r2.events.isEmpty, "無新內容不得回傳事件")
+
+        // 基準停在 900(fixture 末筆);追加累計 1500 → 差值 600。
+        try appendLine(tokenLine(ts: 1783692500, total: 1500, eventId: "evt-7"),
+                       to: updatesURL(inSessions: sessions))
+        let (r3, _) = try adapter.refreshUsage(state: s2)
+        XCTAssertEqual(r3.events.count, 1)
+        XCTAssertEqual(r3.events[0].tokens.input, 600)
+        XCTAssertEqual(r3.events[0].id, "gk:evt-7")
+        XCTAssertEqual(r3.events[0].modelId, "grok-4.5", "增量掃描仍讀 summary.json 保留 model")
+    }
+
+    // 4) 檔案縮短/截斷:offset > size → 從 0 全掃,事件以相同 id 重播(去重可吸收)。
+    func testShrinkTriggersFullRescanWithStableIds() throws {
+        let lines = [tokenLine(ts: 1_000_000_000, total: 1000, eventId: "evt-1"),
+                     tokenLine(ts: 1_000_000_100, total: 2500, eventId: "evt-2"),
+                     tokenLine(ts: 1_000_000_200, total: 2900, eventId: "evt-3")]
+        let sessions = try writeSession(lines: lines, summary: summaryJSON, signals: nil)
+        let adapter = GrokCodeAdapter(roots: [sessions])
+        let (r1, s1) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(r1.events.count, 3)
+
+        // 重寫成更短的檔(位元組數小於已存 offset)→ 觸發從 0 全掃、重置上下文。
+        let shortBody = [tokenLine(ts: 1_000_000_000, total: 1000, eventId: "evt-1"),
+                         tokenLine(ts: 1_000_000_100, total: 2500, eventId: "evt-2")]
+            .joined(separator: "\n") + "\n"
+        try shortBody.data(using: .utf8)!.write(to: updatesURL(inSessions: sessions))
+
+        let (r2, _) = try adapter.refreshUsage(state: s1)
+        XCTAssertEqual(r2.events.map { $0.id }, ["gk:evt-1", "gk:evt-2"], "同一 id 重播")
+        XCTAssertEqual(r2.events.map { $0.tokens.input }, [1000, 1500])
+    }
+
+    // 5) eventId 後援:無 eventId → id = gk:<uuid>:<offset>(首行位移 0)。
+    func testEventIdFallbackToSessionAndOffset() throws {
+        let sessions = try writeSession(lines: [tokenLine(ts: 1_000_000_000, total: 700, eventId: nil)],
+                                        summary: summaryJSON, signals: nil)
+        let (result, _) = try GrokCodeAdapter(roots: [sessions]).refreshUsage(state: ScanState())
+        XCTAssertEqual(result.events.count, 1)
+        XCTAssertEqual(result.events[0].id, "gk:\(sessionUUID):0")
+    }
+
+    // 6) 時間戳:epoch 秒 / >1e12 視為毫秒 / agentTimestampMs 後援 / 兩者皆無則跳過。
+    func testTimestampSecondsMillisFallbackAndSkip() throws {
+        // (A) epoch 秒
+        let a = try writeSession(lines: [tokenLine(ts: 1_735_000_000, total: 100, eventId: "a")],
+                                 summary: summaryJSON, signals: nil)
+        let (ra, _) = try GrokCodeAdapter(roots: [a]).refreshUsage(state: ScanState())
+        XCTAssertEqual(ra.events.count, 1)
+        XCTAssertEqual(ra.events[0].timestamp.timeIntervalSince1970, 1_735_000_000)
+
+        // (B) 毫秒量級(>1e12)的頂層 timestamp 視為毫秒
+        let b = try writeSession(lines: [tokenLine(ts: 1_735_000_000_000, total: 100, eventId: "b")],
+                                 summary: summaryJSON, signals: nil)
+        let (rb, _) = try GrokCodeAdapter(roots: [b]).refreshUsage(state: ScanState())
+        XCTAssertEqual(rb.events.count, 1)
+        XCTAssertEqual(rb.events[0].timestamp.timeIntervalSince1970, 1_735_000_000)
+
+        // (C) 無頂層 timestamp,但有 agentTimestampMs → 後援(毫秒)
+        let cLine = "{\"method\":\"session/update\",\"params\":{\"sessionId\":\"\(sessionUUID)\","
+            + "\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"x\"}},"
+            + "\"_meta\":{\"totalTokens\":100,\"eventId\":\"c\",\"agentTimestampMs\":1735000000000}}}"
+        let c = try writeSession(lines: [cLine], summary: summaryJSON, signals: nil)
+        let (rc, _) = try GrokCodeAdapter(roots: [c]).refreshUsage(state: ScanState())
+        XCTAssertEqual(rc.events.count, 1)
+        XCTAssertEqual(rc.events[0].timestamp.timeIntervalSince1970, 1_735_000_000)
+
+        // (D) 無 timestamp 也無 agentTimestampMs → 跳過(0 事件)
+        let dLine = "{\"method\":\"session/update\",\"params\":{\"sessionId\":\"\(sessionUUID)\","
+            + "\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"x\"}},"
+            + "\"_meta\":{\"totalTokens\":100,\"eventId\":\"d\"}}}"
+        let d = try writeSession(lines: [dLine], summary: summaryJSON, signals: nil)
+        let (rd, _) = try GrokCodeAdapter(roots: [d]).refreshUsage(state: ScanState())
+        XCTAssertEqual(rd.events.count, 0)
+    }
+
+    // 7) 隱私:content 內含 sentinel;emitted 事件任何欄位都不得出現 sentinel。
+    func testPrivacySentinelNeverLeaks() throws {
+        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertFalse(result.events.isEmpty)
+        for e in result.events {
+            XCTAssertFalse(e.id.contains(sentinel))
+            XCTAssertFalse((e.projectId ?? "").contains(sentinel))
+            XCTAssertFalse((e.projectName ?? "").contains(sentinel))
+            XCTAssertFalse((e.modelId ?? "").contains(sentinel))
+            XCTAssertFalse((e.sourcePath ?? "").contains(sentinel))
+            XCTAssertFalse(e.sourceKind.contains(sentinel))
+        }
+        // 帶 sentinel content 的那筆(evt-2)仍正確計入(差值 1500),證明只擷取計數器而非內容。
+        let e2 = result.events.first { $0.id == "gk:evt-2" }
+        XCTAssertNotNil(e2)
+        XCTAssertEqual(e2?.tokens.input, 1500)
+    }
+
+    // 8) 可用性:注入 roots 指到臨時目錄,存在/不存在切換(roots 動態依存在性重算)。
+    func testAvailabilityFollowsRootExistence() throws {
+        let missing = makeTempDir().appendingPathComponent("sessions") // 尚未建立
+        let adapter = GrokCodeAdapter(roots: [missing])
+        XCTAssertFalse(adapter.detectAvailability().available)
+        XCTAssertTrue(adapter.roots.isEmpty)
+
+        try FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        XCTAssertTrue(adapter.detectAvailability().available)
+        XCTAssertEqual(adapter.roots.count, 1)
+    }
+
+    // 10) 預設啟用:grok-code 必須在 CoreSettings 預設集合內(新安裝開箱即掃;
+    //     未安裝 grok 時由 OnboardingCard 呈現 unavailable,已存檔設定不受影響)。
+    func testGrokEnabledInDefaultSettings() {
+        XCTAssertTrue(CoreSettings().enabledProviders.contains("grok-code"))
+    }
+
+    // 11) 生成價目不得自動為 grok-code 計價(context-growth 粗估不可偽裝成精確成本);
+    //     手動維護價目與使用者覆寫仍可刻意定價 — 此處驗證預設載入路徑必然排除。
+    func testGeneratedPricesNeverAutoPriceGrok() {
+        let registry = PricingRegistry.loadDefault(overridesURL: nil)
+        let event = UsageEvent(
+            id: "gk:pricing-test", providerId: "grok-code", projectId: nil, projectName: nil,
+            modelId: "grok-4.3", // 存在於 model-prices-generated.json,仍不得自動套價
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            tokens: TokenBreakdown(input: 1000, output: 0, cacheRead: 0),
+            sourceKind: "grok-session", sourcePath: nil
+        )
+        let cost = registry.cost(of: event)
+        XCTAssertEqual(cost.knownUSD, 0)
+        XCTAssertEqual(cost.unknownModelTokens, 1000, "生成價目的 grok 條目必須被排除在自動計價之外")
+    }
+
+    // 9) model 後援:summary 缺 current_model_id → 用 signals.primaryModelId;皆缺則 nil。
+    func testModelFallbackToSignalsThenNil() throws {
+        let noModelSummary = "{\"info\":{\"id\":\"\(sessionUUID)\",\"cwd\":\"/Users/dev/projects/grok-demo\"}}"
+        let signals = "{\"primaryModelId\":\"grok-4.5-fast\",\"modelsUsed\":[\"grok-4.5-fast\"],\"turnCount\":1}"
+
+        // summary 缺 model → 用 signals.primaryModelId
+        let s1 = try writeSession(lines: [tokenLine(ts: 1_000_000_000, total: 500, eventId: "a")],
+                                  summary: noModelSummary, signals: signals)
+        let (r1, _) = try GrokCodeAdapter(roots: [s1]).refreshUsage(state: ScanState())
+        XCTAssertEqual(r1.events.count, 1)
+        XCTAssertEqual(r1.events[0].modelId, "grok-4.5-fast")
+        XCTAssertEqual(r1.events[0].projectId, "/Users/dev/projects/grok-demo")
+
+        // summary 缺 model 且無 signals → modelId 為 nil
+        let s2 = try writeSession(lines: [tokenLine(ts: 1_000_000_000, total: 500, eventId: "a")],
+                                  summary: noModelSummary, signals: nil)
+        let (r2, _) = try GrokCodeAdapter(roots: [s2]).refreshUsage(state: ScanState())
+        XCTAssertEqual(r2.events.count, 1)
+        XCTAssertNil(r2.events[0].modelId)
+    }
+}

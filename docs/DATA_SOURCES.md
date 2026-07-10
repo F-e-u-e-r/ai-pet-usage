@@ -48,6 +48,28 @@ Deduplication key is `message.id + requestId` (streaming rewrites the same messa
 
 **Fallback estimation.** Without a statusline payload, session logs contain only token counts, so the app estimates the 5-hour window with the standard block rule (first event floors to the hour, window = start + 5h) and shows a percent only when the user sets a token budget in Settings → Limits. Weekly is a rolling 7-day sum. Estimated values are always labelled `estimated`.
 
+## Grok Code (`providerId: grok-code`)
+
+**Paths read**
+
+- `~/.grok/sessions/<url-encoded project path>/<session-id>/updates.jsonl`
+- Sibling `summary.json` and `signals.json` in the same session folder (metadata only).
+- `GROK_HOME` is honored when set — it **replaces** `~/.grok`, so sessions live at `$GROK_HOME/sessions`.
+
+**Lines consumed** (only lines carrying a token counter are parsed; every other line is skipped without parsing)
+
+| line | fields extracted | purpose |
+|---|---|---|
+| `session/update` with `_meta.totalTokens` | `_meta.totalTokens`, `_meta.eventId`, line `timestamp` (epoch seconds; `_meta.agentTimestampMs` as fallback) | token ledger events (per-turn growth of the cumulative counter) |
+| `summary.json` | `current_model_id`, `info.cwd` | model + project attribution |
+| `signals.json` | `primaryModelId` | model attribution fallback only |
+
+The session-folder name is the URL-encoded project path and is decoded to attribute usage to a project. Message contents (`params.update`) are never decoded — each line is read through a narrow parser that only sees the token counter and its metadata.
+
+**Not read**: prompts, assistant/message contents, tool call payloads, `events.jsonl`, search indexes, logs, auth/credential files.
+
+**Token figures are estimates that undercount.** Grok's local log exposes only a cumulative, context-size-like token counter per session, and it even regresses after context compaction (a later line reports a smaller value). The ledger event for each turn is the positive growth of that counter since the previous turn; on a regression the baseline is reset and no negative event is produced. Because the counter tracks context size rather than billed input/output, these figures **undercount actual billed usage** and have no input/output/cache split (all growth is recorded as input, confidence: estimated). **Grok exposes no usage limits locally, so no usage percent is provided.** Grok models are intentionally left **unpriced** in this version — auto-generated price entries are ignored for Grok, so its tokens always appear as "unknown model" rows and are excluded from exact cost totals. Deliberate pricing remains possible via the curated list or a user price override.
+
 ## Limit calculation policy
 
 Policy:

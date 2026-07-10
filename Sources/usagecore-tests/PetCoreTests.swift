@@ -312,8 +312,9 @@ final class CoordinatorIntegrationTests: XCTestCase {
             // 觸發白名單:provider 目錄 + statusline 檔精確路徑
             XCTAssertTrue(plan.triggers.contains(codexRoot.path))
             XCTAssertTrue(plan.triggers.contains(statusFile.path), "statusline file should be a trigger")
-            // claude 已啟用但其記錄目錄不存在 → 尚未全部鎖定 → 應維持快速輪詢
-            XCTAssertFalse(plan.allEnabledRootsWatched, "an enabled provider with a missing root means not all roots are watched")
+            // 語意更新(grok 預設啟用後):未安裝的 provider(根目錄不存在)沒有可監看目標,
+            // 不再擋下慢速 fallback;否則預設啟用而未安裝者會讓使用者永遠停在快速輪詢。
+            XCTAssertTrue(plan.allEnabledRootsWatched, "a missing-root (uninstalled) provider must not block the slow fallback")
             expectation.signal()
         }
         expectation.wait()

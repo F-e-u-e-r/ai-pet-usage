@@ -52,7 +52,12 @@ public struct PricingRegistry: Sendable {
         var entries = bundledPrices(named: "model-prices") ?? builtInDefaults
         if let generated = bundledPrices(named: "model-prices-generated") {
             let curatedKeys = Set(entries.map { $0.providerId + "|" + $0.modelId })
-            entries += generated.filter { !curatedKeys.contains($0.providerId + "|" + $0.modelId) }
+            // grok-code 不從生成價目自動計價:其 token 為 context-growth 低估值,
+            // 自動套價會把粗估偽裝成精確成本(v1 刻意 unpriced;見 docs/DATA_SOURCES.md)。
+            // 手動維護價目與使用者覆寫仍可刻意定價。
+            entries += generated.filter {
+                $0.providerId != "grok-code" && !curatedKeys.contains($0.providerId + "|" + $0.modelId)
+            }
         }
         if let overridesURL, let overrides = AtomicJSON.read([ModelPrice].self, from: overridesURL) {
             for var o in overrides {
