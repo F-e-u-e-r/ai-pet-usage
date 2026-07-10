@@ -1,0 +1,50 @@
+# 價目表機械閘門:任何動到打包價目 JSON 的 PR(含每日定價 routine 的自動 PR)
+# 都必須通過 schema + 漂移驗證,規則見 Scripts/validate-price-list.py。
+#
+# 兩道防繞過設計(審查發現後補強):
+#   1. 觸發路徑包含驗證器與本 workflow 自身 —— 刪除/弱化閘門的 PR 也會跑此 job;
+#   2. PR 上一律執行「base ref 的驗證器副本」—— 同一 PR 無法先改驗證器再夾帶壞資料
+#      (base 尚無腳本時 = 首次引入,才退回使用 head 版本)。
+# 已知且「接受」的殘餘限制:pull_request 執行的是 head 的 workflow 本體,同一 PR
+# 仍可改寫本檔的執行步驟讓綠勾失去意義。目前所有合併皆由 owner 人工執行(diff 可見),
+# 此閘門定位為合併前的機械訊號;若未來啟用任何 auto-merge,必須先以
+# ruleset / CODEOWNERS(.github/workflows/**)或 base-ref 執行模式封死這條路。
+name: pricing-validate
+
+on:
+  pull_request:
+    paths:
+      - 'Sources/UsageCore/Resources/model-prices*.json'
+      - 'Scripts/validate-price-list.py'
+      - '.github/workflows/pricing-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/UsageCore/Resources/model-prices*.json'
+      - 'Scripts/validate-price-list.py'
+      - '.github/workflows/pricing-validate.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 漂移閘門與 base 驗證器副本都需要 base commit 內容
+      - name: Validate price lists
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          VALIDATOR="Scripts/validate-price-list.py"
+          BASE_ARGS=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_ARGS="--base $BASE_SHA"
+            # 以 base ref 的驗證器為準;first-introduction 時 base 沒有此檔,退回 head 版本。
+            if git show "$BASE_SHA:Scripts/validate-price-list.py" > /tmp/validate-base.py 2>/dev/null; then
+              VALIDATOR="/tmp/validate-base.py"
+            else
+              echo "note: base has no validator (first introduction); using head copy"
+            fi
+          fi
+          python3 "$VALIDATOR" $BASE_ARGS

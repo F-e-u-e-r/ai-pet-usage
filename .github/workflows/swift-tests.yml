@@ -1,0 +1,32 @@
+# 完整 Swift 建置 + 測試套件(usagecore-tests,自帶 exit code)。
+# CI runner 的工具鏈健全,直接用原生 swift 即可 —— 本機 Scripts/swiftpm.sh 的
+# workaround 是這台開發機 CommandLineTools 損壞的補救,與 CI 無關。
+# 註:價目 JSON 在 Sources/** 之下,純定價 PR「刻意」也會跑本 job ——
+# Swift Codable 解碼是對價目資料更嚴格的端對端驗證(公開 repo 免費、約 30 秒)。
+name: swift-tests
+
+on:
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Package.swift'
+      - '.github/workflows/swift-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Package.swift'
+      - '.github/workflows/swift-tests.yml'
+
+jobs:
+  tests:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Build
+        run: swift build
+      - name: Run test suite
+        run: swift run usagecore-tests
