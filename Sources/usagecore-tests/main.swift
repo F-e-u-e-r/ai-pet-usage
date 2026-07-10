@@ -38,6 +38,21 @@ runSuite("CodexAdapterTests", [
     ("testIncrementalPreservesContext", codex.testIncrementalPreservesContext),
 ])
 
+let grok = GrokCodeAdapterTests()
+runSuite("GrokCodeAdapterTests", [
+    ("testParsesGrowthCompactionModelAndProject", grok.testParsesGrowthCompactionModelAndProject),
+    ("testCompactionRegressionEmitsNoNegativeOrZero", grok.testCompactionRegressionEmitsNoNegativeOrZero),
+    ("testIncrementalEmitsOnlyNewDelta", grok.testIncrementalEmitsOnlyNewDelta),
+    ("testShrinkTriggersFullRescanWithStableIds", grok.testShrinkTriggersFullRescanWithStableIds),
+    ("testEventIdFallbackToSessionAndOffset", grok.testEventIdFallbackToSessionAndOffset),
+    ("testTimestampSecondsMillisFallbackAndSkip", grok.testTimestampSecondsMillisFallbackAndSkip),
+    ("testPrivacySentinelNeverLeaks", grok.testPrivacySentinelNeverLeaks),
+    ("testAvailabilityFollowsRootExistence", grok.testAvailabilityFollowsRootExistence),
+    ("testModelFallbackToSignalsThenNil", grok.testModelFallbackToSignalsThenNil),
+    ("testGrokEnabledInDefaultSettings", grok.testGrokEnabledInDefaultSettings),
+    ("testGeneratedPricesNeverAutoPriceGrok", grok.testGeneratedPricesNeverAutoPriceGrok),
+])
+
 let ledger = LedgerTests()
 runSuite("LedgerTests", [
     ("testDedupeAndPersistence", ledger.testDedupeAndPersistence),

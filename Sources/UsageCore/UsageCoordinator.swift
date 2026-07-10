@@ -114,9 +114,10 @@ public struct TrendsData: Sendable {
 public struct WatchPlan: Sendable, Equatable {
     public var dirs: [String]       // FSEvents 監看的目錄
     public var triggers: [String]   // 變更路徑「等於或位於其下」命中才觸發 refresh
-    /// 是否「所有已啟用的 provider」都已監看到記錄目錄。false 時(全新安裝尚無目錄、只監看到
-    /// statusline 父目錄,或某個啟用的 provider 目錄還沒出現)維持快速輪詢以儘快發現新目錄;
-    /// 全部鎖定後才切到慢速 fallback,避免第二個 provider 的新目錄要等 fallback 才被發現。
+    /// 是否有任何已啟用的 provider(其「存在的」根目錄皆已納入監看)。false 僅剩「沒有任何
+    /// 啟用中的 provider」一種情況,維持快速輪詢;未安裝(根目錄不存在)的啟用 provider
+    /// 沒有可監看目標,不會擋下慢速 fallback——fallback 每輪重取 watchPlan,
+    /// 新出現的目錄 ≤300s 內即被接手監看。
     public var allEnabledRootsWatched: Bool
     public init(dirs: [String], triggers: [String], allEnabledRootsWatched: Bool) {
         self.dirs = dirs
@@ -154,7 +155,7 @@ public actor UsageCoordinator {
         let dir = dataDir ?? AppPaths.dataDirectory()
         self.dataDir = dir
         self.settings = settings
-        self.adapters = adapters ?? [CodexAdapter(), ClaudeCodeAdapter()]
+        self.adapters = adapters ?? [CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter()]
         self.refreshLockTimeout = refreshLockTimeout
         try? AppPaths.ensureDirectory(dir)
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
@@ -186,13 +187,13 @@ public actor UsageCoordinator {
         var watchDirs: Set<String> = []
         var triggerFiles: Set<String> = []
         var anyEnabled = false
-        var allEnabledRootsWatched = true
         // 只監看已啟用的 provider(refresh() 亦以 enabledProviders 跳過停用者;停用即停止監看其目錄)。
+        // 註:「已啟用但根目錄不存在」(未安裝該 CLI)的 provider 沒有可監看的目標,不再擋下
+        // 300s fallback——否則預設啟用而未安裝的 provider(如 grok-code)會讓使用者永遠停留
+        // 在快速輪詢。fallback 迴圈每輪重取 watchPlan,新出現的目錄 ≤300s 內即被接手監看。
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
             anyEnabled = true
-            let roots = adapter.roots
-            if roots.isEmpty { allEnabledRootsWatched = false }   // 該 provider 的記錄目錄尚未出現
-            for root in roots {
+            for root in adapter.roots {
                 providerDirs.insert(root.path)
                 watchDirs.insert(root.path)
             }
@@ -204,7 +205,7 @@ public actor UsageCoordinator {
         }
         return WatchPlan(dirs: watchDirs.sorted(),
                          triggers: providerDirs.union(triggerFiles).sorted(),
-                         allEnabledRootsWatched: anyEnabled && allEnabledRootsWatched)
+                         allEnabledRootsWatched: anyEnabled)
     }
 
     // MARK: 刷新
