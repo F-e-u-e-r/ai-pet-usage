@@ -8,6 +8,29 @@ public enum PetSpecies: String, Codable, CaseIterable, Sendable {
 
     /// 選單列/面板開頭的物種標記(spec:menu bar 以所選寵物開頭,取代 🐾/警示 emoji)。
     public var emoji: String { self == .dog ? "🐶" : "🐱" }
+
+    // MARK: - EngineV2 pack id 相容層(M2 §3-A;enum 為 legacy 儲存形態)
+
+    /// EngineV2 SpeciesPack id(enum → pack id:dog→"dog"、cat→"cat")。
+    public var packId: String { rawValue }
+
+    /// pack id → legacy 物種;未知 id 回 nil(呼叫端依 flag 矩陣落到 "dog")。
+    public init?(packId: String) {
+        self.init(rawValue: packId)
+    }
+
+    /// settings facade 的共用語意(FIX-4):儲存的覆寫 id 優先,否則 enum 對映。
+    /// `AppSettings.speciesPackId` 委派此處 —— 讓 bird 等未來 pack id 可經
+    /// `speciesPackIdOverride` 到達,而儲存的 species enum 保持不動。
+    public static func effectivePackId(override: String?, stored: PetSpecies) -> String {
+        override ?? stored.packId
+    }
+
+    /// pack id 解析為 legacy 物種:未知 id → .dog(flag 矩陣:未知→"dog";
+    /// `AppSettings.resolvedSpecies` 委派此處,override 存在時此路徑真正可達)。
+    public static func resolved(fromPackId id: String) -> PetSpecies {
+        PetSpecies(packId: id) ?? .dog
+    }
 }
 
 /// 規格要求的十種狀態。

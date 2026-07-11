@@ -10,10 +10,12 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private weak var model: AppModel?
     private var wanderTask: Task<Void, Never>?
+    /// petEngineV2 flag 開啟時的新引擎 Bridge;flag 關(預設)完全不建立。
+    private var engineV2Driver: EngineV2Driver?
     /// 手動拖曳的位置持久化去抖:每個 windowDidMove 取消上一個,拖曳靜止後才寫一次 settings.json。
     private var positionSaveTask: Task<Void, Never>?
     /// 漫遊位移期間為 true,windowDidMove 據此略過位置持久化(避免每秒十餘次寫檔)。
-    private var isWanderMoving = false
+    var isWanderMoving = false   // internal:EngineV2Driver(30Hz origin 寫入)沿用同一抑制旗標(FIX-7)
     private var wanderHeading: Int = 1
     private var wanderPhaseUntil: Date = .distantPast
 
@@ -91,15 +93,22 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         if panel == nil { panel = makePanel() }
         panel?.orderFrontRegardless()
         restartWanderLoop()
+        if EngineV2.isEnabled, let panel {
+            if engineV2Driver == nil { engineV2Driver = EngineV2Driver(panel: panel, model: model, controller: self) }
+            engineV2Driver?.start()
+        }
     }
 
     func hide() {
         panel?.orderOut(nil)
         stopWanderLoop()
+        engineV2Driver?.stop()
     }
 
     func destroy() {
         stopWanderLoop()
+        engineV2Driver?.stop()
+        engineV2Driver = nil
         // 拖曳去抖尚未落地就 teardown(例如切到 monitor-only)會遺失最後位置,先補寫一次再取消。
         if positionSaveTask != nil, let panel, !isWanderMoving {
             model?.savePetPosition(panel.frame.origin)
@@ -153,6 +162,7 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     private func restartWanderLoop() {
         stopWanderLoop()
+        guard !EngineV2.isEnabled else { return }   // flag 開:舊 wander 停用,運動交給 EngineV2
         guard model?.settings.petWanderEnabled == true else { return }
         wanderTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -294,9 +304,9 @@ struct PetView: View {
         TimelineView(.animation(minimumInterval: 1.0 / 10, paused: paused)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let walking = model.wanderDirection != 0
-            let state = PixelPets.animState(for: mood.mood, walking: walking, species: settings.species)
-            let sprite = PixelPets.sprite(for: settings.species)
-            let rows = animator.frame(species: settings.species, target: state, sprite: sprite,
+            let state = PixelPets.animState(for: mood.mood, walking: walking, species: settings.resolvedSpecies)
+            let sprite = PixelPets.sprite(for: settings.resolvedSpecies)
+            let rows = animator.frame(species: settings.resolvedSpecies, target: state, sprite: sprite,
                                       at: context.date, reduceMotion: paused,
                                       speed: mood.animationSpeed)
 
@@ -522,7 +532,7 @@ struct PetContextMenu: View {
 
     var body: some View {
         Section("Give Treat (\(model.treatsAvailable))") {
-            ForEach(FoodItem.foods(for: model.settings.species)) { food in
+            ForEach(FoodItem.foods(for: model.settings.resolvedSpecies)) { food in
                 Button("\(food.emoji) \(food.name)\(food.treatCost > 0 ? "  — \(food.treatCost)🎟" : "")") {
                     _ = model.feed(food)
                 }

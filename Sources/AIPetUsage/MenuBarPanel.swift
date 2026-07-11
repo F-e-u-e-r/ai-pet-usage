@@ -74,7 +74,7 @@ private struct PanelHeader: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(model.menuBarPetEmoji).font(.system(size: 15))
-                Text(model.settings.appMode == .full ? model.settings.species.displayName : "AI Pet Usage")
+                Text(model.settings.appMode == .full ? model.settings.resolvedSpecies.displayName : "AI Pet Usage")
                     .font(.headline)
                 Spacer()
                 if model.settings.appMode == .full {
@@ -242,7 +242,7 @@ private struct GiveTreatSection: View {
             expanded.toggle()
         }
         if expanded {
-            ForEach(FoodItem.foods(for: model.settings.species)) { food in
+            ForEach(FoodItem.foods(for: model.settings.resolvedSpecies)) { food in
                 PanelActionRow(title: "\(food.emoji) \(food.name)",
                                trailing: costLabel(food), indent: 14) {
                     _ = model.feed(food)

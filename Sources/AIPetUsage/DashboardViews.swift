@@ -409,7 +409,7 @@ struct TodayView: View {
                              caption: burnCaption(dash))
                     if model.settings.appMode == .full {
                         StatTile(title: "Pet",
-                                 value: "\(model.settings.species.displayName) · \(model.mood.mood.rawValue)",
+                                 value: "\(model.settings.resolvedSpecies.displayName) · \(model.mood.mood.rawValue)",
                                  caption: "Lv.\(model.petState.level) · fullness \(Int(model.petState.hunger))%")
                             .help(PetInfo.tooltip)
                     }
