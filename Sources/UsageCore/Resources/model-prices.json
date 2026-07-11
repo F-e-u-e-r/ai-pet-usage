@@ -332,5 +332,17 @@
     "effectiveFrom": "2025-08-07",
     "source": "openai.com/api/pricing (snapshot; superseded models may leave the official page)",
     "userOverride": false
+  },
+  {
+    "providerId": "grok-code",
+    "modelId": "grok-4.5",
+    "displayName": "Grok 4.5",
+    "inputPerMillion": 2,
+    "outputPerMillion": 6,
+    "cacheReadPerMillion": 0.5,
+    "currency": "USD",
+    "effectiveFrom": "2026-07-08",
+    "source": "docs.x.ai/docs/models cross-checked vs OpenRouter (2026-07-11). NOTE: grok token counts are context-growth estimates that undercount billed usage, so costs here are LOWER-BOUND estimates. grok-composer-2.5-fast deliberately absent: no price on docs.x.ai or OpenRouter.",
+    "userOverride": false
   }
 ]
