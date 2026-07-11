@@ -36,15 +36,20 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          VALIDATOR="Scripts/validate-price-list.py"
-          BASE_ARGS=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_ARGS="--base $BASE_SHA"
-            # 以 base ref 的驗證器為準;first-introduction 時 base 沒有此檔,退回 head 版本。
+            # 雙跑,兩者皆須通過:
+            #   base 副本 = 強制閘門(同一 PR 改不掉的既定規則);
+            #   head 副本 = 驗證器自身健康檢查 —— 沒有這一跑,修改驗證器的 PR
+            #   永遠不會執行到新版程式,語法/執行期錯誤會靜默合併後才炸在 main。
             if git show "$BASE_SHA:Scripts/validate-price-list.py" > /tmp/validate-base.py 2>/dev/null; then
-              VALIDATOR="/tmp/validate-base.py"
+              echo "== enforcing gates with BASE validator =="
+              python3 /tmp/validate-base.py --base "$BASE_SHA"
+              echo "== running HEAD validator (script health check) =="
+              python3 Scripts/validate-price-list.py --base "$BASE_SHA"
             else
               echo "note: base has no validator (first introduction); using head copy"
+              python3 Scripts/validate-price-list.py --base "$BASE_SHA"
             fi
+          else
+            python3 Scripts/validate-price-list.py
           fi
-          python3 "$VALIDATOR" $BASE_ARGS
