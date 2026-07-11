@@ -1481,6 +1481,22 @@ final class GrokCodeAdapterTests: XCTestCase {
         XCTAssertEqual(cost.unknownModelTokens, 1000, "生成價目的 grok 條目必須被排除在自動計價之外")
     }
 
+    // 12) 生成排除的對偶:curated 人工驗證條目「刻意計價」的通道必須有效
+    //     (grok-4.5 已依 docs.x.ai 驗證入表;成本為低估值,見 DATA_SOURCES.md)。
+    func testCuratedEntryDeliberatelyPricesGrok() {
+        let registry = PricingRegistry.loadDefault(overridesURL: nil)
+        let event = UsageEvent(
+            id: "gk:curated-pricing-test", providerId: "grok-code", projectId: nil, projectName: nil,
+            modelId: "grok-4.5",
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            tokens: TokenBreakdown(input: 1_000_000, output: 0, cacheRead: 0),
+            sourceKind: "grok-session", sourcePath: nil
+        )
+        let cost = registry.cost(of: event)
+        XCTAssertEqual(cost.knownUSD, 2.0, accuracy: 0.001, "curated grok-4.5 必須以 $2/M input 計價")
+        XCTAssertEqual(cost.unknownModelTokens, 0)
+    }
+
     // 9) model 後援:summary 缺 current_model_id → 用 signals.primaryModelId;皆缺則 nil。
     func testModelFallbackToSignalsThenNil() throws {
         let noModelSummary = "{\"info\":{\"id\":\"\(sessionUUID)\",\"cwd\":\"/Users/dev/projects/grok-demo\"}}"

@@ -51,6 +51,7 @@ runSuite("GrokCodeAdapterTests", [
     ("testModelFallbackToSignalsThenNil", grok.testModelFallbackToSignalsThenNil),
     ("testGrokEnabledInDefaultSettings", grok.testGrokEnabledInDefaultSettings),
     ("testGeneratedPricesNeverAutoPriceGrok", grok.testGeneratedPricesNeverAutoPriceGrok),
+    ("testCuratedEntryDeliberatelyPricesGrok", grok.testCuratedEntryDeliberatelyPricesGrok),
 ])
 
 let ledger = LedgerTests()
