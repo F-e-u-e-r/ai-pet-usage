@@ -58,7 +58,23 @@ struct AppSettings: Codable {
     var dailyExportMinute: Int = 0
     var dailyExportRangeDays: Int = 30
     var dailyExportFolderPath: String?
+    /// EngineV2 pack id 儲存覆寫(FIX-4):非 nil 時優先於 `species` enum 對映。
+    /// bird 等尚無 enum case 的 pack id 由此到達(flag 後偵錯/前向相容通道,E1 無 UI);
+    /// 儲存的 `species` enum 保持不動。
+    var speciesPackIdOverride: String?
     var core = CoreSettings()
+
+    // MARK: - EngineV2 pack id 相容 facade(M2 §3-A;語意委派 PetSpecies,PetCore 端可測)
+
+    /// 物種的 SpeciesPack id:`speciesPackIdOverride ?? species.packId`。
+    /// 消費端一律經 facade 讀取,E2+ 新物種(bird…)落地時只擴 pack 資料面。
+    var speciesPackId: String {
+        PetSpecies.effectivePackId(override: speciesPackIdOverride, stored: species)
+    }
+
+    /// pack id 反解出 legacy 物種(過渡期 UI 與 legacy 渲染仍吃 enum)。
+    /// 未知 pack id → .dog(flag 矩陣:settings 遷移未知→"dog";override 存在時真正可達)。
+    var resolvedSpecies: PetSpecies { PetSpecies.resolved(fromPackId: speciesPackId) }
 
     init() {}
 
@@ -70,6 +86,7 @@ struct AppSettings: Codable {
         case notificationsEnabled, launchAtLogin, petPositionX, petPositionY
         case menuBarDisplayMode, alertsSnoozedUntil
         case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
+        case speciesPackIdOverride
         case core
     }
 
@@ -96,6 +113,7 @@ struct AppSettings: Codable {
         dailyExportMinute = (try? c.decodeIfPresent(Int.self, forKey: .dailyExportMinute)) ?? 0 ?? 0
         dailyExportRangeDays = (try? c.decodeIfPresent(Int.self, forKey: .dailyExportRangeDays)) ?? 30 ?? 30
         dailyExportFolderPath = (try? c.decodeIfPresent(String.self, forKey: .dailyExportFolderPath)) ?? nil
+        speciesPackIdOverride = (try? c.decodeIfPresent(String.self, forKey: .speciesPackIdOverride)) ?? nil
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
     }
 }

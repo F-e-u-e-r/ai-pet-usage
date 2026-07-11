@@ -379,7 +379,7 @@ final class AppModel {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let summary = settings.appMode == .full
-            ? "\(settings.species.displayName) mood: \(mood.mood.rawValue) · level \(petState.level) · \(mood.summary)"
+            ? "\(settings.resolvedSpecies.displayName) mood: \(mood.mood.rawValue) · level \(petState.level) · \(mood.summary)"
             : nil
         Task {
             do {
@@ -444,7 +444,7 @@ final class AppModel {
 
     /// 選單列開頭標記:full 模式用所選物種,monitor-only 用 🐾。
     var menuBarPetEmoji: String {
-        settings.appMode == .full ? settings.species.emoji : "🐾"
+        settings.appMode == .full ? settings.resolvedSpecies.emoji : "🐾"
     }
 
     /// Full 模式且完全無資料時顯示「—」佔位;Compact/PetOnly 留空是語意本身。
@@ -455,7 +455,7 @@ final class AppModel {
     /// 輔助功能全句(spec §11):全名 + severity,不得只給短代號。
     var menuBarAccessibilityLabel: String {
         MenuBadgeBuilder.accessibilitySummary(
-            petName: settings.appMode == .full ? settings.species.displayName : "AI Pet Usage",
+            petName: settings.appMode == .full ? settings.resolvedSpecies.displayName : "AI Pet Usage",
             badges: menuBarBadges)
     }
 

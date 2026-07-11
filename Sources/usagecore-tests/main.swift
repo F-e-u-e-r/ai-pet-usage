@@ -191,4 +191,134 @@ runSuite("HourlyBreakdownTests", [
     ("testBucketsCarryBreakdownAndTopProject", hourly.testBucketsCarryBreakdownAndTopProject),
 ])
 
+let engineGoldenA = EngineV2GoldenSetATests()
+runSuite("EngineV2GoldenSetATests", [
+    ("testFreeFall", engineGoldenA.testFreeFall),
+    ("testHorizontalGlide", engineGoldenA.testHorizontalGlide),
+    ("testFlapArc", engineGoldenA.testFlapArc),
+    ("testEscapeCap", engineGoldenA.testEscapeCap),
+])
+
+let engineDeterminism = EngineV2DeterminismTests()
+runSuite("EngineV2DeterminismTests", [
+    ("testXorshiftKnownValues", engineDeterminism.testXorshiftKnownValues),
+    ("testBehaviorGraphSameSeedBitIdentical", engineDeterminism.testBehaviorGraphSameSeedBitIdentical),
+    ("testEngineLoopSameSeedBitIdentical", engineDeterminism.testEngineLoopSameSeedBitIdentical),
+    ("testMotionSameScriptBitIdentical", engineDeterminism.testMotionSameScriptBitIdentical),
+])
+
+let engineRegions = EngineV2RegionMapTests()
+runSuite("EngineV2RegionMapTests", [
+    ("testGeometryFormulas", engineRegions.testGeometryFormulas),
+    ("testShortScreenWaterBandNeverEmpty", engineRegions.testShortScreenWaterBandNeverEmpty),
+])
+
+let engineScenarios = EngineV2MotionScenarioTests()
+runSuite("EngineV2MotionScenarioTests", [
+    ("testDragFlingSoftLanding", engineScenarios.testDragFlingSoftLanding),
+    ("testHardFlingCapsAndEventuallyLands", engineScenarios.testHardFlingCapsAndEventuallyLands),
+    ("testLargeDTClamped", engineScenarios.testLargeDTClamped),
+    ("testNaNReleaseModeRecovers", engineScenarios.testNaNReleaseModeRecovers),
+    ("testNaNDebugModeTraps", engineScenarios.testNaNDebugModeTraps),
+    ("testCeilingAndWallBounce", engineScenarios.testCeilingAndWallBounce),
+])
+
+let engineProfiles = EngineV2ProfileScenarioTests()
+runSuite("EngineV2ProfileScenarioTests", [
+    ("testFlyerHoverStaysInBand", engineProfiles.testFlyerHoverStaysInBand),
+    ("testFlyerHoverShortScreen", engineProfiles.testFlyerHoverShortScreen),
+    ("testSwimmerLeavesWaterBallisticReturn", engineProfiles.testSwimmerLeavesWaterBallisticReturn),
+    ("testSwimmerNeutralBuoyancy", engineProfiles.testSwimmerNeutralBuoyancy),
+    ("testWalkerCruiseTargetVelocity", engineProfiles.testWalkerCruiseTargetVelocity),
+])
+
+let engineGraph = EngineV2BehaviorGraphTests()
+runSuite("EngineV2BehaviorGraphTests", [
+    ("testZeroWeightRowFallsBackToIdle", engineGraph.testZeroWeightRowFallsBackToIdle),
+    ("testQuietAndReduceMotionMask", engineGraph.testQuietAndReduceMotionMask),
+    ("testRegionConditionedEdges", engineGraph.testRegionConditionedEdges),
+    ("testMoodTierDistanceDecay", engineGraph.testMoodTierDistanceDecay),
+    ("testGlobalPriorityOrder", engineGraph.testGlobalPriorityOrder),
+])
+
+let enginePacks = EngineV2PackTests()
+runSuite("EngineV2PackTests", [
+    ("testRegistryRegisterAndLookup", enginePacks.testRegistryRegisterAndLookup),
+    ("testBirdPackFramesWellFormed", enginePacks.testBirdPackFramesWellFormed),
+    ("testBrokenPackFallbackResolution", enginePacks.testBrokenPackFallbackResolution),
+    ("testBirdFallbackChainPrefersDeclaredOrder", enginePacks.testBirdFallbackChainPrefersDeclaredOrder),
+])
+
+let engineLoopTests = EngineV2LoopTests()
+runSuite("EngineV2LoopTests", [
+    ("testExactlyOneCommitPerTick", engineLoopTests.testExactlyOneCommitPerTick),
+    ("testWorking1OverlayMoodReshape", engineLoopTests.testWorking1OverlayMoodReshape),
+    ("testDragLanePreemptsGraphFlavor", engineLoopTests.testDragLanePreemptsGraphFlavor),
+    ("testMasksAndDisabledActionsInLoop", engineLoopTests.testMasksAndDisabledActionsInLoop),
+])
+
+let engineGovernor = EngineV2GovernorAndFlagTests()
+runSuite("EngineV2GovernorAndFlagTests", [
+    ("testGovernorStopsWithinFiveSeconds", engineGovernor.testGovernorStopsWithinFiveSeconds),
+    ("testFlagOffByDefaultAndLegacySnapshotUnchanged", engineGovernor.testFlagOffByDefaultAndLegacySnapshotUnchanged),
+    ("testFrozenConstants", engineGovernor.testFrozenConstants),
+])
+
+let engineDragRecognizer = EngineV2DragRecognizerTests()
+runSuite("EngineV2DragRecognizerTests", [
+    ("testPressBelowThresholdsIsClick", engineDragRecognizer.testPressBelowThresholdsIsClick),
+    ("testBoundaryExactlyFourPxAnd120msIsDrag", engineDragRecognizer.testBoundaryExactlyFourPxAnd120msIsDrag),
+    ("testMaxDistanceRetainedWhenReturningNearOrigin", engineDragRecognizer.testMaxDistanceRetainedWhenReturningNearOrigin),
+    ("testStickyUntilEndedAndBeganResets", engineDragRecognizer.testStickyUntilEndedAndBeganResets),
+    ("testAgreesWithFrozenPredicate", engineDragRecognizer.testAgreesWithFrozenPredicate),
+])
+
+let engineInteractionLane = EngineV2InteractionLaneTests()
+runSuite("EngineV2InteractionLaneTests", [
+    ("testQueuedInteractionPreemptsImmediately", engineInteractionLane.testQueuedInteractionPreemptsImmediately),
+    ("testInteractionLaneFrozenWhileDragging", engineInteractionLane.testInteractionLaneFrozenWhileDragging),
+    ("testInteractionPlaysThenGraphResumes", engineInteractionLane.testInteractionPlaysThenGraphResumes),
+    ("testDeterminismWithInteractionSchedule", engineInteractionLane.testDeterminismWithInteractionSchedule),
+])
+
+let engineMutationGuard = EngineV2MutationGuardTests()
+runSuite("EngineV2MutationGuardTests", [
+    ("testGoldenGateCanFail", engineMutationGuard.testGoldenGateCanFail),
+    ("testFrozenDecelSetMatchesLaw", engineMutationGuard.testFrozenDecelSetMatchesLaw),
+])
+
+let engineLegacyPacks = EngineV2LegacyPackTests()
+runSuite("EngineV2LegacyPackTests", [
+    ("testDogPackFramesIdenticalToLegacy", engineLegacyPacks.testDogPackFramesIdenticalToLegacy),
+    ("testCatPackFramesIdenticalToLegacy", engineLegacyPacks.testCatPackFramesIdenticalToLegacy),
+    ("testMissingLegacyStatesResolveLikeLegacyFallback", engineLegacyPacks.testMissingLegacyStatesResolveLikeLegacyFallback),
+    ("testPackMetadataMatchesLegacy", engineLegacyPacks.testPackMetadataMatchesLegacy),
+    ("testActionIDMappingIsRawValuePassthrough", engineLegacyPacks.testActionIDMappingIsRawValuePassthrough),
+    ("testSpeciesPackIdMapping", engineLegacyPacks.testSpeciesPackIdMapping),
+    ("testDogPackDrivesEngineLoop", engineLegacyPacks.testDogPackDrivesEngineLoop),
+])
+
+let engineBridgeLogic = EngineV2BridgeLogicTests()
+runSuite("EngineV2BridgeLogicTests", [
+    ("testDirectiveRearmCycleActiveDockedActive", engineBridgeLogic.testDirectiveRearmCycleActiveDockedActive),
+    ("testDockTenSecondsSleepFiveSeconds", engineBridgeLogic.testDockTenSecondsSleepFiveSeconds),
+    ("testPackSwitchRebuildPreservesPositionAndUsesNewFrames", engineBridgeLogic.testPackSwitchRebuildPreservesPositionAndUsesNewFrames),
+    ("testPackIdOverrideFacadeAndUnknownResolution", engineBridgeLogic.testPackIdOverrideFacadeAndUnknownResolution),
+])
+
+let engineLocomotionGlue = EngineV2LocomotionGlueTests()
+runSuite("EngineV2LocomotionGlueTests", [
+    ("testBirdGroundEdgeAllowsFlyFlapFromIdle", engineLocomotionGlue.testBirdGroundEdgeAllowsFlyFlapFromIdle),
+    ("testFlyerTakesOffFromGroundViaFlyFlap", engineLocomotionGlue.testFlyerTakesOffFromGroundViaFlyFlap),
+    ("testWalkerWalkCruisesAndTurnsAtBounds", engineLocomotionGlue.testWalkerWalkCruisesAndTurnsAtBounds),
+    ("testWalkerIdleHasNoDrift", engineLocomotionGlue.testWalkerIdleHasNoDrift),
+])
+
+let engineLocomotionGate = EngineV2LocomotionGateTests()
+runSuite("EngineV2LocomotionGateTests", [
+    ("testReduceMotionFlyerSettlesWithoutImpulses", engineLocomotionGate.testReduceMotionFlyerSettlesWithoutImpulses),
+    ("testQuietSwimmerStopsDrifting", engineLocomotionGate.testQuietSwimmerStopsDrifting),
+    ("testWanderDisabledStopsCruiseButKeepsPoseCycle", engineLocomotionGate.testWanderDisabledStopsCruiseButKeepsPoseCycle),
+])
+
 finishTestRun()
