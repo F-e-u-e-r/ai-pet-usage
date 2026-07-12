@@ -272,6 +272,23 @@ runSuite("EngineV2PackTests", [
     ("testBirdPackFramesWellFormed", enginePacks.testBirdPackFramesWellFormed),
     ("testBrokenPackFallbackResolution", enginePacks.testBrokenPackFallbackResolution),
     ("testBirdFallbackChainPrefersDeclaredOrder", enginePacks.testBirdFallbackChainPrefersDeclaredOrder),
+    // E2a 真美術 golden + palette 契約
+    ("testBirdArtPaletteAndFrameVariety", enginePacks.testBirdArtPaletteAndFrameVariety),
+    ("testBirdBehaviorTableFrozenAcrossArtSwap", enginePacks.testBirdBehaviorTableFrozenAcrossArtSwap),
+    ("testPackPalettePropagationAndDefault", enginePacks.testPackPalettePropagationAndDefault),
+    ("testPackDisplayInfo", enginePacks.testPackDisplayInfo),
+])
+
+let wanderBand = WanderBandTests()
+runSuite("WanderBandTests", [
+    ("testFullRangeEqualsWholeScreen", wanderBand.testFullRangeEqualsWholeScreen),
+    ("testNarrowBandCentersOnHome", wanderBand.testNarrowBandCentersOnHome),
+    ("testHomeNearEdgeClampsIntoScreen", wanderBand.testHomeNearEdgeClampsIntoScreen),
+    ("testOriginRangeConversionAndNarrowedFrame", wanderBand.testOriginRangeConversionAndNarrowedFrame),
+    ("testV2AndLegacyBandsAgreeOnCenterInterval", wanderBand.testV2AndLegacyBandsAgreeOnCenterInterval),
+    ("testClampRangePercent", wanderBand.testClampRangePercent),
+    ("testDegenerateScreenReturnsSinglePoint", wanderBand.testDegenerateScreenReturnsSinglePoint),
+    ("testMotionClampHorizontally", wanderBand.testMotionClampHorizontally),
 ])
 
 let engineLoopTests = EngineV2LoopTests()

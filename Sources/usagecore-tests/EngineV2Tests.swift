@@ -107,7 +107,7 @@ final class EngineV2DeterminismTests: XCTestCase {
     /// 行為圖決定性:同 seed + 同輸入序列 → 動作序列完全一致。
     func testBehaviorGraphSameSeedBitIdentical() throws {
         func run(seed: UInt64) -> [String] {
-            let graph = BehaviorGraph(table: SpeciesPacks.birdPlaceholder().behavior)
+            let graph = BehaviorGraph(table: SpeciesPacks.birdPack().behavior)
             var rng: any RandomNumberGenerator = SeededRNG(seed: seed)
             let available: Set<PetActionID> = [.idle, .flyFlap, .glide, .working1]
             var current = PetActionID.idle
@@ -129,7 +129,7 @@ final class EngineV2DeterminismTests: XCTestCase {
         func run() -> [(CGFloat, CGFloat, String, Int, Bool)] {
             let regions = standardRegions()
             let spy = PoseSpy()
-            let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+            let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                                   position: CGPoint(x: 400, y: 350), regions: regions, seed: 7)
             loop.presenter = spy
             for _ in 0..<400 { loop.tick(dt: 1.0 / 30, regions: regions) }
@@ -507,7 +507,7 @@ final class EngineV2PackTests: XCTestCase {
 
     func testRegistryRegisterAndLookup() throws {
         let registry = PackRegistry()
-        let bird = SpeciesPacks.birdPlaceholder()
+        let bird = SpeciesPacks.birdPack()
         registry.register(bird)
         XCTAssertNotNil(registry.pack(id: "bird"))
         XCTAssertNil(registry.pack(id: "ghost-species"))
@@ -516,7 +516,7 @@ final class EngineV2PackTests: XCTestCase {
 
     /// 鳥佔位包:24×24 網格全幀 well-formed(沿 PixelArtTests 慣例)、必要槽位齊備。
     func testBirdPackFramesWellFormed() throws {
-        let bird = SpeciesPacks.birdPlaceholder()
+        let bird = SpeciesPacks.birdPack()
         XCTAssertEqual(bird.gridWidth, 24)
         XCTAssertEqual(bird.gridHeight, 24)
         for slot in bird.requiredSlots {
@@ -562,10 +562,168 @@ final class EngineV2PackTests: XCTestCase {
     /// 鳥包 fallback:glide 缺幀時應解析到 flyFlap(mid-chain 首個有幀者)。
     func testBirdFallbackChainPrefersDeclaredOrder() throws {
         let registry = PackRegistry()
-        var bird = SpeciesPacks.birdPlaceholder()
+        var bird = SpeciesPacks.birdPack()
         bird.frames[.glide] = []   // 人工移除 glide 幀
         registry.register(bird)
         XCTAssertEqual(registry.resolve(.glide, in: bird), PetActionID.flyFlap)
+    }
+
+    // MARK: E2a 真美術 golden(換皮不換行為;palette 契約)
+
+    /// palette 契約:≤9 色(M2 §4 硬上限)、全幀字元 ⊆ palette∪{.}、
+    /// idle 兩幀相異(呼吸)、flyFlap 四幀翅位相異(四相拍翅)。
+    func testBirdArtPaletteAndFrameVariety() throws {
+        let bird = SpeciesPacks.birdPack()
+        XCTAssertFalse(bird.palette.isEmpty, "真美術必附 palette")
+        XCTAssertTrue(bird.palette.count <= 9, "M2 §4:每物種 ≤9 色(現 \(bird.palette.count))")
+        for (action, frames) in bird.frames {
+            for (i, frame) in frames.enumerated() {
+                let extraneous = Set(frame).subtracting(bird.palette.keys).subtracting(["\n", "."])
+                XCTAssertTrue(extraneous.isEmpty,
+                              "\(action.rawValue)[\(i)] 含 palette 外字元 \(extraneous)")
+            }
+        }
+        let idle = bird.frames[.idle]!
+        XCTAssertTrue(idle[0] != idle[1], "idle 兩幀必須相異(呼吸)")
+        let flap = bird.frames[.flyFlap]!
+        XCTAssertEqual(Set(flap).count, 4, "flyFlap 四幀翅位必須各不相同")
+        // 使用者指定配色落地:主體藍、喙腳橘(k = 0xE8823A,與 app 暖色一致)。
+        XCTAssertEqual(bird.palette["k"], 0xE8823A)
+        XCTAssertEqual(bird.palette["b"], 0x4C8DE8)
+    }
+
+    /// 行為表凍結 golden:美術換皮不得動行為(權重/邊/槽位/fallback/錨點逐項釘住)。
+    func testBirdBehaviorTableFrozenAcrossArtSwap() throws {
+        let bird = SpeciesPacks.birdPack()
+        XCTAssertEqual(bird.requiredSlots, [PetActionID.idle, PetActionID.drag])
+        XCTAssertEqual(bird.optionalSlots, [PetActionID.glide, PetActionID.working1])
+        XCTAssertEqual(bird.fallback, [.glide: .flyFlap, .working1: .idle, .float: .idle])
+        XCTAssertEqual(bird.behavior.moodTier,
+                       [.idle: 0, .flyFlap: 0, .glide: 0, .working1: 1, .drag: 0])
+        let idleEdges = bird.behavior.rows[.idle]!
+        XCTAssertEqual(idleEdges.count, 5)
+        XCTAssertEqual(idleEdges.map(\.weight), [3, 2, 1, 1.5, 2])
+        XCTAssertEqual(bird.anchorOffsets[.flyFlap], CGPoint(x: 0, y: -1))
+        XCTAssertEqual(bird.anchorOffsets[.drag], CGPoint(x: 0, y: 1))
+    }
+
+    /// legacy pack 的 palette 傳遞:狗/貓 pack 直接帶 legacy sprite palette;
+    /// palette 為 init 預設參數 — 未附美術的 pack(brokenSample)維持空(相容)。
+    func testPackPalettePropagationAndDefault() throws {
+        XCTAssertEqual(SpeciesPacks.dogPack().palette,
+                       PixelPets.sprite(for: .dog).palette)
+        XCTAssertEqual(SpeciesPacks.catPack().palette,
+                       PixelPets.sprite(for: .cat).palette)
+        XCTAssertTrue(SpeciesPacks.brokenSample().palette.isEmpty)
+    }
+
+    /// pack 顯示資訊(B5):bird 有名字與 emoji;未知 id 回 nil(UI fallback 到 enum)。
+    func testPackDisplayInfo() throws {
+        XCTAssertEqual(SpeciesPacks.displayInfo(packId: "bird")?.name, "Bird")
+        XCTAssertEqual(SpeciesPacks.displayInfo(packId: "bird")?.emoji, "🐦")
+        XCTAssertEqual(SpeciesPacks.displayInfo(packId: "dog")?.name, PetSpecies.dog.displayName)
+        XCTAssertNil(SpeciesPacks.displayInfo(packId: "ghost"))
+    }
+}
+
+// MARK: - 漫遊範圍帶(A1;center-x 座標契約)
+
+final class WanderBandTests: XCTestCase {
+    let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
+
+    func testFullRangeEqualsWholeScreen() {
+        let band = WanderBand.centerBand(homeCenterX: 500, rangePercent: 100,
+                                         screen: screen, petWidth: 200)
+        XCTAssertEqual(band.lowerBound, 112)   // minX + margin 12 + petW/2
+        XCTAssertEqual(band.upperBound, 888)
+        // range=100 與 home 無關(整幕;原行為)。
+        let band2 = WanderBand.centerBand(homeCenterX: 50, rangePercent: 100,
+                                          screen: screen, petWidth: 200)
+        XCTAssertEqual(band, band2)
+    }
+
+    func testNarrowBandCentersOnHome() {
+        let band = WanderBand.centerBand(homeCenterX: 500, rangePercent: 40,
+                                         screen: screen, petWidth: 200)
+        XCTAssertEqual(band.lowerBound, 300)   // 500 − 40%×1000/2
+        XCTAssertEqual(band.upperBound, 700)
+    }
+
+    func testHomeNearEdgeClampsIntoScreen() {
+        // home 貼左緣:帶下界夾到可行下限,上界仍為 home+half(帶寬縮小、不外溢)。
+        let band = WanderBand.centerBand(homeCenterX: 120, rangePercent: 40,
+                                         screen: screen, petWidth: 200)
+        XCTAssertEqual(band.lowerBound, 112)
+        XCTAssertEqual(band.upperBound, 320)
+        // home 貼右緣對稱。
+        let right = WanderBand.centerBand(homeCenterX: 880, rangePercent: 40,
+                                          screen: screen, petWidth: 200)
+        XCTAssertEqual(right.lowerBound, 680)
+        XCTAssertEqual(right.upperBound, 888)
+    }
+
+    func testOriginRangeConversionAndNarrowedFrame() {
+        let band = WanderBand.centerBand(homeCenterX: 500, rangePercent: 40,
+                                         screen: screen, petWidth: 200)
+        let origin = WanderBand.originRange(centerBand: band, petWidth: 200)
+        XCTAssertEqual(origin.lowerBound, 200)   // center 300 − 100
+        XCTAssertEqual(origin.upperBound, 600)
+        // V2 bounds = center band 本身(雙審 P1:不得加 petWidth 外接半寬,
+        // Motion 夾的就是 center-x)。
+        let narrowed = WanderBand.narrowedFrame(visibleFrame: screen, centerBand: band)
+        XCTAssertEqual(narrowed.minX, 300)
+        XCTAssertEqual(narrowed.maxX, 700)
+        XCTAssertEqual(narrowed.minY, screen.minY)
+        XCTAssertEqual(narrowed.height, screen.height)   // §4 高度公式的輸入不受影響
+    }
+
+    /// V2 與 legacy 同一 centerBand:legacy origin 帶反推回 center 後必須恰等於
+    /// V2 bounds — 同設定同帶寬(雙審 P1 的等價釘)。
+    func testV2AndLegacyBandsAgreeOnCenterInterval() {
+        let petW: CGFloat = 200
+        let band = WanderBand.centerBand(homeCenterX: 500, rangePercent: 40,
+                                         screen: screen, petWidth: petW)
+        let origin = WanderBand.originRange(centerBand: band, petWidth: petW)
+        let narrowed = WanderBand.narrowedFrame(visibleFrame: screen, centerBand: band)
+        XCTAssertEqual(origin.lowerBound + petW / 2, narrowed.minX)
+        XCTAssertEqual(origin.upperBound + petW / 2, narrowed.maxX)
+        // Motion 以此 bounds 夾 center-x:夾限結果必落在 band 內。
+        let regions = RegionMap(visibleFrame: narrowed)
+        let motion = MotionController(profile: .walker,
+                                      position: CGPoint(x: 950, y: 0), regions: regions)
+        motion.clampHorizontally(into: regions.bounds)
+        XCTAssertTrue(band.contains(motion.state.position.x))
+        XCTAssertEqual(motion.state.position.x, 700)
+    }
+
+    func testClampRangePercent() {
+        XCTAssertEqual(WanderBand.clampRangePercent(60), 60)
+        XCTAssertEqual(WanderBand.clampRangePercent(5), 25)
+        XCTAssertEqual(WanderBand.clampRangePercent(400), 100)
+        XCTAssertEqual(WanderBand.clampRangePercent(.nan), 100)
+        XCTAssertEqual(WanderBand.clampRangePercent(-10), 25)
+    }
+
+    func testDegenerateScreenReturnsSinglePoint() {
+        let tiny = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let band = WanderBand.centerBand(homeCenterX: 50, rangePercent: 50,
+                                         screen: tiny, petWidth: 200)
+        XCTAssertEqual(band.lowerBound, band.upperBound)
+    }
+
+    func testMotionClampHorizontally() {
+        let regions = RegionMap(visibleFrame: CGRect(x: 200, y: 0, width: 400, height: 800))
+        let motion = MotionController(profile: .walker,
+                                      position: CGPoint(x: 900, y: 0), regions: regions)
+        motion.applyImpulse(CGVector(dx: 50, dy: 0))
+        motion.clampHorizontally(into: regions.bounds)
+        XCTAssertEqual(motion.state.position.x, 600, "帶外位置一次性拉回帶內")
+        XCTAssertEqual(motion.state.velocity.dx, 0, "水平動量吸掉(避免下 tick 邊界反應)")
+        // 帶內為 no-op(垂直速度不動)。
+        motion.applyImpulse(CGVector(dx: 10, dy: -30))
+        motion.clampHorizontally(into: regions.bounds)
+        XCTAssertEqual(motion.state.velocity.dx, 10)
+        XCTAssertEqual(motion.state.velocity.dy, -30)
     }
 }
 
@@ -578,7 +736,7 @@ final class EngineV2LoopTests: XCTestCase {
     func testExactlyOneCommitPerTick() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 300), regions: regions, seed: 3)
         loop.presenter = spy
         for expected in 1...90 {
@@ -604,7 +762,7 @@ final class EngineV2LoopTests: XCTestCase {
         func working1Ticks(overlayOn: Bool) -> Int {
             let regions = standardRegions()
             let spy = PoseSpy()
-            let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+            let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                                   position: CGPoint(x: 400, y: 300), regions: regions, seed: 12)
             loop.presenter = spy
             loop.overlay = overlayOn ? .working1 : nil
@@ -621,7 +779,7 @@ final class EngineV2LoopTests: XCTestCase {
     func testDragLanePreemptsGraphFlavor() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 300), regions: regions, seed: 8)
         loop.presenter = spy
         loop.tick(dt: dt, regions: regions)
@@ -641,7 +799,7 @@ final class EngineV2LoopTests: XCTestCase {
     func testMasksAndDisabledActionsInLoop() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 300), regions: regions, seed: 21)
         loop.presenter = spy
         loop.masks = [.quiet]
@@ -788,7 +946,7 @@ final class EngineV2InteractionLaneTests: XCTestCase {
     func testQueuedInteractionPreemptsImmediately() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 300), regions: regions, seed: 5)
         loop.presenter = spy
         for _ in 0..<3 { loop.tick(dt: dt, regions: regions) }   // graph 動作播放中(未播畢)
@@ -802,7 +960,7 @@ final class EngineV2InteractionLaneTests: XCTestCase {
     func testInteractionLaneFrozenWhileDragging() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 300), regions: regions, seed: 6)
         loop.presenter = spy
         loop.beginDrag(at: CGPoint(x: 400, y: 300))
@@ -823,7 +981,7 @@ final class EngineV2InteractionLaneTests: XCTestCase {
     func testInteractionPlaysThenGraphResumes() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 300), regions: regions, seed: 11)
         loop.presenter = spy
         loop.noteInteraction(.working1)
@@ -842,7 +1000,7 @@ final class EngineV2InteractionLaneTests: XCTestCase {
         func run() -> [(CGFloat, CGFloat, String, Int)] {
             let regions = standardRegions()
             let spy = PoseSpy()
-            let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+            let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                                   position: CGPoint(x: 400, y: 350), regions: regions, seed: 77)
             loop.presenter = spy
             for step in 0..<300 {
@@ -1134,7 +1292,7 @@ final class EngineV2LocomotionGlueTests: XCTestCase {
 
     /// FIX-5(圖層):ground 區的 idle→flyFlap 邊必須可達;glide 仍限 air 區。
     func testBirdGroundEdgeAllowsFlyFlapFromIdle() throws {
-        let bird = SpeciesPacks.birdPlaceholder()
+        let bird = SpeciesPacks.birdPack()
         let graph = BehaviorGraph(table: bird.behavior)
         var rng: any RandomNumberGenerator = SeededRNG(seed: 3)
         let available: Set<PetActionID> = [.idle, .flyFlap, .glide, .working1]
@@ -1157,7 +1315,7 @@ final class EngineV2LocomotionGlueTests: XCTestCase {
     func testFlyerTakesOffFromGroundViaFlyFlap() throws {
         let regions = standardRegions()
         let spy = PoseSpy()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 0), regions: regions, seed: 16)
         loop.presenter = spy
         loop.motion.applyImpulse(CGVector(dx: 0, dy: -200))
@@ -1243,7 +1401,7 @@ final class EngineV2LocomotionGateTests: XCTestCase {
     /// 速度硬性歸零後僅受重力緩降,落定後位置完全穩定(靜態姿勢集,不懸浮)。
     func testReduceMotionFlyerSettlesWithoutImpulses() throws {
         let regions = standardRegions()
-        let loop = EngineLoop(pack: SpeciesPacks.birdPlaceholder(),
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
                               position: CGPoint(x: 400, y: 350), regions: regions, seed: 7)
         loop.masks = [.reduceMotion]
         var settled = false

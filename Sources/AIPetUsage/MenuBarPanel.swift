@@ -44,6 +44,10 @@ struct MenuBarPanel: View {
                 PanelToggleRow(title: "Show Pet", isOn: model.settings.petVisible) {
                     model.updateSettings { $0.petVisible.toggle() }
                 }
+                // A1:漫遊開關上選單(與右鍵選單/Settings 同一設定;文案三處統一)。
+                PanelToggleRow(title: "Pet Movement", isOn: model.settings.petWanderEnabled) {
+                    model.updateSettings { $0.petWanderEnabled.toggle() }
+                }
             }
 
             PanelDivider()
@@ -74,7 +78,7 @@ private struct PanelHeader: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(model.menuBarPetEmoji).font(.system(size: 15))
-                Text(model.settings.appMode == .full ? model.settings.resolvedSpecies.displayName : "AI Pet Usage")
+                Text(model.settings.appMode == .full ? model.speciesDisplayName : "AI Pet Usage")
                     .font(.headline)
                 Spacer()
                 if model.settings.appMode == .full {
@@ -119,7 +123,9 @@ private struct ProviderStatusRow: View {
                                          displayName: model.providerName(state.providerId))
         HStack(spacing: 6) {
             ProviderDot(brand: brand, size: 8)
-            Text(brand.displayName)
+            // A2:面板用中等短名(Claude/Codex/Grok),右側 reset 倒數才放得下;
+            // 全名保留在 .help 與輔助功能。
+            Text(brand.shortName)
                 .font(.callout.weight(.medium))
                 .lineLimit(1)
             Spacer(minLength: 4)
@@ -128,9 +134,10 @@ private struct ProviderStatusRow: View {
             Text(resetLabel)
                 .font(.caption).monospacedDigit()
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 66, alignment: .trailing)
+                .frame(minWidth: 78, alignment: .trailing)
         }
         .help("\(brand.displayName) (\(brand.code)) — official/estimated 5h & weekly usage")
+        .accessibilityLabel("\(brand.displayName): 5 hour \(state.fiveHour.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data"), weekly \(state.weekly.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")")
     }
 
     private func windowText(_ label: String, _ percent: Double?) -> some View {

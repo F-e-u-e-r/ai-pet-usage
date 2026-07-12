@@ -162,6 +162,16 @@ public final class MotionController: MotionControlling {
         velocity = .zero
     }
 
+    /// 一次性水平 clamp(A1 漫遊範圍帶重算後):位置若落在新 bounds 之外,
+    /// 拉回帶內並吸掉水平動量,避免下一 tick 的邊界反應造成可見瞬移。
+    /// 帶內位置為 no-op;垂直分量完全不動(§4 高度公式不受範圍帶影響)。
+    public func clampHorizontally(into bounds: CGRect) {
+        let clamped = min(max(position.x, bounds.minX), bounds.maxX)
+        guard clamped != position.x else { return }
+        position.x = clamped
+        velocity.dx = 0
+    }
+
     // MARK: 拖曳
 
     public func beginDrag(at point: CGPoint) {

@@ -92,7 +92,22 @@ extension SpeciesPacks {
             behavior: behavior,
             locomotion: .walker,
             anchorOffsets: [:],
-            mirrorSafe: Set(frames.keys))
+            mirrorSafe: Set(frames.keys),
+            palette: sprite.palette)
+    }
+
+    // MARK: - Pack 顯示資訊(menu bar emoji / 面板 header / Today Pet tile)
+
+    /// pack id → 顯示名與 emoji;未知 id 回 nil(呼叫端 fallback 到 legacy 物種)。
+    /// bird 沒有 PetSpecies enum case(resolvedSpecies 會錯落到 dog),UI 顯示一律
+    /// 先查此表再退 enum。
+    public static func displayInfo(packId: String) -> (name: String, emoji: String)? {
+        switch packId {
+        case "dog": return (PetSpecies.dog.displayName, PetSpecies.dog.emoji)
+        case "cat": return (PetSpecies.cat.displayName, PetSpecies.cat.emoji)
+        case "bird": return ("Bird", "🐦")
+        default: return nil
+        }
     }
 
     /// legacy 幀(列字串陣列)→ pack 幀(\n 串接網格字串)。純機械轉換,不動任何字元。

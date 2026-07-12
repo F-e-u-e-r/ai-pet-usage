@@ -101,24 +101,45 @@ struct PetSettings: View {
                 }
             }
             Section {
+                // 物種:pack id 為統一選擇語意(A1/B5)。dog/cat 走 enum;Bird 走
+                // speciesPackIdOverride(無 enum case,V2 demo 通道,G1)。
                 Picker("Pet", selection: Binding(
-                    get: { model.settings.species },
-                    set: { v in model.updateSettings { $0.species = v } }
+                    get: { model.settings.speciesPackId },
+                    set: { id in
+                        model.updateSettings {
+                            if let species = PetSpecies(packId: id) {
+                                $0.species = species
+                                $0.speciesPackIdOverride = nil
+                            } else {
+                                $0.speciesPackIdOverride = id
+                            }
+                        }
+                    }
                 )) {
                     ForEach(PetSpecies.allCases, id: \.self) { s in
-                        Text(s.displayName).tag(s)
+                        Text(s.displayName).tag(s.packId)
+                    }
+                    if model.settings.petEngineV2Enabled {
+                        Text("Bird (V2 demo)").tag("bird")
                     }
                 }
-                Toggle("Wander along the screen edge when idle", isOn: Binding(
+                Toggle("Pet movement (wander when idle)", isOn: Binding(
                     get: { model.settings.petWanderEnabled },
                     set: { v in model.updateSettings { $0.petWanderEnabled = v } }
                 ))
+                Slider(value: Binding(
+                    get: { model.settings.petWanderRangePercent },
+                    set: { v in model.updateSettings { $0.petWanderRangePercent = v } }
+                ), in: 25...100, step: 5) {
+                    Text("Movement range (\(Int(model.settings.petWanderRangePercent))% of screen)")
+                }
+                .disabled(!model.settings.petWanderEnabled)
+                Text("The pet roams around wherever you last placed it. Narrowing the range moves it back inside the new band once. Movement pauses during warnings, quiet mode, and when Reduce Motion is enabled.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Speech bubbles on mood changes", isOn: Binding(
                     get: { model.settings.petSpeechEnabled },
                     set: { v in model.updateSettings { $0.petSpeechEnabled = v } }
                 ))
-                Text("Wandering pauses during warnings, quiet mode, and when Reduce Motion is enabled. The pet never steals focus or blocks clicks (enable click-through below to make it fully untouchable).")
-                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Show pet", isOn: Binding(
                     get: { model.settings.petVisible },
                     set: { v in model.updateSettings { $0.petVisible = v } }
@@ -140,6 +161,25 @@ struct PetSettings: View {
                     set: { v in model.updateSettings { $0.clickThrough = v } }
                 ))
                 Text("Drag the pet anywhere; its position is remembered. Click it for a status bubble; right-click to feed.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .disabled(model.settings.appMode == .monitorOnly)
+
+            Section("Experimental") {
+                Toggle("Pet Engine V2 (physics + behavior engine)", isOn: Binding(
+                    get: { model.settings.petEngineV2Enabled },
+                    set: { v in
+                        model.updateSettings {
+                            $0.petEngineV2Enabled = v
+                            // 關閉時若停在 Bird(V2 專屬),退回 dog(避免 dog 皮孤兒狀態)。
+                            if !v, $0.speciesPackIdOverride == "bird" {
+                                $0.speciesPackIdOverride = nil
+                                $0.species = .dog
+                            }
+                        }
+                    }
+                ))
+                Text("Experimental. Enables the new locomotion engine and the Bird species (flies, hovers, lands). Known limits until E3: dragging the pet while enabled snaps back to the engine's position; Bird uses the dog food menu.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .disabled(model.settings.appMode == .monitorOnly)

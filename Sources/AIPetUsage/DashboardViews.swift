@@ -126,9 +126,38 @@ struct StatTile<Extra: View>: View {
                 Text(caption).font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // A3:在等高列(HStack + fixedSize)中填滿列高 → 同列卡片一致;
+        // 不拉伸的容器(LazyVGrid)行為不變(自然高度)。
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// 等高統計列(A3/D8):列高 = 最高卡;搭配 StatTile 的 maxHeight 填滿。
+struct EqualHeightTileRow<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) { content }
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// 訂閱方案 chip(A7 UI 呈現):全小寫單字(codex 的 "plus")首字大寫;其餘原樣。
+struct PlanChip: View {
+    let plan: String
+
+    private var pretty: String {
+        let isSingleLowercaseWord = !plan.isEmpty && plan == plan.lowercased()
+            && !plan.contains(where: { $0 == " " || $0 == "_" })
+        return isSingleLowercaseWord ? plan.prefix(1).uppercased() + plan.dropFirst() : plan
+    }
+
+    var body: some View {
+        Text(pretty).font(.caption)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(.quaternary, in: Capsule())
+            .foregroundStyle(Theme.textSecondary)
     }
 }
 
@@ -270,22 +299,15 @@ struct LimitBar: View {
     }
 }
 
-/// 純 SwiftUI 長條時間軸:含刻度提示與 hover 詳情(review #1)。
+/// 純 SwiftUI 長條時間軸:單一 plot-area hover,tooltip 跟隨游標(A4)。
 struct HourlyChart: View {
     let buckets: [HourBucket]
     @State private var hoveredHour: Int?
+    @State private var cursor: CGPoint = .zero
 
     private var slots: [Int] { Array(0...Calendar.current.component(.hour, from: Date())) }
     private var maxTokens: Int { max(1, buckets.map(\.tokens).max() ?? 1) }
-    /// 取「好看」的刻度上限(1/2/5 × 10^n)。
-    private var niceMax: Int {
-        let m = Double(maxTokens)
-        let power = pow(10, floor(log10(m)))
-        for mult in [1.0, 2.0, 5.0, 10.0] where power * mult >= m {
-            return Int(power * mult)
-        }
-        return maxTokens
-    }
+    private var niceMax: Int { Int(niceCeiling(Double(maxTokens))) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -304,6 +326,8 @@ struct HourlyChart: View {
 
             GeometryReader { geo in
                 let barArea = geo.size.height - 12
+                let n = max(1, slots.count)
+                let slotW = geo.size.width / CGFloat(n)
                 ZStack(alignment: .bottom) {
                     // 網格線
                     VStack {
@@ -333,22 +357,31 @@ struct HourlyChart: View {
                                     .frame(height: 10)
                             }
                             .frame(maxWidth: .infinity, alignment: .bottom)
-                            .contentShape(Rectangle())
-                            .onContinuousHover { phase in
-                                switch phase {
-                                case .active: hoveredHour = hour
-                                case .ended: if hoveredHour == hour { hoveredHour = nil }
-                                }
+                            // VoiceOver:自訂 tooltip 不可達,逐 bar 保留朗讀標籤。
+                            .accessibilityLabel("\(hour):00, \(tk(tokens)) tokens")
+                        }
+                    }
+                    // 單一 plot hover:x → 小時(1px gap 不再斷線);tooltip 錨在游標。
+                    // 槽距含 HStack spacing(grok P3-2):step = 寬/欄數即含均攤 gap,
+                    // 用 floor 後 clamp(spacing 2 均攤進 maxWidth 槽,step ≈ slotW)。
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let p):
+                                cursor = p
+                                let idx = min(max(0, Int((p.x / max(slotW, 1)).rounded(.down))), n - 1)
+                                hoveredHour = slots[idx]
+                            case .ended:
+                                hoveredHour = nil
                             }
+                        }
+                    if let hour = hoveredHour {
+                        CursorTooltip(cursor: cursor, container: geo.size) {
+                            tooltipContent(for: hour)
                         }
                     }
                 }
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if let hour = hoveredHour {
-                tooltip(for: hour)
-                    .transition(.opacity)
             }
         }
     }
@@ -359,7 +392,7 @@ struct HourlyChart: View {
     }
 
     @ViewBuilder
-    private func tooltip(for hour: Int) -> some View {
+    private func tooltipContent(for hour: Int) -> some View {
         let b = bucket(hour)
         VStack(alignment: .leading, spacing: 2) {
             Text(String(format: "%02d:00", hour)).font(.caption.weight(.semibold))
@@ -376,11 +409,6 @@ struct HourlyChart: View {
                 }
             }
         }
-        .padding(8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
-        .padding(4)
-        .allowsHitTesting(false)
     }
 }
 
@@ -399,8 +427,8 @@ struct TodayView: View {
                     OnboardingCard(snapshots: dash.snapshots)
                 }
 
-                // 自適應網格:未來加入 Antigravity / Grok Code 也能換行排版
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 175), spacing: 10)], spacing: 10) {
+                // A3:等高統計列(視窗 minWidth 860 保證單列容納;等高 = 最高卡)。
+                EqualHeightTileRow {
                     StatTile(title: "Total tokens today", value: tk(dash.todayTotals.total)) {
                         TokenMixBar(breakdown: dash.todayTotals)
                     }
@@ -409,7 +437,7 @@ struct TodayView: View {
                              caption: burnCaption(dash))
                     if model.settings.appMode == .full {
                         StatTile(title: "Pet",
-                                 value: "\(model.settings.resolvedSpecies.displayName) · \(model.mood.mood.rawValue)",
+                                 value: "\(model.speciesDisplayName) · \(model.mood.mood.rawValue)",
                                  caption: "Lv.\(model.petState.level) · fullness \(Int(model.petState.hunger))%")
                             .help(PetInfo.tooltip)
                     }
@@ -556,6 +584,9 @@ struct AgentCard: View {
             HStack(spacing: 6) {
                 ProviderDot(brand: brand)
                 Text(snapshot.displayName).font(Theme.FontScale.cardTitle)
+                if let plan = limit?.planType {
+                    PlanChip(plan: plan)   // A7:訂閱方案 chip(Max 20x / Plus / SuperGrok)
+                }
                 Spacer()
                 StatusBadge(status: snapshot.status)
             }
@@ -573,11 +604,10 @@ struct AgentCard: View {
                 .buttonStyle(.link)
                 .font(.caption2)
             }
-            if let reset = snapshot.resetAt {
-                Text("5h resets in \(countdown(to: reset))")
-                    .font(Theme.FontScale.secondaryInfo)
-                    .foregroundStyle(Theme.textSecondary)
-            }
+            // A3:reset 行恆渲染(無資料顯示 —)→ 三張卡行數一致、等高不跳動。
+            Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" } ?? "5h resets: —")
+                .font(Theme.FontScale.secondaryInfo)
+                .foregroundStyle(Theme.textSecondary)
             if let err = snapshot.errorMessage {
                 Text(err).font(.caption2).foregroundStyle(.red).lineLimit(2)
             }
@@ -642,10 +672,7 @@ struct LimitRow: View {
                 ProviderDot(brand: brand)
                 Text(snapshot?.displayName ?? limit.providerId).font(Theme.FontScale.cardTitle)
                 if let plan = limit.planType {
-                    Text(plan).font(.caption)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
-                        .foregroundStyle(Theme.textSecondary)
+                    PlanChip(plan: plan)   // A7:與 Today 卡同一呈現("plus" → "Plus")
                 }
                 Spacer()
                 if let snapshot { StatusBadge(status: snapshot.status) }
@@ -712,13 +739,13 @@ struct ProjectsView: View {
 
             if let page = model.projectPage {
                 let cost = costDisplay(page.cost)
-                HStack(spacing: 10) {
+                // A3:與 Today/Trends 同一等高模式(移除硬編 height 80)。
+                EqualHeightTileRow {
                     StatTile(title: "Period tokens", value: tk(page.totals.total))
                     StatTile(title: "Period cost", value: cost.value, caption: cost.caption)
                     StatTile(title: "Projects", value: "\(page.projects.count)")
                     StatTile(title: "Models", value: "\(page.models.count)")
                 }
-                .frame(height: 80)
 
                 ProjectTable(projects: page.projects)
             } else {
@@ -784,9 +811,12 @@ struct ProjectTable: View {
             Text(costText(p.cost)).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(width: 86, alignment: .trailing)
-            Text(p.providers.joined(separator: ", "))
+            // A8:Agents 欄用短名(Claude, Codex, Grok)不換行;全名在 .help。
+            Text(p.providers.map { ProviderBrands.brand(for: $0).shortName }.joined(separator: ", "))
+                .lineLimit(1)
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 130, alignment: .leading)
+                .help(p.providers.map { ProviderBrands.brand(for: $0).displayName }.joined(separator: ", "))
             Text(p.topModel ?? "—").lineLimit(1)
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 150, alignment: .leading)

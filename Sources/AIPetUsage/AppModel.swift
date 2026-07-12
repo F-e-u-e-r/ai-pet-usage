@@ -83,6 +83,8 @@ final class AppModel {
     // MARK: - 生命週期
 
     func start() {
+        // EngineV2 flag 必須在 petPanel 建立前映射(PetPanelController.show() 據此掛 driver)。
+        EngineV2.isEnabled = settings.petEngineV2Enabled
         if LaunchAtLogin.available {
             let enabled = LaunchAtLogin.isEnabled
             if settings.launchAtLogin != enabled {
@@ -242,8 +244,17 @@ final class AppModel {
     func updateSettings(_ mutate: (inout AppSettings) -> Void) {
         let oldMode = settings.appMode
         let oldProviders = settings.core.enabledProviders
+        let oldEngineV2 = settings.petEngineV2Enabled
+        let oldRange = settings.petWanderRangePercent
         settingsStore.update(mutate)
         settings = settingsStore.settings
+        // Pet Engine V2 切換:flag 先映射;面板重建整合進下方的單一分派
+        //(避免重建後又走一次 apply 的雙重 restart;grok P2-6)。
+        let v2Toggled = oldEngineV2 != settings.petEngineV2Enabled
+        if v2Toggled {
+            EngineV2.isEnabled = settings.petEngineV2Enabled
+            if !settings.petEngineV2Enabled { v2Frame = nil }
+        }
         // 串接成序列:第 N 次推送先 await 第 N-1 次,coordinator 收斂到最後寫入的值。
         let core = settings.core
         let previousPush = settingsPushTask
@@ -253,8 +264,18 @@ final class AppModel {
         }
         if oldMode != settings.appMode {
             applyModeSideEffects()
+        } else if v2Toggled, settings.appMode == .full {
+            // V2 切換 → 整座重建 petPanel(driver 掛在 show()、舊 wander 閘在建立期讀
+            // flag);destroy() 無條件補寫位置、restoreOrigin() 讀回,切換不丟位置。
+            petPanel?.destroy()
+            petPanel = PetPanelController(model: self)
+            petPanel?.apply(settings: settings)
         } else {
             petPanel?.apply(settings: settings)
+        }
+        // 範圍變更 → 統一重錨 + 帶內夾限 + V2 同步重算(計畫 A1 觸發 (d))。
+        if oldRange != settings.petWanderRangePercent {
+            petPanel?.reanchorWanderHome()
         }
         // 啟用的 provider 變更 → 等設定推送到 coordinator 後立即重建 FSEvents 監看,
         // 不必等 300s fallback 才開始監看新啟用 provider 的目錄(watchPlan 依 coordinator 設定)。
@@ -443,9 +464,23 @@ final class AppModel {
     }
 
     /// 選單列開頭標記:full 模式用所選物種,monitor-only 用 🐾。
+    /// pack id 先查 displayInfo(bird 無 enum case,resolvedSpecies 會錯落到 dog)。
     var menuBarPetEmoji: String {
-        settings.appMode == .full ? settings.resolvedSpecies.emoji : "🐾"
+        guard settings.appMode == .full else { return "🐾" }
+        return SpeciesPacks.displayInfo(packId: settings.speciesPackId)?.emoji
+            ?? settings.resolvedSpecies.emoji
     }
+
+    /// 物種顯示名(面板 header / Today Pet tile);同上,pack 表優先。
+    var speciesDisplayName: String {
+        SpeciesPacks.displayInfo(packId: settings.speciesPackId)?.name
+            ?? settings.resolvedSpecies.displayName
+    }
+
+    // MARK: - EngineV2 渲染快照(C-P2c:driver 每 commit 發佈,PetView 原樣消費)
+
+    /// V2 引擎當前幀的 ready-to-render 快照;flag 關恆為 nil(PetView 走 legacy)。
+    var v2Frame: V2RenderFrame?
 
     /// Full 模式且完全無資料時顯示「—」佔位;Compact/PetOnly 留空是語意本身。
     var menuBarShowsPlaceholder: Bool {

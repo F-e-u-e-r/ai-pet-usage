@@ -40,6 +40,11 @@ struct AppSettings: Codable {
     var clickThrough: Bool = false
     /// 螢幕漫遊(companion mode):閒置時沿螢幕底部邊緣走動。預設關閉。
     var petWanderEnabled: Bool = false
+    /// 漫遊範圍:允許帶寬 = 此百分比 × 螢幕寬,以 home(放置點)為中心;100 = 整幕(原行為)。
+    var petWanderRangePercent: Double = 100
+    /// Pet Engine V2(實驗性):物理/行為新引擎 + Bird demo 通道。預設關 = 位元不變。
+    /// 已知限制(E3 前):啟用時拖曳寵物會被引擎位置拉回;Bird 沿用狗的餵食選單。
+    var petEngineV2Enabled: Bool = false
     /// 心情轉變時的像素對話泡泡("WOW!"、"yum yum!" 等)。
     var petSpeechEnabled: Bool = true
     var quietMode: Bool = false
@@ -82,7 +87,8 @@ struct AppSettings: Codable {
     // 不會讓整份設定解碼失敗而被重置(synthesized Decodable 沒有這個保證)。
     private enum CodingKeys: String, CodingKey {
         case appMode, species, petVisible, petSize, petOpacity, clickThrough
-        case petWanderEnabled, petSpeechEnabled, quietMode, refreshIntervalSeconds
+        case petWanderEnabled, petWanderRangePercent, petEngineV2Enabled
+        case petSpeechEnabled, quietMode, refreshIntervalSeconds
         case notificationsEnabled, launchAtLogin, petPositionX, petPositionY
         case menuBarDisplayMode, alertsSnoozedUntil
         case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
@@ -99,6 +105,9 @@ struct AppSettings: Codable {
         petOpacity = (try? c.decodeIfPresent(Double.self, forKey: .petOpacity)) ?? 1.0 ?? 1.0
         clickThrough = (try? c.decodeIfPresent(Bool.self, forKey: .clickThrough)) ?? false ?? false
         petWanderEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .petWanderEnabled)) ?? false ?? false
+        petWanderRangePercent = WanderBand.clampRangePercent(
+            (try? c.decodeIfPresent(Double.self, forKey: .petWanderRangePercent)) ?? 100 ?? 100)
+        petEngineV2Enabled = (try? c.decodeIfPresent(Bool.self, forKey: .petEngineV2Enabled)) ?? false ?? false
         petSpeechEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .petSpeechEnabled)) ?? true ?? true
         quietMode = (try? c.decodeIfPresent(Bool.self, forKey: .quietMode)) ?? false ?? false
         refreshIntervalSeconds = (try? c.decodeIfPresent(Double.self, forKey: .refreshIntervalSeconds)) ?? 45 ?? 45
