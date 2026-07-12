@@ -1,0 +1,142 @@
+<div align="center">
+
+# 🐾 AI Pet Usage
+
+**一隻會對 AI 使用量做出反應的 macOS 桌面寵物 —— 配額、token 消耗、花費與工作節奏。**
+
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
+![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)
+![SwiftUI + AppKit](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-6E4AFF)
+![Local-first](https://img.shields.io/badge/privacy-local--first-2EA043)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+
+你的 AI 使用量化身為一隻活生生的夥伴 —— 不必開儀表板,也不必下指令。
+
+[English](README.md) · **繁體中文**
+
+</div>
+
+```text
+  /\_/\        tokens today   ▓▓▓▓▓▓▓░░░  68%
+ ( o.o )       burn rate      steady · mood: focused
+  > ^ <        next reset     in 2h 14m
+```
+
+**已實作並執行中。** 一個以 SwiftUI/AppKit 打造、從零寫起的選單列 app,帶一隻漂浮的像素寵物。此 repo 收錄可運作的 app(SwiftPM,[`Sources/`](Sources)),外加最關鍵的文件:究竟讀取了哪些本機檔案、為何要讀([`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)),以及專案的走向([`ROADMAP.md`](ROADMAP.md))。
+
+## ✨ 亮點
+
+- 🍎 **原生 macOS** —— SwiftUI + AppKit 選單列 app,搭配漂浮的像素寵物面板。
+- 📊 **三個頁面,而非一張擁擠的儀表板** —— Today、Limits、Projects,另有含使用熱區圖與連續紀錄的 Trends 頁。
+- 🔌 **Provider 轉接器** —— Codex 與 Claude Code(含官方 5h/週限額);Grok Code 預設啟用(token 用量 + 方案等級;本 app 尚未接入 Grok 的官方限額);Antigravity 在研究閘後;OpenCode 為下一步規劃。
+- 🧮 **本機帳本 + 額度引擎** —— 配額、重置視窗、token 消耗率,以及來自定價註冊表(每筆皆註明來源與日期)的各模型花費。
+- 🐕 **餵食/XP 迴圈與心情引擎** —— 寵物會對配額剩餘、消耗率、資料過期、專注時段、使用里程碑等訊號做出反應。
+- 📄 **離線 HTML 報表匯出** —— 一份可離線閱讀的本機快照,涵蓋 Today、Limits、Projects、定價假設與資料品質註記。
+- 👀 **即時更新與排程匯出** —— FSEvents 檔案監看讓資料保持新鮮;報表匯出可依排程執行。
+- 🪶 **僅監看(低記憶體)模式** —— Settings → General:完全不建立漂浮寵物視窗與動畫,餵食/XP 引擎僅在完整寵物模式下實例化(切到僅監看即釋放);使用量追蹤、選單列、頁面、通知與匯出照常運作。
+- ⌨️ **無頭 `aipet` CLI** —— 從終端機取得狀態、報表與 sprite 匯出。
+
+## 📦 安裝(alpha)
+
+**下載**:到 [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) 取得最新的 `AI-Pet-Usage-…-arm64.zip`(Apple Silicon;ad-hoc 簽章、未經公證 —— 首次啟動請右鍵 → **打開**,或執行 `xattr -d com.apple.quarantine "AI Pet Usage.app"`)。
+
+或從原始碼建置(約一分鐘;Intel Mac 必須這樣做):
+
+```bash
+git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
+cd ai-pet-usage
+Scripts/build-app.sh
+open "dist/AI Pet Usage.app"
+```
+
+- **需求**:macOS 14+ 並安裝 Xcode Command Line Tools（`xcode-select --install`）。無其他相依 —— 這個 app 是純 SwiftPM。
+- **首次啟動**:alpha 版未經公證。若 Gatekeeper 阻擋,右鍵點 app → **打開** 一次(或到 系統設定 → 隱私權與安全性 允許)。
+- app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。
+- 已簽章/已公證的下載與 Homebrew cask 規劃於 beta(見 [`ROADMAP.md`](ROADMAP.md))。
+
+## 🚀 建置與執行
+
+```bash
+Scripts/swiftpm.sh build                 # 建置全部
+Scripts/swiftpm.sh run usagecore-tests   # 執行測試套件
+Scripts/build-app.sh                     # 產出 dist/AI Pet Usage.app
+open "dist/AI Pet Usage.app"
+
+.build/debug/aipet status                # 無頭狀態(CLI)
+.build/debug/aipet sprites               # 匯出像素寵物拼貼表 → dist/sprite-preview/
+.build/debug/aipet report --out r.html   # 無頭 HTML 匯出
+```
+
+> [!IMPORTANT]
+> 一律透過 `Scripts/swiftpm.sh` 建置,而非裸用 `swift build`。
+
+<details>
+<summary>為何需要這層包裝(開發機的 CommandLineTools 怪癖)</summary>
+
+這台機器的 CommandLineTools 安裝有兩個版本不一致的缺陷(過期的 `PackageDescription.private.swiftinterface` 與重複的 `SwiftBridging` modulemap),包裝指令碼在每次呼叫時繞過它們、且不觸動系統檔案。重裝 CLT(`sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install`)後,這些繞法會自動停用。此外 CLT 缺少 XCTest,因此測試以 `usagecore-tests` 執行檔搭配一個相容 XCTest 的迷你 harness 執行。
+
+</details>
+
+## 🗂️ Repo 結構
+
+| 路徑 | 內容 |
+| --- | --- |
+| [`Sources/UsageCore`](Sources/UsageCore) | Provider 轉接器、帳本、額度引擎、定價、HTML 報表 —— 不相依 UI,因此解析邏輯日後可供 CLI 或 Tauri 版重用。各模型定價位於 [`model-prices.json`](Sources/UsageCore/Resources/model-prices.json)(每筆註明來源與日期;見 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md))。 |
+| [`Sources/PetCore`](Sources/PetCore) | 餵食/XP 引擎與心情引擎 —— 只消費正規化後的 `UsageCore` 狀態。 |
+| [`Sources/AIPetUsage`](Sources/AIPetUsage) | macOS app:選單列、漂浮寵物面板、三個頁面、設定。 |
+| [`Sources/aipet`](Sources/aipet) | 供驗證與腳本化的無頭 CLI。 |
+| [`Sources/usagecore-tests`](Sources/usagecore-tests) | 帶合成 fixture 的測試套件。 |
+| [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) | 究竟讀取哪些本機檔案,以及為何。 |
+
+## 🛡️ 隱私 —— 預設本機優先
+
+- ✅ 只讀取已知的本機使用量檔案,或使用者設定的路徑。
+- 🚫 不上傳使用量資料。
+- 🚫 不需要帳號憑證。
+- 💬 每個權限提示都會說明為何需要。
+- 🧩 Provider 轉接器保持隔離,資料來源變動不影響寵物引擎。
+
+## ⚙️ 併行模型(app + CLI)
+
+app 與 `aipet` CLI 共用 `~/Library/Application Support/AIPetUsage/`。這在設計上是安全的:
+
+- CLI 的 `status`/`report` **預設唯讀** —— 直接呈現磁碟上既有的帳本與額度狀態(加 `--refresh` 才重新掃描 provider 記錄)。
+- 每個寫入階段(app 刷新、CLI `--refresh`、`reindex`)都會取得一把獨占的跨行程檔案鎖(`refresh.lock`,以 flock 實作)。無法在 60 秒內取得鎖的行程會略過寫入,在資料品質註記回報「refresh skipped」,並提供快取資料。
+- 寫入前,每個行程都會與另一方的進度收斂(檔案大小改變時重載帳本、以每檔 max-offset 合併掃描狀態、重載額度狀態)。事件 ID 以內容為準恆定,任何重疊都會去重而非重複計數。
+
+## 🧭 產品方向
+
+這個 app 結合兩個構想:
+
+1. 一隻帶互動機制的輕量 **桌面寵物**。
+2. 一個 **本機優先的 AI 使用量監看器**,對象包含 Codex、Claude Code、Antigravity、Grok Code,以及後續的 OpenCode。
+
+寵物讓使用量狀態一目了然,無需開啟儀表板或執行指令,並對有用的訊號做出反應:配額剩餘、重置視窗、token 消耗率、資料過期、專注時段與使用里程碑。
+
+此產品刻意避開擁擠的單頁儀表板:使用量分拆為三個頁面(Today、Limits、Projects),而 HTML 報表匯出屬於 alpha 範圍,作為同一份資料可離線閱讀的本機快照。
+
+### 平台與技術棧
+
+macOS 優先;Windows 與 Linux 規劃為 macOS MVP 穩定後的下一個平台步驟。
+
+- **SwiftUI + AppKit** 負責桌面外殼、漂浮寵物視窗、選單列、通知與登入時啟動。
+- **獨立的 usage core** 搭配 provider 轉接器,讓解析邏輯日後可供 Tauri 或 CLI 版重用。
+- **本機 JSON 或 SQLite 儲存** 保存設定、成就與每日摘要。
+
+Provider 優先序:**v1 核心** —— Codex 與 Claude Code · **已出貨、資料有限** —— Grok Code(預設啟用;token 用量 + 方案等級;本 app 尚未接入 Grok 官方限額)· **研究中** —— Antigravity(若出現可靠的本機資料來源)· **v2** —— OpenCode。
+
+## 📚 文件
+
+| 文件 | 內容 |
+| --- | --- |
+| [`ROADMAP.md`](ROADMAP.md) | 從產品定義到發佈的分階段交付計畫。 |
+| [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) | 各 provider 轉接器讀取的確切本機檔案,以及額度計算政策。 |
+| [`docs/HTML_REPORT_EXPORT_SPEC.md`](docs/HTML_REPORT_EXPORT_SPEC.md) | 本機靜態 HTML 報表匯出的需求。 |
+
+## ⚖️ 授權
+
+Copyright (C) 2026 F-e-u-e-r
+
+本專案採用 [GNU AGPL-3.0-only](LICENSE) 授權。所有程式碼與像素美術(狗、貓、鳥的字串網格 sprite)皆為本 repo 原創,並適用同一授權。
+
+此 app 讀取第三方工具(Claude Code、Codex 與 Grok CLI 的 session 記錄與狀態檔)產生的本機資料檔。讀取它們不改變其各自的所有權或條款,且本專案從不轉散佈其內容 —— 一切都留在你的機器上(見 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md))。

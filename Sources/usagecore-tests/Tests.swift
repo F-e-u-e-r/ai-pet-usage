@@ -462,6 +462,35 @@ final class CodexAdapterTests: XCTestCase {
         return root
     }
 
+    /// 迴歸(Part C):Codex 的 rate_limits primary/secondary 欄位「不」固定對應 5h/週;
+    /// 以 window_minutes 分類(300→5h、10080→週),而非 JSON 位置。含 Codex 暫撤 5h、
+    /// 只回報週窗口且放在 primary 的實況(週資料絕不可落入 5h 槽,plan 標籤須保留)。
+    func testCodexClassifiesWindowsByDurationThroughRefresh() throws {
+        let root = makeTempDir()
+        let dayDir = root.appendingPathComponent("2026/07/12")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        let lines = [
+            #"{"timestamp":"2026-07-12T17:50:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":54.0,"window_minutes":300,"resets_at":1783881382},"secondary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1784354760},"plan_type":"plus"}}}"#,
+            #"{"timestamp":"2026-07-12T18:40:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":43.0,"window_minutes":10080,"resets_at":1784354760},"plan_type":"plus"}}}"#,
+            #"{"timestamp":"2026-07-12T18:50:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":43.0,"window_minutes":10080,"resets_at":1784354760},"secondary":{"used_percent":55.0,"window_minutes":300,"resets_at":1783881382},"plan_type":"plus"}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: dayDir.appendingPathComponent("rollout-2026-07-12T17-50-00-classify.jsonl"),
+                        atomically: true, encoding: .utf8)
+        let adapter = CodexAdapter(roots: [root])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.rateLimits.count, 3)
+        // 正常:5h(300)→ primary、週(10080)→ secondary
+        XCTAssertEqual(result.rateLimits[0].primary?.windowMinutes, 300)
+        XCTAssertEqual(result.rateLimits[0].secondary?.windowMinutes, 10080)
+        // 週窗口被放進 primary、無 secondary:必歸週槽,5h 槽為 nil(凍結,不污染),plan 保留
+        XCTAssertNil(result.rateLimits[1].primary, "週窗口(10080)不得落入 5h 槽")
+        XCTAssertEqual(result.rateLimits[1].secondary?.windowMinutes, 10080)
+        XCTAssertEqual(result.rateLimits[1].planType, "plus")
+        // 反序:仍以 window_minutes 正確歸位
+        XCTAssertEqual(result.rateLimits[2].primary?.windowMinutes, 300)
+        XCTAssertEqual(result.rateLimits[2].secondary?.windowMinutes, 10080)
+    }
+
     func testParsesTotalsDeltasAndRateLimits() throws {
         let adapter = CodexAdapter(roots: [try makeRoot()])
         let (result, _) = try adapter.refreshUsage(state: ScanState())
@@ -598,6 +627,102 @@ final class LimitEngineTests: XCTestCase {
             primary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 300, resetsAt: nil),
             secondary: nil
         )
+    }
+
+    /// 迴歸(Part C sanitizer):載入時清掉「窗型錯置」的持久化窗口(週資料被寫進 5h 槽),
+    /// 讓 Codex 暫撤 5h 時 UI 立即「凍結」(5h 無資料 → 無環);正確的週槽保留;且 init
+    /// 期間不得寫檔(維持 aipet status/report 唯讀契約)。
+    func testLoadSanitizesCrossTypedCodexWindows() throws {
+        let stateURL = makeTempDir().appendingPathComponent("limits-state.json")
+        // 模擬舊 adapter 錯置:把「週」形狀窗口(wm=10080)寫進 primary(5h)槽。
+        let e1 = LimitEngine(stateURL: stateURL)
+        _ = e1.ingest(readings: [RateLimitReading(
+            providerId: "codex", observedAt: date("2026-07-12T18:40:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 46, windowMinutes: 10080,
+                                            resetsAt: date("2026-07-18T06:00:00Z")),
+            secondary: RateLimitWindowReading(usedPercent: 42, windowMinutes: 10080,
+                                              resetsAt: date("2026-07-18T06:00:00Z")))],
+            settings: settings)
+        let before = try Data(contentsOf: stateURL)
+        // 重新載入 → init sanitizer 應在記憶體清掉錯置到 5h 槽的週資料。
+        let e2 = LimitEngine(stateURL: stateURL)
+        let s = e2.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                              settings: settings, now: date("2026-07-12T18:45:00Z"))
+        XCTAssertNil(s.fiveHour.usedPercent, "錯置到 5h 槽的週資料須被清掉(凍結:無 5h → 無環)")
+        XCTAssertEqual(s.weekly.usedPercent, 42, "正確的週槽須保留")
+        let after = try Data(contentsOf: stateURL)
+        XCTAssertEqual(before, after, "init 期間不得寫檔(維持 CLI 唯讀)")
+
+        // exact/fail-closed:非 300 的短窗(如未來 60 分窗)落在 5h 槽也須被清,不得誤標「5h」。
+        let url2 = makeTempDir().appendingPathComponent("limits-state.json")
+        let f1 = LimitEngine(stateURL: url2)
+        _ = f1.ingest(readings: [RateLimitReading(
+            providerId: "codex", observedAt: date("2026-07-12T18:40:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 20, windowMinutes: 60,
+                                            resetsAt: date("2026-07-12T19:40:00Z")),
+            secondary: nil)], settings: settings)
+        let s60 = LimitEngine(stateURL: url2).limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                                         settings: settings, now: date("2026-07-12T18:45:00Z"))
+        XCTAssertNil(s60.fiveHour.usedPercent, "非 300 的短窗(exact/fail-closed)也須被清")
+
+        // 遷移後封存重放:sanitizer 清掉錯置 5h(週資料,observedAt=18:40)時須一併記錄消失時點,
+        // 使後續被重掃重放的舊 5h(observedAt ≤ 該時點)不得復活已凍結的 5h 槽。
+        _ = e2.ingest(readings: [RateLimitReading(providerId: "codex", observedAt: date("2026-07-12T18:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 51, windowMinutes: 300, resetsAt: date("2026-07-12T23:00:00Z")),
+            secondary: nil)], settings: settings)
+        XCTAssertNil(e2.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                   settings: settings, now: date("2026-07-12T18:45:00Z")).fiveHour.usedPercent,
+                     "遷移(sanitizer)清 5h 後,封存重放的舊 5h(≤消失時點)不得復活")
+    }
+
+    /// 迴歸(Part C tombstone):adapter→engine。正常快照(有 5h)後接週-only 快照(Codex 暫撤 5h),
+    /// 5h 槽須被清(不 ghost 舊值,連 reindex 也保持凍結),週槽保留。反向的 primary-only 由
+    /// testPrimaryOnlyReadingsDoNotDisturbStaleWeekly 守住(不 tombstone 週槽)。
+    func testCodexWeeklyOnlySnapshotTombstonesFiveHour() throws {
+        let root = makeTempDir()
+        let dayDir = root.appendingPathComponent("2026/07/12")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        let lines = [
+            #"{"timestamp":"2026-07-12T17:50:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":54.0,"window_minutes":300,"resets_at":1783881382},"secondary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1784354760},"plan_type":"plus"}}}"#,
+            #"{"timestamp":"2026-07-12T18:40:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":43.0,"window_minutes":10080,"resets_at":1784354760},"plan_type":"plus"}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: dayDir.appendingPathComponent("rollout-2026-07-12T17-50-00-tomb.jsonl"),
+                        atomically: true, encoding: .utf8)
+        let (result, _) = try CodexAdapter(roots: [root]).refreshUsage(state: ScanState())
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: result.rateLimits, settings: settings)
+        let s = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                  settings: settings, now: date("2026-07-12T18:45:00Z"))
+        XCTAssertNil(s.fiveHour.usedPercent, "週-only 快照後 5h 槽須被 tombstone(不 ghost 舊 54%)")
+        XCTAssertEqual(s.weekly.usedPercent, 43, "週槽須保留(monotonic max(42,43))")
+
+        // persisted-restart + 封存重放:absence 時點須持久化,重啟後被重掃重放的舊 5h 仍不得復活。
+        let url = makeTempDir().appendingPathComponent("limits-state.json")
+        let e1 = LimitEngine(stateURL: url)
+        _ = e1.ingest(readings: result.rateLimits, settings: settings)          // 正常 → tombstone + 持久化 absence
+        let e2 = LimitEngine(stateURL: url)                                     // 重啟(重載持久化狀態)
+        _ = e2.ingest(readings: [result.rateLimits[0]], settings: settings)     // 封存重放舊 5h 快照
+        XCTAssertNil(e2.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                   settings: settings, now: date("2026-07-12T18:45:00Z")).fiveHour.usedPercent,
+                     "重啟後封存重放的舊 5h 不得復活已凍結的 5h(absence 須持久化)")
+
+        // full reindex:排序重放全部讀數後仍凍結。
+        let reeng = LimitEngine(stateURL: nil)
+        _ = reeng.ingest(readings: result.rateLimits, settings: settings, fullReindex: true)
+        XCTAssertNil(reeng.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-07-12T18:45:00Z")).fiveHour.usedPercent,
+                     "full reindex 後仍凍結")
+
+        // Codex 恢復 5h(更新的 300 窗)須解除凍結、正常顯示。
+        let revive = LimitEngine(stateURL: nil)
+        _ = revive.ingest(readings: result.rateLimits, settings: settings)
+        _ = revive.ingest(readings: [RateLimitReading(providerId: "codex", observedAt: date("2026-07-12T20:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 8, windowMinutes: 300, resetsAt: date("2026-07-12T23:00:00Z")),
+            secondary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 10080, resetsAt: date("2026-07-18T06:06:00Z")))],
+            settings: settings)
+        XCTAssertEqual(revive.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                         settings: settings, now: date("2026-07-12T20:05:00Z")).fiveHour.usedPercent, 8,
+                       "Codex 恢復 5h 後須解除凍結並顯示新值")
     }
 
     func testUsedPercentCappedAtHundred() {

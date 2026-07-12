@@ -12,6 +12,8 @@
 
 Your AI usage becomes a living companion — no dashboards to open, no commands to run.
 
+**English** · [繁體中文](README.zh-Hant.md)
+
 </div>
 
 ```text
@@ -26,7 +28,7 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 
 - 🍎 **Native macOS** — SwiftUI + AppKit menu-bar app with a floating pixel-pet panel.
 - 📊 **Three pages, not one crowded dashboard** — Today, Limits, and Projects, plus a Trends view with usage heatmap and streaks.
-- 🔌 **Provider adapters** — Codex and Claude Code today; Antigravity and Grok Code behind research gates; OpenCode planned next.
+- 🔌 **Provider adapters** — Codex and Claude Code (with official 5h/weekly limits); Grok Code enabled by default (token usage + plan tier; this app does not yet ingest Grok's official limits); Antigravity behind a research gate; OpenCode planned next.
 - 🧮 **Local ledger + limit engine** — quota, reset windows, token burn rate, and per-model costs from a pricing registry that is sourced & dated per entry.
 - 🐕 **Feeding/XP loop and mood engine** — the pet reacts to signals such as quota remaining, burn rate, stale data, focus sessions, and usage milestones.
 - 📄 **Offline HTML report export** — a local, offline-readable snapshot of Today, Limits, Projects, pricing assumptions, and data-quality notes.
@@ -121,7 +123,7 @@ macOS-first; Windows and Linux are planned as the next platform step after the m
 - **A separate usage core** with provider adapters, so the parser logic can later be reused by a Tauri or CLI version.
 - **Local JSON or SQLite storage** for settings, achievements, and daily summaries.
 
-Provider priority: **v1 core** — Codex and Claude Code · **v1 stretch/research** — Antigravity and Grok Code, if reliable local data sources are available · **v2** — OpenCode.
+Provider priority: **v1 core** — Codex and Claude Code · **shipped, limited data** — Grok Code (enabled by default; token usage + plan tier; this app does not yet ingest Grok's official limits) · **research** — Antigravity, if a reliable local data source appears · **v2** — OpenCode.
 
 ## 📚 Documentation
 

@@ -80,10 +80,15 @@ public struct RateLimitWindowReading: Codable, Hashable, Sendable {
     }
 }
 
+/// 單一時點的 rate-limit 讀值。契約:`primary` = **正規化後的 5 小時窗**、`secondary` =
+/// **正規化後的週窗**——與各 adapter 的 JSON 原始欄位位置無關(尤其 Codex 的 primary/
+/// secondary 位置不保證窗型;CodexAdapter 以 window_minutes 分類後才填入此處)。
 public struct RateLimitReading: Codable, Hashable, Sendable {
     public var providerId: String
     public var observedAt: Date
+    /// 正規化後的 5 小時(短)窗;無則 nil。
     public var primary: RateLimitWindowReading?
+    /// 正規化後的週(長)窗;無則 nil。
     public var secondary: RateLimitWindowReading?
     public var planType: String?
     public var sourcePath: String?

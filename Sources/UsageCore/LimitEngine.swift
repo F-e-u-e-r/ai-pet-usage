@@ -95,6 +95,9 @@ public final class LimitEngine {
         var estimatedBlockEnd: Date?
         var estimatedBlockTokens: Int?
         var estimatedResetHandled: Bool?
+        /// Codex 5h「消失」時點(週-only 快照的 observedAt)。不新於此的殘留 5h 讀數(如封存
+        /// session 檔以新路徑被重掃重放)不得復活已凍結的 5h 槽。舊 state 檔解碼為 nil。
+        var codexFiveHourAbsentSince: Date? = nil
     }
 
     private var store: [String: PersistedProvider]
@@ -107,6 +110,9 @@ public final class LimitEngine {
         } else {
             store = [:]
         }
+        // 載入即清理「窗型錯置」的持久化窗口(見 sanitizeCrossTypedWindows)。init 只在記憶體
+        // 清理、不寫檔——維持 aipet status/report 唯讀契約;清淨值於下次 ingest 才落地。
+        sanitizeCrossTypedWindows()
     }
 
     private func save() {
@@ -118,6 +124,34 @@ public final class LimitEngine {
     public func reloadFromDisk() {
         guard let stateURL, let loaded = AtomicJSON.read([String: PersistedProvider].self, from: stateURL) else { return }
         store = loaded
+        sanitizeCrossTypedWindows()   // 清淨值於接續的 ingest→save 落地(此處不獨立寫檔)
+    }
+
+    /// 清理「窗型錯置」的持久化窗口:primary 槽存的必是「正規化 5h 窗」(window_minutes=300)、
+    /// secondary 槽必是「正規化週窗」(=10080)——此為所有 adapter 共用的 RateLimitReading 契約
+    /// (見 Models.RateLimitReading)。舊版 CodexAdapter 曾以 JSON 位置(而非 window_minutes)
+    /// 歸位,把週窗口(10080)寫進 5h 槽 → UI 顯示「5-hour window resets in Nd Nh」。以「精確窗長」
+    /// (fail-closed,與 CodexAdapter.classifyWindows 一致)丟棄任何非 300 的 primary、非 10080 的
+    /// secondary:一次性治癒既有污染,並防止未來未知/新窗長(0/60/1440/43200…)被塞進寫死
+    /// 「5h/weekly」標籤的槽位而誤標。只在記憶體修改、不在此寫檔(下一次 ingest 才落地)——保住
+    /// CLI 唯讀。Claude(300/10080)天然保留;Grok(無窗)不受影響。
+    @discardableResult
+    private func sanitizeCrossTypedWindows() -> Bool {
+        var anyChanged = false
+        for (id, var provider) in store {
+            var changed = false
+            if let p = provider.primary, p.windowMinutes != 300 {
+                // 對 Codex 一併記錄消失時點(= 被丟棄的錯置 5h 之 observedAt),與 ingest tombstone 一致,
+                // 使遷移後被重掃重放的舊 5h(observedAt ≤ 該時點)不得復活已凍結的 5h 槽。
+                if id == "codex" {
+                    provider.codexFiveHourAbsentSince = max(provider.codexFiveHourAbsentSince ?? .distantPast, p.observedAt)
+                }
+                provider.primary = nil; changed = true
+            }
+            if let s = provider.secondary, s.windowMinutes != 10080 { provider.secondary = nil; changed = true }
+            if changed { store[id] = provider; anyChanged = true }
+        }
+        return anyChanged
     }
 
     // MARK: - 讀值折疊
@@ -130,14 +164,34 @@ public final class LimitEngine {
             var provider = store[reading.providerId] ?? PersistedProvider()
             if let plan = reading.planType { provider.planType = plan }
             if let w = reading.primary {
-                provider.primary = fold(window: provider.primary, reading: w, observedAt: reading.observedAt,
-                                        providerId: reading.providerId, windowName: "5h",
-                                        settings: settings, fullReindex: fullReindex, transitions: &transitions)
+                // Codex 5h tombstone 之持久化(見下方 codexFiveHourAbsentSince):不新於「5h 已消失」
+                // 時點的殘留 5h 讀數(如已封存 session 檔以新路徑被重掃重放)不得復活已凍結的 5h 槽;
+                // 較新的合法 5h 讀數(Codex 恢復 5h)則正常折疊並解除凍結。
+                if reading.providerId == "codex", let absent = provider.codexFiveHourAbsentSince,
+                   reading.observedAt <= absent {
+                    // 略過:過期殘留,不得復活已凍結的 5h
+                } else {
+                    provider.primary = fold(window: provider.primary, reading: w, observedAt: reading.observedAt,
+                                            providerId: reading.providerId, windowName: "5h",
+                                            settings: settings, fullReindex: fullReindex, transitions: &transitions)
+                    if reading.providerId == "codex" { provider.codexFiveHourAbsentSince = nil }
+                }
             }
             if let w = reading.secondary {
                 provider.secondary = fold(window: provider.secondary, reading: w, observedAt: reading.observedAt,
                                           providerId: reading.providerId, windowName: "weekly",
                                           settings: settings, fullReindex: fullReindex, transitions: &transitions)
+            }
+            // Codex 的每筆 rate_limits 是完整快照:若回報了「週」窗卻沒有「5h」窗,代表 5h 此刻不存在
+            // (如 Codex 暫撤 5h)→ 清掉 5h 槽(tombstone)並記錄消失時點,而非沿用舊值 ghost —— 連
+            // full reindex 或封存重放也保持凍結,不再冒出 0% 環。僅在此讀數不舊於現任 5h 時才清。
+            // 反向「有 5h 無週」屬 primary-only 部分更新(testPrimaryOnlyReadingsDoNotDisturbStaleWeekly),
+            // 保留舊週值,不 tombstone 週槽。僅限 Codex(原子快照);Claude 分窗讀數與 plan-only 不受影響。
+            if reading.providerId == "codex", reading.primary == nil, reading.secondary != nil,
+               reading.observedAt >= (provider.primary?.observedAt ?? .distantPast) {
+                provider.primary = nil
+                // 只前進不倒退:亂序遲到的較舊週-only 快照不得把消失時點拉回而讓中間的殘留 5h 復活。
+                provider.codexFiveHourAbsentSince = max(provider.codexFiveHourAbsentSince ?? .distantPast, reading.observedAt)
             }
             store[reading.providerId] = provider
         }

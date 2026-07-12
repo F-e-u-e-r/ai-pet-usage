@@ -88,6 +88,32 @@ final class PixelArtTests: XCTestCase {
             }
         }
     }
+
+    /// 迴歸(dogEatA 修正):餵食「躍起接零食」幀必須保留頭冠(idle 第 0–1 列耳尖/耳廓)。
+    /// 舊版把全身上移 2 列,耳尖掉出網格頂 → 餵食後頭被裁。零食(T)另加於第 1–2 列,
+    /// 故比對前先遮罩成透明。與 EngineV2PackTests.testDogJumpFramePreservesEarTips 同語彙。
+    func testDogEatFramePreservesHeadCrown() {
+        let sprite = PixelPets.sprite(for: .dog)
+        let idle = sprite.animations[.idle]![0]
+        let eatA = sprite.animations[.eat]![0]
+        func maskTreat(_ row: String) -> String { String(row.map { $0 == "T" ? "." : $0 }) }
+        XCTAssertEqual(maskTreat(eatA[0]), idle[0], "進食幀頂列(耳尖)遮罩零食後須與 idle 相同")
+        XCTAssertEqual(maskTreat(eatA[1]), idle[1], "進食幀第 2 列(耳廓)遮罩零食後須與 idle 相同")
+        XCTAssertTrue(eatA[eatA.count - 1].allSatisfy { $0 == "." }, "進食幀底列須全空(騰空)")
+        XCTAssertTrue(eatA[eatA.count - 2].allSatisfy { $0 == "." }, "進食幀倒數第 2 列須全空(騰空)")
+    }
+
+    /// 迴歸(catJumpA 修正):慶祝跳躍幀必須保留頭冠(idle 第 0–1 列耳尖)。舊版把全身
+    /// 上移 2 列,貓耳尖掉出網格頂(與 dogEatA 同 bug class)。
+    func testCatJumpFramePreservesHeadCrown() {
+        let sprite = PixelPets.sprite(for: .cat)
+        let idle = sprite.animations[.idle]![0]
+        let jumpA = sprite.animations[.jump]![0]
+        XCTAssertEqual(jumpA[0], idle[0], "貓跳躍幀頂列(耳尖)須與 idle 相同")
+        XCTAssertEqual(jumpA[1], idle[1], "貓跳躍幀第 2 列(耳朵)須與 idle 相同")
+        XCTAssertTrue(jumpA[jumpA.count - 1].allSatisfy { $0 == "." }, "貓跳躍幀底列須全空(騰空)")
+        XCTAssertTrue(jumpA[jumpA.count - 2].allSatisfy { $0 == "." }, "貓跳躍幀倒數第 2 列須全空(騰空)")
+    }
 }
 
 // MARK: - PixelAnimator(one-shot 轉場 + micro 排程 + reduce-motion)
