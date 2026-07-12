@@ -6,7 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/dist/AI Pet Usage.app"
 BUNDLE_ID="dev.aipetusage.app"
-VERSION="0.1.0"
+# 版號可由環境注入(release workflow 以 tag 驅動,如 VERSION=0.1.2);預設沿舊值。
+VERSION="${VERSION:-0.1.0}"
 
 "$ROOT/Scripts/swiftpm.sh" build -c release --product AIPetUsage
 "$ROOT/Scripts/swiftpm.sh" build -c release --product aipet
@@ -47,8 +48,16 @@ EOF
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # 先簽巢狀的 aipet,再簽外層 app(外層密封含已簽的 helper)。
-codesign --force --sign - "$APP/Contents/MacOS/aipet" 2>/dev/null || true
-codesign --force --sign - "$APP" 2>/dev/null || true
+# STRICT_SIGN=1(release workflow):簽章失敗即 fail 並 --verify --strict 驗證 —
+# CI 產出未簽 bundle 下載後是「已損壞」,比 quarantine 更難排;不用 --deep 簽(會掩蓋漏簽)。
+if [[ "${STRICT_SIGN:-0}" == "1" ]]; then
+    codesign --force --sign - "$APP/Contents/MacOS/aipet"
+    codesign --force --sign - "$APP"
+    codesign --verify --deep --strict "$APP"
+else
+    codesign --force --sign - "$APP/Contents/MacOS/aipet" 2>/dev/null || true
+    codesign --force --sign - "$APP" 2>/dev/null || true
+fi
 
 echo "Built: $APP"
 echo "Run:   open \"$APP\""

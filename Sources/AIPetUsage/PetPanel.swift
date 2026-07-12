@@ -199,12 +199,17 @@ final class PetPanelController: NSObject, NSWindowDelegate {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
                 self?.model?.savePetPosition(origin)
-                // (b) 手動拖曳落定 → 統一重錨(帶隨放置點走,必為帶內;V2 同步重算)。
-                self?.reanchorWanderHome()
-                // R2 B4:恢復漫遊並顯式進入 2–6s 停走相位 — 放手後原地站一會兒才走。
-                // 以 userDragActive 閘控(grok P3-1):漫遊自身的「走→停」落定不得重抽相位。
+                // R4 漂移修正:重錨**只**在使用者拖曳的落定執行。windowDidMove 的旗標
+                // 檢查在 async Task 內,漫遊自己的走→停(isWanderMoving 已復位)也會
+                // 走到這裡 — 若無條件重錨,每次停下 home 就挪到新位置,±range/2 的
+                // 隨機走位變成無界漂移(使用者實測:10% 設定飄到 1/3 螢幕)。
+                // 語意定案:範圍帶以「放置點」(拖曳落定/開啟漫遊/啟動/改範圍)為中心
+                // **固定**,漫遊走停絕不重算。
                 if self?.userDragActive == true {
                     self?.userDragActive = false
+                    // (b) 手動拖曳落定 → 統一重錨(帶隨放置點走;V2 同步重算)。
+                    self?.reanchorWanderHome()
+                    // 恢復漫遊並顯式進入 2–6s 停走相位 — 放手後原地站一會兒才走。
                     self?.model?.setWanderDirection(0)
                     self?.wanderPhaseUntil = Date().addingTimeInterval(.random(in: 2...6))
                 }
@@ -466,11 +471,18 @@ struct PetView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 6)
                 .overlay(alignment: .bottom) {
-                    // R3 裁定 A:泡泡完全在環圈之上(底部 = 6 + capD + 8 縫),
-                    // 尾巴向下指向寵物;不參與 layout、不吃命中。
+                    // R4 裁定 (b):泡泡錨到**實際最外環**(容量圈帶不再撐開距離),
+                    // 尾巴下潛 7pt 越過頂弧線(尾寬僅數 px,遮擋可忽略)— 泡泡貼近寵物,
+                    // 泡泡體仍在弧線之上;無環時退回 sprite 淨空圈(baseDiameter)。
                     if context.date < bubbleUntil {
+                        let ringCount = UsageRingModel.entries(from: model.orderedLimitStates).count
+                        let actualOuterD = ringCount > 0
+                            ? UsageRingModel.diameter(index: 0, count: ringCount, petSize: size)
+                            : UsageRingModel.baseDiameter(petSize: size)
+                        // 實外環頂(自面板底)= 6 + capD/2 + actualOuterD/2;−7 = 尾巴下潛量。
+                        let bubbleBottom = 6 + (capD + actualOuterD) / 2 - 7
                         PixelBubble(text: bubbleText, maxWidth: geo.size.width - 12)
-                            .padding(.bottom, capD + 14)
+                            .padding(.bottom, bubbleBottom)
                             .allowsHitTesting(false)
                             .transition(.opacity)
                     }

@@ -132,6 +132,7 @@ runSuite("ReportTests", [
 let fmtUSDTests = FmtUSDTests()
 runSuite("FmtUSDTests", [
     ("testThousandsSeparatorAndDecimals", fmtUSDTests.testThousandsSeparatorAndDecimals),
+    ("testFmtTokensUnifiedDialect", fmtUSDTests.testFmtTokensUnifiedDialect),
 ])
 
 let localTime = LocalTimeTests()
@@ -282,6 +283,7 @@ runSuite("EngineV2PackTests", [
     ("testBirdBehaviorTableFrozenAcrossArtSwap", enginePacks.testBirdBehaviorTableFrozenAcrossArtSwap),
     ("testPackPalettePropagationAndDefault", enginePacks.testPackPalettePropagationAndDefault),
     ("testPackDisplayInfo", enginePacks.testPackDisplayInfo),
+    ("testDogJumpFramePreservesEarTips", enginePacks.testDogJumpFramePreservesEarTips),
 ])
 
 let usageRing = UsageRingModelTests()

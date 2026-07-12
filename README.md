@@ -36,7 +36,9 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 
 ## 📦 Install (alpha)
 
-There is no packaged download yet — the alpha installs by building from source (about a minute):
+**Download**: grab the latest `AI-Pet-Usage-…-arm64.zip` from [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) (Apple Silicon; ad-hoc signed, not notarized — right-click → **Open** on first launch, or `xattr -d com.apple.quarantine "AI Pet Usage.app"`).
+
+Or build from source (about a minute; required for Intel Macs):
 
 ```bash
 git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
