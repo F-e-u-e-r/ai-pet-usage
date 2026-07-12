@@ -223,7 +223,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
     }
 
     func testParsesFixture() throws {
-        let adapter = ClaudeCodeAdapter(roots: [try makeRoot()])
+        let adapter = ClaudeCodeAdapter(roots: [try makeRoot()], statuslineFiles: [], planConfigFiles: [])
         let (result, state) = try adapter.refreshUsage(state: ScanState())
 
         // msg_001 重複兩次(串流重寫)只算一次;synthetic 略過;共 3 個有效事件。
@@ -262,7 +262,8 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         let file = dir.appendingPathComponent("claude-statusline.json")
         try payload.data(using: .utf8)!.write(to: file)
 
-        let adapter = ClaudeCodeAdapter(roots: [makeTempDir()], statuslineFiles: [file])
+        // planConfigFiles: [] — 隔離本機 ~/.claude.json,rateLimits 只含 statusline 讀數
+        let adapter = ClaudeCodeAdapter(roots: [makeTempDir()], statuslineFiles: [file], planConfigFiles: [])
         let (result, _) = try adapter.refreshUsage(state: ScanState())
 
         XCTAssertEqual(result.rateLimits.count, 1)
@@ -276,14 +277,15 @@ final class ClaudeCodeAdapterTests: XCTestCase {
 
         // 檔案不存在 → 靜默略過,不產生讀值
         let empty = ClaudeCodeAdapter(roots: [makeTempDir()],
-                                      statuslineFiles: [dir.appendingPathComponent("missing.json")])
+                                      statuslineFiles: [dir.appendingPathComponent("missing.json")],
+                                      planConfigFiles: [])
         let (noResult, _) = try empty.refreshUsage(state: ScanState())
         XCTAssertTrue(noResult.rateLimits.isEmpty)
     }
 
     func testIncrementalScanDoesNotDuplicate() throws {
         let root = try makeRoot()
-        let adapter = ClaudeCodeAdapter(roots: [root])
+        let adapter = ClaudeCodeAdapter(roots: [root], statuslineFiles: [], planConfigFiles: [])
         let (r1, s1) = try adapter.refreshUsage(state: ScanState())
         let (r2, _) = try adapter.refreshUsage(state: s1)
         XCTAssertFalse(r1.events.isEmpty)
@@ -311,11 +313,140 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let adapter = ClaudeCodeAdapter(roots: [root])
+        let adapter = ClaudeCodeAdapter(roots: [root], statuslineFiles: [], planConfigFiles: [])
         XCTAssertFalse(adapter.detectAvailability().available)
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         XCTAssertTrue(adapter.detectAvailability().available)
+    }
+
+    // MARK: statusline per-window 最新讀數合成(每窗獨立 observedAt;交叉污染防護)
+
+    func testStatuslinePerWindowFreshestComposition() throws {
+        let dir = makeTempDir()
+        let oldFile = dir.appendingPathComponent("old.json")   // 兩窗齊全,但檔案舊
+        let newFile = dir.appendingPathComponent("new.json")   // 只有 5h,檔案新
+        try """
+        {"rate_limits":{"five_hour":{"used_percentage":47,"resets_at":1783364400},
+                        "seven_day":{"used_percentage":25,"resets_at":1783461600}}}
+        """.data(using: .utf8)!.write(to: oldFile)
+        try """
+        {"rate_limits":{"five_hour":{"used_percentage":59,"resets_at":1783364400}}}
+        """.data(using: .utf8)!.write(to: newFile)
+        let oldMtime = date("2026-01-10T00:00:00Z")
+        let newMtime = date("2026-01-15T10:00:00Z")
+        try FileManager.default.setAttributes([.modificationDate: oldMtime], ofItemAtPath: oldFile.path)
+        try FileManager.default.setAttributes([.modificationDate: newMtime], ofItemAtPath: newFile.path)
+
+        let readings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [oldFile, newFile])
+        XCTAssertEqual(readings.count, 2, "兩窗來自不同檔 → 拆成兩筆")
+
+        let primaryOnly = readings.first { $0.primary != nil }!
+        XCTAssertNil(primaryOnly.secondary)
+        XCTAssertEqual(primaryOnly.primary?.usedPercent, 59, "5h 取新檔")
+        XCTAssertEqual(primaryOnly.observedAt, newMtime)
+
+        let secondaryOnly = readings.first { $0.secondary != nil }!
+        XCTAssertNil(secondaryOnly.primary)
+        XCTAssertEqual(secondaryOnly.secondary?.usedPercent, 25, "weekly 只有舊檔有 → 保留")
+        XCTAssertEqual(secondaryOnly.observedAt, oldMtime,
+                       "weekly 必須帶自己來源檔的 mtime,不得借用活躍檔的新鮮度")
+
+        // 新檔再度更新 → weekly 讀數的 observedAt 仍不得前進(交叉污染防護)。
+        try FileManager.default.setAttributes([.modificationDate: date("2026-01-15T10:30:00Z")],
+                                              ofItemAtPath: newFile.path)
+        let again = ClaudeCodeAdapter.readStatuslineRateLimits(from: [oldFile, newFile])
+        let weeklyAgain = again.first { $0.secondary != nil }!
+        XCTAssertEqual(weeklyAgain.observedAt, oldMtime)
+
+        // 兩窗同檔 → 合為一筆(observedAt 相同,無污染疑慮)。
+        let single = ClaudeCodeAdapter.readStatuslineRateLimits(from: [oldFile])
+        XCTAssertEqual(single.count, 1)
+        XCTAssertNotNil(single[0].primary)
+        XCTAssertNotNil(single[0].secondary)
+    }
+
+    // MARK: 訂閱方案標籤(窄解碼 + 映射優先序)
+
+    // 端到端:adapter 拆筆 → engine 連餵兩輪。活躍 5h 檔連續更新時,舊檔的
+    // 較低 weekly 值不得被灌新鮮 observedAt 而湊成二筆確認(R2-P1-1 的完整鏈路釘)。
+    func testStatuslineSplitReadingsEndToEndNoCrossPollution() throws {
+        let dir = makeTempDir()
+        let oldFile = dir.appendingPathComponent("old.json")
+        let newFile = dir.appendingPathComponent("new.json")
+        try """
+        {"rate_limits":{"five_hour":{"used_percentage":47,"resets_at":1783364400},
+                        "seven_day":{"used_percentage":45,"resets_at":1783461600}}}
+        """.data(using: .utf8)!.write(to: oldFile)
+        try """
+        {"rate_limits":{"five_hour":{"used_percentage":59,"resets_at":1783364400}}}
+        """.data(using: .utf8)!.write(to: newFile)
+        try FileManager.default.setAttributes([.modificationDate: date("2026-01-10T00:00:00Z")],
+                                              ofItemAtPath: oldFile.path)
+        try FileManager.default.setAttributes([.modificationDate: date("2026-01-15T10:00:00Z")],
+                                              ofItemAtPath: newFile.path)
+
+        let engine = LimitEngine(stateURL: nil)
+        let settings = CoreSettings()
+        // 先前的正式讀數:weekly 50(同窗;resets_at 同 oldFile 的 1783461600)。
+        _ = engine.ingest(readings: [
+            RateLimitReading(providerId: "claude-code", observedAt: date("2026-01-12T00:00:00Z"),
+                             primary: nil,
+                             secondary: RateLimitWindowReading(usedPercent: 50, windowMinutes: 10080,
+                                                               resetsAt: Date(timeIntervalSince1970: 1_783_461_600)))
+        ], settings: settings)
+
+        // 兩輪:活躍 5h 檔 mtime 前進,舊檔 weekly 45 固定 → weekly 不得下修、不得 corrected。
+        for touch in ["2026-01-15T10:00:00Z", "2026-01-15T10:30:00Z"] {
+            try FileManager.default.setAttributes([.modificationDate: date(touch)],
+                                                  ofItemAtPath: newFile.path)
+            let readings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [oldFile, newFile])
+            _ = engine.ingest(readings: readings, settings: settings)
+        }
+        let ledger = UsageLedger(fileURL: nil)
+        let s = engine.limitState(providerId: "claude-code", ledger: ledger,
+                                  settings: settings, now: date("2026-01-15T10:35:00Z"))
+        XCTAssertEqual(s.weekly.usedPercent, 50, "舊檔的較低 weekly 不得借新檔 mtime 湊二筆確認")
+        XCTAssertFalse(s.weekly.corrected)
+        XCTAssertEqual(s.fiveHour.usedPercent, 59, "5h 正常取新檔")
+    }
+
+    func testPlanLabelMappingPriority() {
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: "default_claude_max_20x", organizationType: "claude_max"), "Max 20x")
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: "default_claude_max_5x", organizationType: nil), "Max 5x")
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: "default_claude_pro", organizationType: nil), "Pro")
+        // 未知 tier → 去前綴 title-case 兜底
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: "default_claude_max_42x", organizationType: nil), "Max 42x")
+        // tier 缺 → organizationType
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: nil, organizationType: "claude_max"), "Max")
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: "", organizationType: "team"), "Team")
+        XCTAssertEqual(ClaudeCodeAdapter.planLabel(tier: nil, organizationType: "enterprise"), "Enterprise")
+        XCTAssertNil(ClaudeCodeAdapter.planLabel(tier: nil, organizationType: nil))
+        XCTAssertNil(ClaudeCodeAdapter.planLabel(tier: nil, organizationType: "unknown_type"))
+    }
+
+    func testPlanOnlyReadingEmittedFromConfigFixture() throws {
+        let dir = makeTempDir()
+        let cfg = dir.appendingPathComponent("claude.json")
+        // 僅含所需鍵的最小 fixture;真實檔案還有大量其他欄位(窄解碼必須容忍並忽略)。
+        try """
+        {"numStartups":42,"oauthAccount":{"emailAddress":"x@example.com",
+         "organizationRateLimitTier":"default_claude_max_20x","organizationType":"claude_max"},
+         "projects":{"/tmp/x":{"history":["should-never-be-parsed"]}}}
+        """.data(using: .utf8)!.write(to: cfg)
+
+        let adapter = ClaudeCodeAdapter(roots: [makeTempDir()], statuslineFiles: [], planConfigFiles: [cfg])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.rateLimits.count, 1)
+        XCTAssertEqual(result.rateLimits[0].planType, "Max 20x")
+        XCTAssertNil(result.rateLimits[0].primary)
+        XCTAssertNil(result.rateLimits[0].secondary)
+
+        // 設定檔缺失 → 無 plan-only 讀數(絕不猜值)。
+        let none = ClaudeCodeAdapter(roots: [makeTempDir()], statuslineFiles: [],
+                                     planConfigFiles: [dir.appendingPathComponent("missing.json")])
+        let (empty, _) = try none.refreshUsage(state: ScanState())
+        XCTAssertTrue(empty.rateLimits.isEmpty)
     }
 }
 
@@ -1093,6 +1224,206 @@ final class LimitEngineTests: XCTestCase {
                                           now: date("2026-01-15T15:10:00Z"))
         XCTAssertTrue(t.contains(.reset(providerId: "claude-code", window: "5h")))
     }
+
+    // MARK: 同窗官方下修(二筆確認;政策 = DATA_SOURCES「Limit calculation policy」通道 (c))
+
+    /// 遠期 reset 的讀數(預設 helper 的 14:00 對 24h 閘測試太近)。
+    func farReading(_ percent: Double, at: String) -> RateLimitReading {
+        RateLimitReading(
+            providerId: "codex",
+            observedAt: date(at),
+            primary: RateLimitWindowReading(usedPercent: percent, windowMinutes: 300,
+                                            resetsAt: date("2026-01-19T00:00:00Z")),
+            secondary: nil
+        )
+    }
+
+    func state(_ engine: LimitEngine, now: String) -> ProviderLimitState {
+        engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                          settings: settings, now: date(now))
+    }
+
+    // ① 單筆下修(任意幅度、任意新鮮)不改 percent。
+    func testSameWindowSingleLowerReadingStaysPinned() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(20, at: "2026-01-15T10:10:00Z")], settings: settings)
+        let s = state(engine, now: "2026-01-15T10:15:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 60)
+        XCTAssertFalse(s.fiveHour.corrected)
+    }
+
+    // ② 兩筆 observedAt 嚴格遞增且降幅 >0.5 → 採納第二筆值 + corrected(official)。
+    func testSameWindowDecreaseAdoptsAfterTwoNewerReadings() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:20:00Z")], settings: settings)
+        let s = state(engine, now: "2026-01-15T10:25:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 45)
+        XCTAssertTrue(s.fiveHour.corrected)
+        XCTAssertEqual(s.fiveHour.correctedReason, .official)
+        XCTAssertEqual(s.fiveHour.correctedAt, date("2026-01-15T10:20:00Z"))
+    }
+
+    // ③ 重放(observedAt 未前進)不可自我確認。
+    func testSameWindowDecreaseReplayCannotSelfConfirm() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings) // 重放
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings) // 再重放
+        let s = state(engine, now: "2026-01-15T10:15:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 60, "重放不得湊成第二筆確認")
+        XCTAssertFalse(s.fiveHour.corrected)
+    }
+
+    // ④ 第二筆略高於第一筆、仍低於 current-0.5 → 屬同一次下修事件,採納最新值 45.4。
+    func testSameWindowDecreaseSecondReadingSlightlyHigherStillConfirms() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45.0, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45.4, at: "2026-01-15T10:20:00Z")], settings: settings)
+        let s = state(engine, now: "2026-01-15T10:25:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent!, 45.4, accuracy: 0.0001)
+        XCTAssertTrue(s.fiveHour.corrected)
+    }
+
+    // ⑤ 上升讀數清空下修候選:60→45→61 之後,再一筆 45 不得立即採納(計數重新起算)。
+    func testRisingReadingClearsPendingDecrease() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(61, at: "2026-01-15T10:20:00Z")], settings: settings)
+        var s = state(engine, now: "2026-01-15T10:25:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 61)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:30:00Z")], settings: settings)
+        s = state(engine, now: "2026-01-15T10:35:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 61, "候選已被上升讀數清空,單筆 45 不得採納")
+        XCTAssertFalse(s.fiveHour.corrected)
+    }
+
+    // ⑥ fullReindex:單筆即可下修(reason=reindex),且一併清空下修候選。
+    func testFullReindexClearsPendingDecreaseAndStampsReason() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(50, at: "2026-01-15T10:10:00Z")], settings: settings) // 候選 count=1
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:20:00Z")], settings: settings, fullReindex: true)
+        var s = state(engine, now: "2026-01-15T10:25:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 45)
+        XCTAssertTrue(s.fiveHour.corrected)
+        XCTAssertEqual(s.fiveHour.correctedReason, .reindex)
+        // 若 reindex 沒清掉先前的 50-候選,這筆 44 會被誤當第二筆確認而立即採納。
+        _ = engine.ingest(readings: [farReading(44, at: "2026-01-15T10:30:00Z")], settings: settings)
+        s = state(engine, now: "2026-01-15T10:35:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 45, "reindex 後的單筆下修必須重新起算")
+    }
+
+    // ⑦ epsilon 邊界:恰 -0.5 走單調路徑;超過 0.5 才進下修候選。
+    func testDecreaseEpsilonBoundary() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(59.5, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(59.5, at: "2026-01-15T10:20:00Z")], settings: settings)
+        var s = state(engine, now: "2026-01-15T10:25:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 60, "恰 0.5pt 的差不觸發下修")
+        _ = engine.ingest(readings: [farReading(59.4, at: "2026-01-15T10:30:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(59.4, at: "2026-01-15T10:40:00Z")], settings: settings)
+        s = state(engine, now: "2026-01-15T10:45:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent!, 59.4, accuracy: 0.0001)
+    }
+
+    // ⑧ 舊版 state 檔(無 pendingDecrease/correctedAt 欄位)可解碼,行為同現制;
+    //    黏著的 legacy corrected:true(無 correctedAt,生產實際形狀)一律不 surface。
+    func testLegacyStateWithoutNewFieldsDecodes() throws {
+        let dir = makeTempDir()
+        let stateURL = dir.appendingPathComponent("limits-state.json")
+        let legacy = """
+        {"codex":{"primary":{"percent":60,"resetsAt":"2026-01-19T00:00:00Z","observedAt":"2026-01-15T10:00:00Z","windowMinutes":300,"corrected":false,"expiryHandled":false,"history":[]},"secondary":{"percent":45,"resetsAt":"2026-01-19T00:00:00Z","observedAt":"2026-01-15T10:00:00Z","windowMinutes":10080,"corrected":true,"expiryHandled":false,"history":[]}}}
+        """
+        try legacy.data(using: .utf8)!.write(to: stateURL)
+        let engine = LimitEngine(stateURL: stateURL)
+        var s = state(engine, now: "2026-01-15T10:05:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 60, "舊 state 檔必須成功載入")
+        XCTAssertFalse(s.fiveHour.corrected)
+        // 2026-07-10 事故遺留的生產形狀:corrected=true 但無 correctedAt → 永不 surface(黏著註記治癒)。
+        XCTAssertEqual(s.weekly.usedPercent, 45)
+        XCTAssertFalse(s.weekly.corrected, "legacy corrected:true 無 correctedAt 不得 surface")
+        XCTAssertNil(s.weekly.correctedAt)
+        XCTAssertNil(s.weekly.correctedReason)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings)
+        s = state(engine, now: "2026-01-15T10:15:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 60, "單筆下修不得改變舊 state 的值")
+    }
+
+    // pendingDecrease 跨引擎重載持久化:count/observedAt 不因重啟歸零(對偶於換窗 pending 的 reload 測試)。
+    func testPendingDecreaseSurvivesEngineReload() throws {
+        let dir = makeTempDir()
+        let stateURL = dir.appendingPathComponent("limits-state.json")
+        let a = LimitEngine(stateURL: stateURL)
+        _ = a.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = a.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings) // count=1 落盤
+
+        let b = LimitEngine(stateURL: stateURL) // 重啟
+        _ = b.ingest(readings: [farReading(45, at: "2026-01-15T10:20:00Z")], settings: settings) // 第二筆
+        let s = b.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                             settings: settings, now: date("2026-01-15T10:25:00Z"))
+        XCTAssertEqual(s.fiveHour.usedPercent, 45, "候選需跨重啟累計,第二筆即採納")
+        XCTAssertTrue(s.fiveHour.corrected)
+        XCTAssertEqual(s.fiveHour.correctedReason, .official)
+    }
+
+    // ⑨ corrected 是一次性事件:採納後 24h 內 surface,之後自動熄滅(UI/報告/CLI 同源)。
+    func testCorrectedSurfacesOnly24Hours() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:20:00Z")], settings: settings)
+        var s = state(engine, now: "2026-01-16T09:20:00Z") // +23h
+        XCTAssertTrue(s.fiveHour.corrected)
+        s = state(engine, now: "2026-01-16T11:20:00Z") // +25h(窗口 01-19 才過期,仍存活)
+        XCTAssertFalse(s.fiveHour.corrected, "24h 後 corrected 自動熄滅")
+        XCTAssertEqual(s.fiveHour.usedPercent, 45, "percent 本身不受閘影響")
+    }
+
+    // ⑩ primary-only 讀數不得驚動 weekly 槽(per-window 拆筆的引擎端保證)。
+    func testPrimaryOnlyReadingsDoNotDisturbStaleWeekly() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [reading(60, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-19T00:00:00Z", weekly: 50)],
+                          settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:10:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(44, at: "2026-01-15T10:20:00Z")], settings: settings)
+        let s = state(engine, now: "2026-01-15T10:25:00Z")
+        XCTAssertEqual(s.weekly.usedPercent, 50, "primary-only 讀數不得改動 weekly")
+        XCTAssertFalse(s.weekly.corrected)
+    }
+
+    // 亂序遲到的高值讀數(觀測時間早於候選)不得作廢下修候選(與換窗 pending 同律)。
+    func testOutOfOrderHighReadingKeepsPendingDecrease() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:00:00Z")], settings: settings)
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:20:00Z")], settings: settings) // 候選@10:20
+        _ = engine.ingest(readings: [farReading(60, at: "2026-01-15T10:10:00Z")], settings: settings) // 亂序遲到
+        _ = engine.ingest(readings: [farReading(45, at: "2026-01-15T10:30:00Z")], settings: settings) // 第二筆確認
+        let s = state(engine, now: "2026-01-15T10:35:00Z")
+        XCTAssertEqual(s.fiveHour.usedPercent, 45, "10:10 的舊讀數無法反證 10:20 之後的下修")
+        XCTAssertTrue(s.fiveHour.corrected)
+        XCTAssertEqual(s.fiveHour.correctedReason, .official)
+    }
+
+    // plan-only 讀數:planType 落地、窗口完全不受影響;statusline 失效時 chip 不消失。
+    func testPlanOnlyReadingSetsPlanTypeWithoutWindows() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [
+            RateLimitReading(providerId: "claude-code", observedAt: date("2026-01-15T10:00:00Z"),
+                             primary: nil, secondary: nil, planType: "Max 20x")
+        ], settings: settings)
+        // 無任何窗口讀數 → claude 走預算估算路徑;planType 仍須存在。
+        let s = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
+                                  settings: settings, now: date("2026-01-15T10:05:00Z"))
+        XCTAssertEqual(s.planType, "Max 20x")
+        XCTAssertNil(s.fiveHour.usedPercent)
+    }
 }
 
 // MARK: - Pricing
@@ -1302,7 +1633,8 @@ final class GrokCodeAdapterTests: XCTestCase {
 
     // 1) 成長 / 壓縮倒退 / 非 token 行 / model / URL-decoded cwd。
     func testParsesGrowthCompactionModelAndProject() throws {
-        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()])
+        // billingLogFiles: [] — 隔離本機 ~/.grok/logs,rateLimits 應為空
+        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()], billingLogFiles: [])
         let (result, state) = try adapter.refreshUsage(state: ScanState())
 
         // 成長 1000→2500→2900、非 token 行略過、壓縮倒退到 400(不產生事件、重設基準)、再成長到 900。
@@ -1335,7 +1667,7 @@ final class GrokCodeAdapterTests: XCTestCase {
         let lines = [tokenLine(ts: 1_000_000_000, total: 1000, eventId: "a"),
                      tokenLine(ts: 1_000_000_100, total: 400, eventId: "b"),   // 倒退
                      tokenLine(ts: 1_000_000_200, total: 900, eventId: "c")]   // 由 400 成長 → 500
-        let adapter = GrokCodeAdapter(roots: [try writeSession(lines: lines, summary: summaryJSON, signals: nil)])
+        let adapter = GrokCodeAdapter(roots: [try writeSession(lines: lines, summary: summaryJSON, signals: nil)], billingLogFiles: [])
         let (result, _) = try adapter.refreshUsage(state: ScanState())
 
         XCTAssertEqual(result.events.count, 2, "倒退那筆不得產生事件")
@@ -1348,7 +1680,7 @@ final class GrokCodeAdapterTests: XCTestCase {
     // 3) 增量:第二次無新事件;追加一行後只回傳新差值。
     func testIncrementalEmitsOnlyNewDelta() throws {
         let sessions = try makeFixtureSessions()
-        let adapter = GrokCodeAdapter(roots: [sessions])
+        let adapter = GrokCodeAdapter(roots: [sessions], billingLogFiles: [])
         let (r1, s1) = try adapter.refreshUsage(state: ScanState())
         let (r2, s2) = try adapter.refreshUsage(state: s1)
         XCTAssertFalse(r1.events.isEmpty)
@@ -1370,7 +1702,7 @@ final class GrokCodeAdapterTests: XCTestCase {
                      tokenLine(ts: 1_000_000_100, total: 2500, eventId: "evt-2"),
                      tokenLine(ts: 1_000_000_200, total: 2900, eventId: "evt-3")]
         let sessions = try writeSession(lines: lines, summary: summaryJSON, signals: nil)
-        let adapter = GrokCodeAdapter(roots: [sessions])
+        let adapter = GrokCodeAdapter(roots: [sessions], billingLogFiles: [])
         let (r1, s1) = try adapter.refreshUsage(state: ScanState())
         XCTAssertEqual(r1.events.count, 3)
 
@@ -1389,7 +1721,7 @@ final class GrokCodeAdapterTests: XCTestCase {
     func testEventIdFallbackToSessionAndOffset() throws {
         let sessions = try writeSession(lines: [tokenLine(ts: 1_000_000_000, total: 700, eventId: nil)],
                                         summary: summaryJSON, signals: nil)
-        let (result, _) = try GrokCodeAdapter(roots: [sessions]).refreshUsage(state: ScanState())
+        let (result, _) = try GrokCodeAdapter(roots: [sessions], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(result.events.count, 1)
         XCTAssertEqual(result.events[0].id, "gk:\(sessionUUID):0")
     }
@@ -1399,14 +1731,14 @@ final class GrokCodeAdapterTests: XCTestCase {
         // (A) epoch 秒
         let a = try writeSession(lines: [tokenLine(ts: 1_735_000_000, total: 100, eventId: "a")],
                                  summary: summaryJSON, signals: nil)
-        let (ra, _) = try GrokCodeAdapter(roots: [a]).refreshUsage(state: ScanState())
+        let (ra, _) = try GrokCodeAdapter(roots: [a], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(ra.events.count, 1)
         XCTAssertEqual(ra.events[0].timestamp.timeIntervalSince1970, 1_735_000_000)
 
         // (B) 毫秒量級(>1e12)的頂層 timestamp 視為毫秒
         let b = try writeSession(lines: [tokenLine(ts: 1_735_000_000_000, total: 100, eventId: "b")],
                                  summary: summaryJSON, signals: nil)
-        let (rb, _) = try GrokCodeAdapter(roots: [b]).refreshUsage(state: ScanState())
+        let (rb, _) = try GrokCodeAdapter(roots: [b], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(rb.events.count, 1)
         XCTAssertEqual(rb.events[0].timestamp.timeIntervalSince1970, 1_735_000_000)
 
@@ -1415,7 +1747,7 @@ final class GrokCodeAdapterTests: XCTestCase {
             + "\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"x\"}},"
             + "\"_meta\":{\"totalTokens\":100,\"eventId\":\"c\",\"agentTimestampMs\":1735000000000}}}"
         let c = try writeSession(lines: [cLine], summary: summaryJSON, signals: nil)
-        let (rc, _) = try GrokCodeAdapter(roots: [c]).refreshUsage(state: ScanState())
+        let (rc, _) = try GrokCodeAdapter(roots: [c], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(rc.events.count, 1)
         XCTAssertEqual(rc.events[0].timestamp.timeIntervalSince1970, 1_735_000_000)
 
@@ -1424,13 +1756,13 @@ final class GrokCodeAdapterTests: XCTestCase {
             + "\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"x\"}},"
             + "\"_meta\":{\"totalTokens\":100,\"eventId\":\"d\"}}}"
         let d = try writeSession(lines: [dLine], summary: summaryJSON, signals: nil)
-        let (rd, _) = try GrokCodeAdapter(roots: [d]).refreshUsage(state: ScanState())
+        let (rd, _) = try GrokCodeAdapter(roots: [d], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(rd.events.count, 0)
     }
 
     // 7) 隱私:content 內含 sentinel;emitted 事件任何欄位都不得出現 sentinel。
     func testPrivacySentinelNeverLeaks() throws {
-        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()])
+        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()], billingLogFiles: [])
         let (result, _) = try adapter.refreshUsage(state: ScanState())
         XCTAssertFalse(result.events.isEmpty)
         for e in result.events {
@@ -1450,7 +1782,7 @@ final class GrokCodeAdapterTests: XCTestCase {
     // 8) 可用性:注入 roots 指到臨時目錄,存在/不存在切換(roots 動態依存在性重算)。
     func testAvailabilityFollowsRootExistence() throws {
         let missing = makeTempDir().appendingPathComponent("sessions") // 尚未建立
-        let adapter = GrokCodeAdapter(roots: [missing])
+        let adapter = GrokCodeAdapter(roots: [missing], billingLogFiles: [])
         XCTAssertFalse(adapter.detectAvailability().available)
         XCTAssertTrue(adapter.roots.isEmpty)
 
@@ -1505,7 +1837,7 @@ final class GrokCodeAdapterTests: XCTestCase {
         // summary 缺 model → 用 signals.primaryModelId
         let s1 = try writeSession(lines: [tokenLine(ts: 1_000_000_000, total: 500, eventId: "a")],
                                   summary: noModelSummary, signals: signals)
-        let (r1, _) = try GrokCodeAdapter(roots: [s1]).refreshUsage(state: ScanState())
+        let (r1, _) = try GrokCodeAdapter(roots: [s1], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(r1.events.count, 1)
         XCTAssertEqual(r1.events[0].modelId, "grok-4.5-fast")
         XCTAssertEqual(r1.events[0].projectId, "/Users/dev/projects/grok-demo")
@@ -1513,8 +1845,60 @@ final class GrokCodeAdapterTests: XCTestCase {
         // summary 缺 model 且無 signals → modelId 為 nil
         let s2 = try writeSession(lines: [tokenLine(ts: 1_000_000_000, total: 500, eventId: "a")],
                                   summary: noModelSummary, signals: nil)
-        let (r2, _) = try GrokCodeAdapter(roots: [s2]).refreshUsage(state: ScanState())
+        let (r2, _) = try GrokCodeAdapter(roots: [s2], billingLogFiles: []).refreshUsage(state: ScanState())
         XCTAssertEqual(r2.events.count, 1)
         XCTAssertNil(r2.events[0].modelId)
+    }
+
+    // MARK: 訂閱方案標籤(billing 行尾部窄解碼)
+
+    func testBillingTierParsedFromLogTail() throws {
+        let dir = makeTempDir()
+        let log = dir.appendingPathComponent("unified.jsonl")
+        // 混合行:非 billing 雜訊 / 舊 tier / 最新 tier(取最後一筆非空)。
+        try """
+        {"ts":"2026-07-01T00:00:00Z","msg":"session start","ctx":{"foo":1}}
+        {"ts":"2026-07-02T00:00:00Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":1.0},"subscriptionTier":"Free"}}
+        not-even-json
+        {"ts":"2026-07-10T00:00:00Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":1.0},"subscriptionTier":"SuperGrok"}}
+        """.data(using: .utf8)!.write(to: log)
+        XCTAssertEqual(GrokCodeAdapter.readSubscriptionTier(from: [log]), "SuperGrok")
+
+        // 尾部有界:tailBytes 小到截進前面的行(部分行解析失敗被跳過),仍能解析完整的最後一行。
+        XCTAssertEqual(GrokCodeAdapter.readSubscriptionTier(from: [log], tailBytes: 160), "SuperGrok")
+
+        // 缺檔 → nil(絕不猜值)。
+        XCTAssertNil(GrokCodeAdapter.readSubscriptionTier(from: [dir.appendingPathComponent("nope.jsonl")]))
+    }
+
+    func testPlanOnlyReadingEmittedThroughRefresh() throws {
+        let dir = makeTempDir()
+        let log = dir.appendingPathComponent("unified.jsonl")
+        try """
+        {"ts":"2026-07-10T00:00:00Z","msg":"billing: fetched credits config","ctx":{"subscriptionTier":"SuperGrok"}}
+        """.data(using: .utf8)!.write(to: log)
+        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()], billingLogFiles: [log])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.rateLimits.count, 1)
+        XCTAssertEqual(result.rateLimits[0].planType, "SuperGrok")
+        XCTAssertNil(result.rateLimits[0].primary, "grok 仍不回報任何用量百分比")
+        XCTAssertNil(result.rateLimits[0].secondary)
+    }
+}
+
+// MARK: - LocalTime(人讀時間戳)
+
+final class LocalTimeTests: XCTestCase {
+    func testFormatsWithUTCOffset() {
+        let d = date("2026-07-12T09:21:17Z")
+        XCTAssertEqual(LocalTime.format(d, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!),
+                       "2026-07-12 17:21:17 (UTC+8)")
+        XCTAssertEqual(LocalTime.format(d, timeZone: TimeZone(secondsFromGMT: 0)!),
+                       "2026-07-12 09:21:17 (UTC+0)")
+        // 半時區(印度標準時間)顯示分鐘
+        XCTAssertEqual(LocalTime.format(d, timeZone: TimeZone(secondsFromGMT: 5 * 3600 + 1800)!),
+                       "2026-07-12 14:51:17 (UTC+5:30)")
+        XCTAssertEqual(LocalTime.format(d, timeZone: TimeZone(secondsFromGMT: -7 * 3600)!),
+                       "2026-07-12 02:21:17 (UTC-7)")
     }
 }

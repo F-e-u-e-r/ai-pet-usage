@@ -23,20 +23,19 @@ public struct GrokCodeAdapter: ProviderAdapter {
     public let displayName = "Grok Code"
 
     private let candidateRoots: [URL]
+    /// 訂閱方案標籤來源:`<grokHome>/logs/unified.jsonl` 尾端的 billing 行(可注入供測試)。
+    private let billingLogFiles: [URL]
     public var roots: [URL] {
         candidateRoots.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    public init(roots: [URL]? = nil) {
-        if let roots {
-            self.candidateRoots = roots
-        } else {
-            // GROK_HOME 存在時「取代」整個 ~/.grok 根目錄(工作階段在 $GROK_HOME/sessions)。
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let grokHome = ProcessInfo.processInfo.environment["GROK_HOME"]
-                .map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".grok")
-            self.candidateRoots = [grokHome.appendingPathComponent("sessions")]
-        }
+    public init(roots: [URL]? = nil, billingLogFiles: [URL]? = nil) {
+        // GROK_HOME 存在時「取代」整個 ~/.grok 根目錄(工作階段在 $GROK_HOME/sessions)。
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let grokHome = ProcessInfo.processInfo.environment["GROK_HOME"]
+            .map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".grok")
+        self.candidateRoots = roots ?? [grokHome.appendingPathComponent("sessions")]
+        self.billingLogFiles = billingLogFiles ?? [grokHome.appendingPathComponent("logs/unified.jsonl")]
     }
 
     public func detectAvailability() -> ProviderAvailability {
@@ -47,11 +46,11 @@ public struct GrokCodeAdapter: ProviderAdapter {
     }
 
     public func explainDataSources() -> String {
-        "Reads Grok CLI session logs (updates.jsonl) under ~/.grok/sessions (or GROK_HOME) — only the cumulative token counter (_meta.totalTokens) plus model ID and project path from sibling summary.json/signals.json. Token figures are context-growth estimates that undercount billed usage and have no input/output split. Prompts and message contents are never read; no network; credential files are never touched. Grok exposes no usage limits locally, so no usage percent is shown."
+        "Reads Grok CLI session logs (updates.jsonl) under ~/.grok/sessions (or GROK_HOME) — only the cumulative token counter (_meta.totalTokens) plus model ID and project path from sibling summary.json/signals.json. Also reads the tail of logs/unified.jsonl for the subscription tier label (one key narrowly decoded from billing lines; other log content is never parsed). Token figures are context-growth estimates that undercount billed usage and have no input/output split. Prompts and message contents are never read; no network; credential files are never touched. Grok exposes no usage percent locally, so none is shown."
     }
 
     public func explainRequiredPermissions() -> String {
-        "Read-only access to ~/.grok/sessions (or GROK_HOME). Needed to estimate local Grok token usage per project and model. No credentials are read and nothing is uploaded."
+        "Read-only access to ~/.grok/sessions (or GROK_HOME), plus the tail of ~/.grok/logs/unified.jsonl for the subscription tier label only. Needed to estimate local Grok token usage per project and model. No credentials are read and nothing is uploaded."
     }
 
     public func refreshUsage(state: ScanState) throws -> (AdapterRefreshResult, ScanState) {
@@ -96,8 +95,55 @@ public struct GrokCodeAdapter: ProviderAdapter {
                 }
             }
         }
-        // grok 本機無限額來源:rateLimits 恆為空。
-        return (AdapterRefreshResult(events: events, rateLimits: [], scannedFiles: scanned, parseErrors: parseErrors), newState)
+        // grok 本機無「用量百分比」來源(percent 恆為 unknown 屬設計);
+        // 但 CLI 的 billing 行含訂閱層級 → 以 plan-only reading 落地標籤,不進窗口仲裁。
+        var readings: [RateLimitReading] = []
+        if let tier = Self.readSubscriptionTier(from: billingLogFiles) {
+            readings.append(RateLimitReading(providerId: "grok-code", observedAt: Date(),
+                                             primary: nil, secondary: nil, planType: tier))
+        }
+        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors), newState)
+    }
+
+    // MARK: - 訂閱方案標籤(billing 行窄解碼)
+
+    /// unified.jsonl 行的窄解碼:僅 `ctx.subscriptionTier` 一鍵;其餘 log 內容不物化。
+    struct BillingLine: Decodable {
+        struct Ctx: Decodable { let subscriptionTier: String? }
+        let ctx: Ctx?
+    }
+
+    /// 讀 log 尾端(最後 ≤2MiB)的 billing 行,取**最後一筆非空** subscriptionTier。
+    /// 缺檔/缺鍵/解析失敗 → nil(絕不猜值)。有界讀取:log 可能很大,只看尾部。
+    /// billing 行只在 grok CLI 啟動時寫入,重度使用下可能沉到很深(實測 ~1MB);
+    /// tier 一經 ingest 便持久化於 limits-state(nil 讀數不清除),tail 抓到一次即可。
+    public static func readSubscriptionTier(from urls: [URL], tailBytes: Int = 2 * 1024 * 1024) -> String? {
+        let decoder = JSONDecoder()
+        for url in urls {
+            guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            let size = (try? handle.seekToEnd()) ?? 0
+            let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+            try? handle.seek(toOffset: start)
+            guard let data = try? handle.readToEnd(), !data.isEmpty else { continue }
+
+            var latest: String?
+            var scanStart = data.startIndex
+            // 從截斷點起第一行可能不完整,逐行掃、壞行跳過即可。
+            while scanStart < data.endIndex {
+                let lineEnd = data[scanStart...].firstIndex(of: 0x0A) ?? data.endIndex
+                let line = data[scanStart..<lineEnd]
+                scanStart = lineEnd < data.endIndex ? data.index(after: lineEnd) : data.endIndex
+                // quickFilter:先做便宜的子字串檢查,再窄解碼。
+                guard line.count > 20, line.range(of: Data("subscriptionTier".utf8)) != nil else { continue }
+                if let parsed = try? decoder.decode(BillingLine.self, from: line),
+                   let tier = parsed.ctx?.subscriptionTier, !tier.isEmpty {
+                    latest = tier
+                }
+            }
+            if let latest { return latest }
+        }
+        return nil
     }
 
     // MARK: - 檔案內解析上下文(跨增量掃描持久化)

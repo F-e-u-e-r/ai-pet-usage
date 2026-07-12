@@ -110,6 +110,25 @@ public final class FileLock {
     }
 }
 
+// MARK: - 使用者本地時間格式(UI/報告/CLI 的人讀時間戳)
+
+public enum LocalTime {
+    /// `yyyy-MM-dd HH:mm:ss (UTC+8)`;半時區顯示 `UTC+5:30`。timeZone 參數化供測試注入。
+    public static func format(_ date: Date, timeZone: TimeZone = .current) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let seconds = timeZone.secondsFromGMT(for: date)
+        let sign = seconds < 0 ? "-" : "+"
+        let absSeconds = abs(seconds)
+        let hours = absSeconds / 3600
+        let minutes = (absSeconds % 3600) / 60
+        let offset = minutes == 0 ? "UTC\(sign)\(hours)" : String(format: "UTC%@%d:%02d", sign, hours, minutes)
+        return "\(f.string(from: date)) (\(offset))"
+    }
+}
+
 // MARK: - 快速 ISO8601 解析(執行緒安全、容忍毫秒與 ±hh:mm 時區)
 
 public enum ISO8601 {

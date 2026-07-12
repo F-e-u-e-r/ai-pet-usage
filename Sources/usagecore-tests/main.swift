@@ -30,6 +30,10 @@ runSuite("ClaudeCodeAdapterTests", [
     ("testStatuslinePayloadYieldsOfficialRateLimits", claude.testStatuslinePayloadYieldsOfficialRateLimits),
     ("testIncrementalScanDoesNotDuplicate", claude.testIncrementalScanDoesNotDuplicate),
     ("testDetectAvailabilityRechecksInjectedRootAfterCreation", claude.testDetectAvailabilityRechecksInjectedRootAfterCreation),
+    ("testStatuslinePerWindowFreshestComposition", claude.testStatuslinePerWindowFreshestComposition),
+    ("testStatuslineSplitReadingsEndToEndNoCrossPollution", claude.testStatuslineSplitReadingsEndToEndNoCrossPollution),
+    ("testPlanLabelMappingPriority", claude.testPlanLabelMappingPriority),
+    ("testPlanOnlyReadingEmittedFromConfigFixture", claude.testPlanOnlyReadingEmittedFromConfigFixture),
 ])
 
 let codex = CodexAdapterTests()
@@ -52,6 +56,8 @@ runSuite("GrokCodeAdapterTests", [
     ("testGrokEnabledInDefaultSettings", grok.testGrokEnabledInDefaultSettings),
     ("testGeneratedPricesNeverAutoPriceGrok", grok.testGeneratedPricesNeverAutoPriceGrok),
     ("testCuratedEntryDeliberatelyPricesGrok", grok.testCuratedEntryDeliberatelyPricesGrok),
+    ("testBillingTierParsedFromLogTail", grok.testBillingTierParsedFromLogTail),
+    ("testPlanOnlyReadingEmittedThroughRefresh", grok.testPlanOnlyReadingEmittedThroughRefresh),
 ])
 
 let ledger = LedgerTests()
@@ -94,6 +100,20 @@ runSuite("LimitEngineTests", [
     ("testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset", limits.testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset),
     ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
+    // 同窗官方下修(二筆確認;DATA_SOURCES policy 通道 (c))
+    ("testSameWindowSingleLowerReadingStaysPinned", limits.testSameWindowSingleLowerReadingStaysPinned),
+    ("testSameWindowDecreaseAdoptsAfterTwoNewerReadings", limits.testSameWindowDecreaseAdoptsAfterTwoNewerReadings),
+    ("testSameWindowDecreaseReplayCannotSelfConfirm", limits.testSameWindowDecreaseReplayCannotSelfConfirm),
+    ("testSameWindowDecreaseSecondReadingSlightlyHigherStillConfirms", limits.testSameWindowDecreaseSecondReadingSlightlyHigherStillConfirms),
+    ("testRisingReadingClearsPendingDecrease", limits.testRisingReadingClearsPendingDecrease),
+    ("testFullReindexClearsPendingDecreaseAndStampsReason", limits.testFullReindexClearsPendingDecreaseAndStampsReason),
+    ("testDecreaseEpsilonBoundary", limits.testDecreaseEpsilonBoundary),
+    ("testLegacyStateWithoutNewFieldsDecodes", limits.testLegacyStateWithoutNewFieldsDecodes),
+    ("testPendingDecreaseSurvivesEngineReload", limits.testPendingDecreaseSurvivesEngineReload),
+    ("testCorrectedSurfacesOnly24Hours", limits.testCorrectedSurfacesOnly24Hours),
+    ("testPrimaryOnlyReadingsDoNotDisturbStaleWeekly", limits.testPrimaryOnlyReadingsDoNotDisturbStaleWeekly),
+    ("testOutOfOrderHighReadingKeepsPendingDecrease", limits.testOutOfOrderHighReadingKeepsPendingDecrease),
+    ("testPlanOnlyReadingSetsPlanTypeWithoutWindows", limits.testPlanOnlyReadingSetsPlanTypeWithoutWindows),
 ])
 
 let pricing = PricingTests()
@@ -107,6 +127,11 @@ runSuite("PricingTests", [
 let report = ReportTests()
 runSuite("ReportTests", [
     ("testReportSectionsAndRedaction", report.testReportSectionsAndRedaction),
+])
+
+let localTime = LocalTimeTests()
+runSuite("LocalTimeTests", [
+    ("testFormatsWithUTCOffset", localTime.testFormatsWithUTCOffset),
 ])
 
 let feedingTests = FeedingEngineTests()

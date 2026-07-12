@@ -105,7 +105,7 @@ public enum ReportGenerator {
         html += "</tbody></table>"
         let corrected = data.limitStates.filter { $0.fiveHour.corrected || $0.weekly.corrected }
         if !corrected.isEmpty {
-            html += "<p class=\"note\">⚠ Some usage percentages were corrected downward after a full reindex.</p>"
+            html += "<p class=\"note\">⚠ Some usage percentages were corrected downward recently (confirmed official readings or a full reindex).</p>"
         }
         html += "</section>"
 

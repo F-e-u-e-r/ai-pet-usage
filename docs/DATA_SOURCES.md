@@ -39,12 +39,16 @@ Codex limit percentages are **provider-reported** (confidence: high). The ledger
 
 Deduplication key is `message.id + requestId` (streaming rewrites the same message several times; only the first occurrence is counted). `model == "<synthetic>"` lines are skipped.
 
+**Also read**: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), only to extract the subscription plan label — exactly two keys (`oauthAccount.organizationRateLimitTier`, `oauthAccount.organizationType`) through a narrow decoder; nothing else in that file (account details, project history, …) is parsed or retained.
+
 **Not read**: prompts, message contents, attachments, file-history snapshots.
 
 **Official Claude Code limits (preferred source).** Claude Code feeds its statusline command a JSON payload that includes `rate_limits` — the official `five_hour` / `seven_day` `used_percentage` and `resets_at` (unix). Any statusline hook that saves this payload to disk gives the app provider-reported limits (confidence: high), exactly like Codex. The adapter checks:
 
 - `~/Library/Application Support/AIPetUsage/claude-statusline.json` — written by this repo's own hook, `Scripts/claude-statusline-hook.sh` (install via `settings.json → statusLine`)
 - `~/.claude/usage-status.json` — the same payload as saved by other statusline tools
+
+When several statusline files exist, the 5-hour and weekly windows are each taken from the file with the freshest `mtime` that carries that window, and each window keeps its own source file's observation time (a stale file can never borrow freshness from an active one).
 
 **Fallback estimation.** Without a statusline payload, session logs contain only token counts, so the app estimates the 5-hour window with the standard block rule (first event floors to the hour, window = start + 5h) and shows a percent only when the user sets a token budget in Settings → Limits. Weekly is a rolling 7-day sum. Estimated values are always labelled `estimated`.
 
@@ -66,7 +70,9 @@ Deduplication key is `message.id + requestId` (streaming rewrites the same messa
 
 The session-folder name is the URL-encoded project path and is decoded to attribute usage to a project. Message contents (`params.update`) are never decoded — each line is read through a narrow parser that only sees the token counter and its metadata.
 
-**Not read**: prompts, assistant/message contents, tool call payloads, `events.jsonl`, search indexes, logs, auth/credential files.
+**Also read**: the tail (last ≤2 MiB) of `logs/unified.jsonl`, only to extract the subscription tier label (`subscriptionTier`, e.g. "SuperGrok") from billing lines through a narrow decoder — no other log content is parsed or retained. (Billing lines are written on CLI startup and can sit ~1 MB deep under heavy use; once seen, the label persists even when later tails miss it.)
+
+**Not read**: prompts, assistant/message contents, tool call payloads, `events.jsonl`, search indexes, other log content, auth/credential files.
 
 **Token figures are estimates that undercount.** Grok's local log exposes only a cumulative, context-size-like token counter per session, and it even regresses after context compaction (a later line reports a smaller value). The ledger event for each turn is the positive growth of that counter since the previous turn; on a regression the baseline is reset and no negative event is produced. Because the counter tracks context size rather than billed input/output, these figures **undercount actual billed usage** and have no input/output/cache split (all growth is recorded as input, confidence: estimated). **Grok exposes no usage limits locally, so no usage percent is provided.**
 
@@ -77,8 +83,8 @@ The session-folder name is the URL-encoded project path and is decoded to attrib
 Policy:
 
 - Provider-wide aggregates win over any single terminal panel.
-- Within one active window, a usage percent never goes **down** because an older/stale source event appeared. Newer readings can only raise it.
-- A percent may drop only when the window rolls over (resets_at changes) or after an explicit **Full Reindex** — such corrections are labelled `corrected` in the UI and in reports.
+- Within one active window, a usage percent never goes **down** because an older/stale source event appeared. A single newer-but-lower reading does not lower it either.
+- A percent may drop only through three channels: (a) the window rolls over (resets_at changes); (b) an explicit **Full Reindex**; or (c) **two consecutive newer official readings** — strictly increasing observation times, each more than 0.5pt below the stored value (e.g. after a plan upgrade or a backend recompute). Channels (b) and (c) are labelled `corrected` in the UI, reports, and CLI for 24 hours after the correction, then the label clears on its own.
 - Expired windows (resets_at in the past) display as recovered (0%, confidence `estimated`) until fresh data arrives.
 
 ## Local storage

@@ -54,3 +54,5 @@ id_ed25519.*
 # 只忽略根目錄產出的 HTML 報告,子目錄的 HTML fixture / 文件仍可入庫。
 /*.html
 /*.htm
+/skills-staging/
+/.playwright-mcp/
