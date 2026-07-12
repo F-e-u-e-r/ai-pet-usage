@@ -22,6 +22,11 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     /// 範圍變更時重錨;不持久化(重啟以還原位置重錨)。V2 driver 亦讀此值收窄 RegionMap。
     private(set) var wanderHomeCenterX: CGFloat?
     private var lastWanderEnabled = false
+    /// 使用者拖曳中(R2 B4):willMove(僅使用者拖曳觸發)設起,漫遊 tick 全停;
+    /// 拖曳落定去抖清除。failsafe:willMove 後零 didMove(按住不動)3s 自清,
+    /// 不得永久卡死漫遊。
+    private var userDragActive = false
+    private var userDragFailsafeAt: Date = .distantPast
 
     init(model: AppModel) {
         self.model = model
@@ -67,7 +72,9 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     private func panelSize() -> NSSize {
         let base = model?.settings.petSize ?? 96
-        return NSSize(width: base * 2.2, height: base * 2.0)
+        // R2 B1/B3:面板須容納 4 環容量外徑 + 邊距;頂部餘裕兼泡泡區(視窗透明)。
+        let capD = UsageRingModel.capacityOuterDiameter(petSize: base)
+        return NSSize(width: max(base * 2.6, capD + 12), height: max(base * 2.0, capD + 14))
     }
 
     private func restoreOrigin(for size: NSSize) -> NSPoint {
@@ -154,9 +161,25 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         restartWanderLoop()
     }
 
+    /// 使用者開始拖曳視窗(AppKit:willMove 由使用者拖曳觸發;程式 setFrameOrigin
+    /// 只發 didMove)。同步讀旗標(R2 B4/codex:不得走 async Task,程式性移動的
+    /// isWanderMoving 包夾窗口極短,晚讀必誤判)。V2 完全不動(E3 已揭露回彈)。
+    nonisolated func windowWillMove(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            guard !isWanderMoving, !EngineV2.isEnabled else { return }
+            userDragActive = true
+            userDragFailsafeAt = Date().addingTimeInterval(3)
+            model?.setWanderDirection(0)
+        }
+    }
+
     nonisolated func windowDidMove(_ notification: Notification) {
         Task { @MainActor in
             guard let panel = self.panel, !self.isWanderMoving else { return }
+            // 拖曳持續中:順延 failsafe(每個使用者 move 事件都證明拖曳還活著)。
+            if self.userDragActive {
+                self.userDragFailsafeAt = Date().addingTimeInterval(3)
+            }
             // 去抖:拖曳期間每個 move 事件取消上一個排程,靜止 0.4s 後才寫一次 settings.json。
             let origin = panel.frame.origin
             self.positionSaveTask?.cancel()
@@ -166,6 +189,13 @@ final class PetPanelController: NSObject, NSWindowDelegate {
                 self?.model?.savePetPosition(origin)
                 // (b) 手動拖曳落定 → 統一重錨(帶隨放置點走,必為帶內;V2 同步重算)。
                 self?.reanchorWanderHome()
+                // R2 B4:恢復漫遊並顯式進入 2–6s 停走相位 — 放手後原地站一會兒才走。
+                // 以 userDragActive 閘控(grok P3-1):漫遊自身的「走→停」落定不得重抽相位。
+                if self?.userDragActive == true {
+                    self?.userDragActive = false
+                    self?.model?.setWanderDirection(0)
+                    self?.wanderPhaseUntil = Date().addingTimeInterval(.random(in: 2...6))
+                }
                 self?.positionSaveTask = nil // 完成後清空,destroy() 才不會把已落地的 task 誤判為 pending
             }
         }
@@ -192,6 +222,10 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     }
 
     private func wanderTick() {
+        // R2 B4:使用者拖曳中全停(failsafe:willMove 後零 didMove 的按住不動 3s 自清)。
+        if userDragActive {
+            if Date() > userDragFailsafeAt { userDragActive = false } else { return }
+        }
         guard let model, let panel, panel.isVisible else { return }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let moodOK = [.idle, .happy, .focused].contains(model.mood.mood)
@@ -349,64 +383,70 @@ struct PetView: View {
 
         TimelineView(.animation(minimumInterval: 1.0 / 10, paused: paused)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
+            let capD = UsageRingModel.capacityOuterDiameter(petSize: size)
 
-            VStack(spacing: 2) {
-                if context.date < bubbleUntil {
-                    PixelBubble(text: bubbleText)
-                        .transition(.opacity)
-                }
-                ZStack(alignment: .topTrailing) {
-                    // 用量環(A11 定案 R):sprite 後方、同視窗圖層 → 天然跟隨寵物移動。
-                    UsageRing(limits: model.orderedLimitStates,
-                              warn: settings.core.warnThresholdPercent,
-                              danger: settings.core.dangerThresholdPercent)
-                        .frame(width: size * 1.25, height: size * 1.25)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            // R2 B1 兩層巢狀契約:outer = 環容器(容量外徑),inner = sprite+徽章+彩紙
+            //(徽章 topTrailing 相對 sprite,不得漂到環外緣)。泡泡改 overlay,
+            // 佈局零影響 → 寵物不再因泡泡彈出而位移(R2 B3)。
+            GeometryReader { geo in
+                ZStack {
+                    // 用量環:每家 provider 一圈,identity 色(R2 B2)。
+                    UsageRing(limits: model.orderedLimitStates, petSize: size)
+                        .frame(width: capD, height: capD)
 
-                    // E2a:V2 引擎開啟時渲染 driver 發佈的 pack 幀快照(藍鳥真美術);
-                    // 快照未達(首 commit 前的極短窗)寧可空白也不閃 legacy 皮
-                    //(bird 的 resolvedSpecies 會錯落到 dog;grok P2-3)。
-                    // flag 關(v2Frame 恆 nil 且 isEnabled false)走 legacy,行為位元不變。
-                    if EngineV2.isEnabled {
-                        if let v2 = model.v2Frame {
-                            PixelFrameView(rows: v2.rows,
-                                           palette: v2.palette,
-                                           gridWidth: v2.gridWidth,
-                                           gridHeight: v2.gridHeight,
-                                           flipped: v2.mirrored)
-                                .frame(width: size * 1.3, height: size * 1.15)
+                    // inner:sprite + mood 徽章 + confetti(既有語彙原封)。
+                    ZStack(alignment: .topTrailing) {
+                        // E2a:V2 引擎開啟時渲染 driver 發佈的 pack 幀快照(藍鳥真美術);
+                        // 快照未達(首 commit 前的極短窗)寧可空白也不閃 legacy 皮。
+                        if EngineV2.isEnabled {
+                            if let v2 = model.v2Frame {
+                                PixelFrameView(rows: v2.rows,
+                                               palette: v2.palette,
+                                               gridWidth: v2.gridWidth,
+                                               gridHeight: v2.gridHeight,
+                                               flipped: v2.mirrored)
+                                    .frame(width: size * 1.3, height: size * 1.15)
+                                    .saturation(mood.mood == .exhausted ? 0.35 : 1)
+                                    .opacity(mood.mood == .sleeping ? 0.85 : 1)
+                            } else {
+                                Color.clear.frame(width: size * 1.3, height: size * 1.15)
+                            }
+                        } else {
+                            // legacy 渲染路徑(V2 關):animator 幀計算只在此分支發生。
+                            legacySpriteView(at: context.date, paused: paused, size: size)
                                 .saturation(mood.mood == .exhausted ? 0.35 : 1)
                                 .opacity(mood.mood == .sleeping ? 0.85 : 1)
-                        } else {
-                            Color.clear.frame(width: size * 1.3, height: size * 1.15)
                         }
-                    } else {
-                        // legacy 渲染路徑(V2 關):animator 幀計算只在此分支發生(grok P3-3)。
-                        legacySpriteView(at: context.date, paused: paused, size: size)
-                            .saturation(mood.mood == .exhausted ? 0.35 : 1)
-                            .opacity(mood.mood == .sleeping ? 0.85 : 1)
-                    }
 
-                    if let glyph = PixelGlyphs.glyph(for: mood.mood) {
-                        let isAlert = mood.mood == .warning || mood.mood == .exhausted
-                        // spec:警戒驚嘆號以整數像素彈跳表現(僅 alert 狀態),
-                        // 其餘徽章維持柔和閃爍
-                        let bounce: CGFloat = (!paused && isAlert && !Int(t * 2).isMultiple(of: 2)) ? -2 : 0
-                        PixelGlyphView(glyph: glyph)
-                            .frame(width: size * 0.16, height: size * 0.26)
-                            .offset(x: -size * 0.02, y: -size * 0.04 + bounce)
-                            .opacity(isAlert || paused ? 1 : 0.55 + 0.45 * abs(sin(t * 3)))
-                    }
+                        if let glyph = PixelGlyphs.glyph(for: mood.mood) {
+                            let isAlert = mood.mood == .warning || mood.mood == .exhausted
+                            // spec:警戒驚嘆號以整數像素彈跳表現(僅 alert 狀態),
+                            // 其餘徽章維持柔和閃爍
+                            let bounce: CGFloat = (!paused && isAlert && !Int(t * 2).isMultiple(of: 2)) ? -2 : 0
+                            PixelGlyphView(glyph: glyph)
+                                .frame(width: size * 0.16, height: size * 0.26)
+                                .offset(x: -size * 0.02, y: -size * 0.04 + bounce)
+                                .opacity(isAlert || paused ? 1 : 0.55 + 0.45 * abs(sin(t * 3)))
+                        }
 
-                    if mood.mood == .celebration {
-                        ConfettiPixels(t: paused ? 0 : t)
-                            .frame(width: size * 1.3, height: size * 1.15)
-                            .allowsHitTesting(false)
+                        if mood.mood == .celebration {
+                            ConfettiPixels(t: paused ? 0 : t)
+                                .frame(width: size * 1.3, height: size * 1.15)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(width: size * 1.3, height: size * 1.15)
+                }
+                .frame(width: capD, height: capD)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 6)
+                .overlay(alignment: .top) {
+                    if context.date < bubbleUntil {
+                        PixelBubble(text: bubbleText, maxWidth: geo.size.width - 12)
+                            .transition(.opacity)
                     }
                 }
-
             }
-            .padding(6)
         }
         .opacity(settings.petOpacity)
         .contentShape(Rectangle())
@@ -471,9 +511,10 @@ struct PetView: View {
             }
             return lines.isEmpty ? "no usage data yet" : lines.joined(separator: "\n")
         case 1:
+            // R2 B3:縮短最寬行(codex 實算 64pt 面板下 "treats N · burn X/h" 溢出)。
             let pet = model.petState
             return "Lv.\(pet.level) · fullness \(Int(pet.hunger))%\n"
-                + "treats \(model.treatsAvailable) · burn \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
+                + "\(model.treatsAvailable) treats · \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
         default:
             let refreshed = timeAgo(model.dashboard.lastRefreshAt)
             let flags = model.orderedLimitStates.prefix(4).map { st in
@@ -513,8 +554,11 @@ struct ConfettiPixels: View {
 }
 
 /// 像素風對話泡泡:階梯圓角、粗黑框、白底、階梯尾巴(8-bit 漫畫風,自繪)。
+/// R2 B3:呼叫端傳入可用最大寬(面板實寬 − 12),文字先換行、極端時輕縮 —
+/// 任何寵物尺寸下不裁字。
 struct PixelBubble: View {
     let text: String
+    var maxWidth: CGFloat = .infinity
 
     private let unit: CGFloat = 3   // 一個「像素」的邊長
     private let border: CGFloat = 3
@@ -524,8 +568,11 @@ struct PixelBubble: View {
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .foregroundStyle(Color(red: 0.12, green: 0.12, blue: 0.14))
             .multilineTextAlignment(.center)
+            .minimumScaleFactor(0.85)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .frame(maxWidth: maxWidth)
+            .fixedSize(horizontal: false, vertical: true)
             .background { bubbleShape }
             .padding(.bottom, unit * 3) // 尾巴空間
     }
@@ -560,60 +607,70 @@ struct PixelBubble: View {
     }
 }
 
-/// 用量環(A11 定案 R):顯示「最受限 provider」的 5h 用量。
-/// 進度弧色 = 該 provider 的 identity 色;≥warn 橘、≥danger 紅(嚴重度只上在進度弧,
-/// 底環恆為低對比)。全部 provider 皆無 5h 百分比 → 只畫底環。並列最大值以
-/// orderedLimitStates 順序穩定 tie-break。點擊泡泡第 0 頁仍有全 provider 明細。
+/// 用量環(R2 B2):**每家有 5h 百分比的 provider 一圈**(同心;Grok nil 跳過),
+/// 外→內 = orderedLimitStates 過濾後順序,自 sprite 淨空向外疊(幾何契約見
+/// UsageRingModel)。進度弧 = identity 色**恆定**;嚴重度由 mood 徽章承載
+///(E2a A11 的環上 warn/danger 換色規則自 R2 廢止 — 僅環,其餘 severity 呈現不動)。
 struct UsageRing: View {
     let limits: [ProviderLimitState]
-    let warn: Double
-    let danger: Double
-
-    private var mostConstrained: (state: ProviderLimitState, percent: Double)? {
-        var best: (ProviderLimitState, Double)?
-        for st in limits {
-            guard let p = st.fiveHour.usedPercent else { continue }
-            if best == nil || p > best!.1 { best = (st, p) }   // 穩定順序:先到者於並列時勝
-        }
-        return best
-    }
-
-    /// 底部缺口(A11/F10):環在 6 點鐘方向留 8%,徽章/腳部不與環打架。
-    /// 起點旋轉到缺口右緣,可用弧長 = 92%。
-    private let gapFraction: Double = 0.08
+    let petSize: Double
 
     var body: some View {
-        let usable = 1 - gapFraction
+        let entries = UsageRingModel.entries(from: limits)
+        let usable = 1 - UsageRingModel.gapFraction
+        let rotation = Angle.degrees(90 + 360 * UsageRingModel.gapFraction / 2)
         ZStack {
-            Circle()
-                .trim(from: 0, to: usable)
-                .stroke(Theme.textDisabled.opacity(0.22), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                .rotationEffect(.degrees(90 + 360 * gapFraction / 2))
-            if let top = mostConstrained {
-                Circle()
-                    .trim(from: 0, to: usable * min(1, max(0.01, top.percent / 100)))
-                    .stroke(arcColor(top), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .rotationEffect(.degrees(90 + 360 * gapFraction / 2))
+            if entries.isEmpty {
+                ring(diameter: UsageRingModel.baseDiameter(petSize: petSize)) {
+                    track(usable: usable, rotation: rotation)
+                }
+            }
+            ForEach(Array(entries.enumerated()), id: \.element.providerId) { k, entry in
+                let d = UsageRingModel.diameter(index: k, count: entries.count, petSize: petSize)
+                ring(diameter: d) {
+                    ZStack {
+                        track(usable: usable, rotation: rotation)
+                        Circle()
+                            .trim(from: 0, to: usable * min(1, max(0.01, entry.percent / 100)))
+                            .stroke(identityColor(entry.providerId),
+                                    style: StrokeStyle(lineWidth: UsageRingModel.strokeWidth, lineCap: .round))
+                            .rotationEffect(rotation)
+                    }
+                }
             }
         }
-        .help(helpText)
-        .accessibilityLabel(helpText)
+        .help(helpText(entries))
+        .accessibilityLabel(helpText(entries))
         .allowsHitTesting(false)
     }
 
-    private func arcColor(_ top: (state: ProviderLimitState, percent: Double)) -> Color {
-        if top.percent >= danger { return .red }
-        if top.percent >= warn { return .orange }
-        let brand = ProviderBrands.brand(for: top.state.providerId)
+    /// stroke 置中於路徑 → frame 內縮一個線寬,外緣恰為 diameter(不外溢容器)。
+    private func ring<Content: View>(diameter: CGFloat, @ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(width: diameter - UsageRingModel.strokeWidth,
+                   height: diameter - UsageRingModel.strokeWidth)
+    }
+
+    private func track(usable: Double, rotation: Angle) -> some View {
+        Circle()
+            .trim(from: 0, to: usable)
+            .stroke(Theme.textDisabled.opacity(0.22),
+                    style: StrokeStyle(lineWidth: UsageRingModel.strokeWidth, lineCap: .round))
+            .rotationEffect(rotation)
+    }
+
+    private func identityColor(_ providerId: String) -> Color {
+        let brand = ProviderBrands.brand(for: providerId)
         return Color(red: Double((brand.dotColor >> 16) & 0xFF) / 255,
                      green: Double((brand.dotColor >> 8) & 0xFF) / 255,
                      blue: Double(brand.dotColor & 0xFF) / 255)
     }
 
-    private var helpText: String {
-        guard let top = mostConstrained else { return "No 5h limit data" }
-        let brand = ProviderBrands.brand(for: top.state.providerId)
-        return "Most constrained: \(brand.displayName) \(Int(top.percent.rounded()))% (5h)"
+    private func helpText(_ entries: [UsageRingModel.Entry]) -> String {
+        guard !entries.isEmpty else { return "No 5h limit data" }
+        return entries.map { e in
+            "\(ProviderBrands.brand(for: e.providerId).displayName) \(Int(e.percent.rounded()))%"
+        }.joined(separator: " · ") + " (5h)"
     }
 }
 

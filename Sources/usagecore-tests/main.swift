@@ -279,6 +279,13 @@ runSuite("EngineV2PackTests", [
     ("testPackDisplayInfo", enginePacks.testPackDisplayInfo),
 ])
 
+let usageRing = UsageRingModelTests()
+runSuite("UsageRingModelTests", [
+    ("testEntriesFilterOrderAndCap", usageRing.testEntriesFilterOrderAndCap),
+    ("testDiametersGrowOutwardFromSpriteClearBase", usageRing.testDiametersGrowOutwardFromSpriteClearBase),
+    ("testCapacityOuterDiameterAcrossSizes", usageRing.testCapacityOuterDiameterAcrossSizes),
+])
+
 let wanderBand = WanderBandTests()
 runSuite("WanderBandTests", [
     ("testFullRangeEqualsWholeScreen", wanderBand.testFullRangeEqualsWholeScreen),

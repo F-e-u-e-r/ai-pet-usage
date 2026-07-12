@@ -56,3 +56,11 @@ id_ed25519.*
 /*.htm
 /skills-staging/
 /.playwright-mcp/
+# 本機 Claude Code 專案設定/暫存(未來若要共享 repo 級 settings.json 再以 ! 反悔)
+.claude/
+# Xcode 使用者殘留(純 SwiftPM 專案,防禦性)
+*.xcworkspace
+xcuserdata/
+# 其他常見 agent 工作目錄(防禦性)
+.serena/
+.aider*
