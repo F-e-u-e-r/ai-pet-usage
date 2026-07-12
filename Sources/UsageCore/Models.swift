@@ -166,6 +166,14 @@ public enum WarningState: String, Codable, Sendable {
     case noData
 }
 
+/// 同窗向下修正的合法通道(政策見 docs/DATA_SOURCES.md「Limit calculation policy」)。
+public enum CorrectionReason: String, Codable, Sendable {
+    /// 連續 ≥2 筆 observedAt 嚴格遞增、降幅 >0.5pt 的較新官方讀數確認(方案升級/後端重算)。
+    case official
+    /// 使用者觸發的全量重建索引。
+    case reindex
+}
+
 public struct LimitWindowState: Codable, Sendable, Hashable {
     public var usedPercent: Double?
     public var usedTokens: Int?
@@ -173,11 +181,16 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
     public var resetAt: Date?
     public var windowMinutes: Int
     public var confidence: Confidence
-    /// 同一窗口內曾發生向下修正(僅允許於全量重建索引後),UI 需標示。
+    /// 同一窗口內「最近 24h 內」發生過向下修正(Full Reindex 或二筆確認的官方下修),
+    /// UI/報告/CLI 據此標示。組裝層統一以 correctedAt 閘 24h — 修正是一次性事件,
+    /// 不是永久狀態;超過 24h 或缺 correctedAt(舊 state)一律不 surface。
     public var corrected: Bool
+    public var correctedAt: Date?
+    public var correctedReason: CorrectionReason?
 
     public init(usedPercent: Double? = nil, usedTokens: Int? = nil, budgetTokens: Int? = nil,
-                resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, corrected: Bool = false) {
+                resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, corrected: Bool = false,
+                correctedAt: Date? = nil, correctedReason: CorrectionReason? = nil) {
         // 使用率天花板 100%:官方讀值或預算估算(tokens/budget×100)可能回報 >100,
         // 對外一律夾到 [0, 100],避免 UI 出現 101% / 103%。
         self.usedPercent = usedPercent.map { min(100, max(0, $0)) }
@@ -187,6 +200,8 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
         self.windowMinutes = windowMinutes
         self.confidence = confidence
         self.corrected = corrected
+        self.correctedAt = correctedAt
+        self.correctedReason = correctedReason
     }
 }
 

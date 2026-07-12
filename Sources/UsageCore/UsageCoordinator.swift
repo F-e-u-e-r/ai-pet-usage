@@ -361,8 +361,13 @@ public actor UsageCoordinator {
             quality.append("\(pid): history kept — provider unavailable during full reindex")
         }
         for limit in limitStates {
-            if limit.fiveHour.corrected || limit.weekly.corrected {
-                quality.append("\(limit.providerId): usage percent was corrected downward after a full reindex")
+            // corrected 已在組裝層以 correctedAt 閘 24h(一次性事件,非永久狀態);
+            // 這裡只負責把「哪個窗、為什麼、何時」講清楚。
+            for (windowName, w) in [("5h", limit.fiveHour), ("weekly", limit.weekly)] where w.corrected {
+                let cause = w.correctedReason == .reindex
+                    ? "full reindex" : "official reading (plan change or backend recompute)"
+                let at = w.correctedAt.map { " at \(LocalTime.format($0))" } ?? ""
+                quality.append("\(limit.providerId): \(windowName) usage percent corrected downward — \(cause)\(at)")
             }
             if limit.fiveHour.confidence == .stale {
                 quality.append("\(limit.providerId): rate-limit reading is older than 6h; percent may lag")

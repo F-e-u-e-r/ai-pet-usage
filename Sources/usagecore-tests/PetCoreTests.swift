@@ -190,7 +190,7 @@ final class CoordinatorIntegrationTests: XCTestCase {
         let coordinator = UsageCoordinator(
             dataDir: dataDir,
             settings: CoreSettings(claudeFiveHourTokenBudget: 1_000_000),
-            adapters: [CodexAdapter(roots: [codexRoot]), ClaudeCodeAdapter(roots: [claudeRoot])]
+            adapters: [CodexAdapter(roots: [codexRoot]), ClaudeCodeAdapter(roots: [claudeRoot], statuslineFiles: [], planConfigFiles: [])]
         )
 
         let expectation = DispatchSemaphore(value: 0)
@@ -222,7 +222,7 @@ final class CoordinatorIntegrationTests: XCTestCase {
             let coordinator2 = UsageCoordinator(
                 dataDir: dataDir,
                 settings: CoreSettings(),
-                adapters: [CodexAdapter(roots: [codexRoot]), ClaudeCodeAdapter(roots: [claudeRoot])]
+                adapters: [CodexAdapter(roots: [codexRoot]), ClaudeCodeAdapter(roots: [claudeRoot], statuslineFiles: [], planConfigFiles: [])]
             )
             let outcome2 = await coordinator2.refresh()
             XCTAssertEqual(outcome2.insertedEvents, 0, "重啟後不得重複匯入")
@@ -267,7 +267,7 @@ final class CoordinatorIntegrationTests: XCTestCase {
             settings: CoreSettings(),
             adapters: [
                 CodexAdapter(roots: [codexRoot]),
-                ClaudeCodeAdapter(roots: [missingClaudeRoot], statuslineFiles: [])
+                ClaudeCodeAdapter(roots: [missingClaudeRoot], statuslineFiles: [], planConfigFiles: [])
             ]
         )
 
@@ -300,7 +300,7 @@ final class CoordinatorIntegrationTests: XCTestCase {
         let coordinator = UsageCoordinator(
             dataDir: makeTempDir(), settings: CoreSettings(),
             adapters: [CodexAdapter(roots: [codexRoot]),
-                       ClaudeCodeAdapter(roots: [missing], statuslineFiles: [statusFile])]
+                       ClaudeCodeAdapter(roots: [missing], statuslineFiles: [statusFile], planConfigFiles: [])]
         )
         let expectation = DispatchSemaphore(value: 0)
         Task {

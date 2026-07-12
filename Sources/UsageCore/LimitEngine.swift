@@ -42,8 +42,10 @@ public struct CoreSettings: Codable, Sendable {
 }
 
 /// 限額引擎:把 provider 回報的 rate-limit 讀值折疊成「provider 全域」狀態。
-/// 規則(規格要求):同一限額窗口內,較舊/較低的來源事件不得拉低已知百分比;
-/// 只有窗口翻轉或全量重建索引才允許向下修正,且修正需標示。
+/// 規則(政策 = docs/DATA_SOURCES.md「Limit calculation policy」):同一限額窗口內,
+/// 較舊/較低的來源事件不得拉低已知百分比;向下修正只有三條合法通道 —
+/// (a) 窗口翻轉、(b) 全量重建索引、(c) 連續兩筆 observedAt 嚴格遞增且各低於現值
+/// 0.5pt 以上的官方讀數(方案升級/後端重算)。(b)(c) 標 `corrected`,僅 surface 24h。
 public final class LimitEngine {
 
     struct PercentSample: Codable {
@@ -60,6 +62,15 @@ public final class LimitEngine {
         var count: Int
     }
 
+    /// 同窗「向下修正」候選(與換窗候選 `pending` 各司其職,互不相涉):
+    /// 官方同窗讀數持續走低(方案升級/後端重算)需連續兩筆 observedAt 嚴格遞增確認,
+    /// 單筆抖低不得下修(重放同樣被 observedAt 規則擋下)。
+    struct PendingDecrease: Codable {
+        var percent: Double
+        var observedAt: Date
+        var count: Int
+    }
+
     struct PersistedWindow: Codable {
         var percent: Double
         var resetsAt: Date?
@@ -70,6 +81,10 @@ public final class LimitEngine {
         var history: [PercentSample]
         /// 舊版 state 檔沒有此欄位 → 解碼為 nil。
         var pending: PendingWindow? = nil
+        /// 同窗下修候選/時點/原因(v0.1 alpha 後新增;舊 state 檔解碼為 nil)。
+        var pendingDecrease: PendingDecrease? = nil
+        var correctedAt: Date? = nil
+        var correctedReason: CorrectionReason? = nil
     }
 
     struct PersistedProvider: Codable {
@@ -151,10 +166,53 @@ public final class LimitEngine {
             let previous = current.percent
             if fullReindex {
                 current.corrected = reading.usedPercent < previous - 0.5
+                if current.corrected {
+                    current.correctedAt = observedAt
+                    current.correctedReason = .reindex
+                } else {
+                    current.correctedAt = nil
+                    current.correctedReason = nil
+                }
                 current.percent = reading.usedPercent
+                current.pendingDecrease = nil
+            } else if reading.usedPercent < previous - 0.5, observedAt > current.observedAt {
+                // 同窗官方下修(方案升級/後端重算)需連續兩筆 observedAt 嚴格遞增的
+                // 較低讀數確認;期間 percent 與 observedAt 皆凍結(單調防護照舊),
+                // 重放(observedAt 未前進)不可自我確認。第二筆採「最新值」——
+                // 兩筆間的小幅回升(60→45.0→45.4)仍屬同一次下修事件。
+                if var p = current.pendingDecrease {
+                    if observedAt > p.observedAt {
+                        p.percent = reading.usedPercent
+                        p.observedAt = observedAt
+                        p.count += 1
+                        if p.count >= 2 {
+                            current.percent = reading.usedPercent
+                            current.corrected = true
+                            current.correctedAt = observedAt
+                            current.correctedReason = .official
+                            current.observedAt = observedAt
+                            current.pendingDecrease = nil
+                            current.history.append(PercentSample(at: observedAt, percent: reading.usedPercent))
+                            if current.history.count > 48 { current.history.removeFirst(current.history.count - 48) }
+                        } else {
+                            current.pendingDecrease = p
+                        }
+                    }
+                } else {
+                    current.pendingDecrease = PendingDecrease(percent: reading.usedPercent,
+                                                              observedAt: observedAt, count: 1)
+                }
+                if let r = reading.resetsAt { current.resetsAt = r }
+                if reading.windowMinutes > 0 { current.windowMinutes = reading.windowMinutes }
+                return current
             } else {
                 // 單調防護:同窗口內只允許上升(舊面板不得覆蓋新聚合值)。
+                // ≈同值/上升讀數要「晚於候選最後觀測」才能作廢下修候選 —— 亂序遲到的
+                // 高值讀數(觀測時間早於候選)無法反證候選之後的狀態(與換窗 pending 同律)。
                 current.percent = max(previous, reading.usedPercent)
+                if let p = current.pendingDecrease, observedAt > p.observedAt {
+                    current.pendingDecrease = nil
+                }
             }
             current.observedAt = max(current.observedAt, observedAt)
             if let r = reading.resetsAt { current.resetsAt = r }
@@ -415,9 +473,15 @@ public final class LimitEngine {
             }
             let age = now.timeIntervalSince(w.observedAt)
             let confidence: Confidence = age > 6 * 3600 ? .stale : .high
+            // corrected 是一次性事件的標示,不是永久狀態:組裝層統一以 correctedAt 閘 24h,
+            // UI/報告/CLI 全部消費點同步治癒;舊 state(corrected=true 但無 correctedAt)不 surface。
+            let correctionVisible = w.corrected
+                && (w.correctedAt.map { now.timeIntervalSince($0) <= 24 * 3600 } ?? false)
             return LimitWindowState(usedPercent: w.percent, resetAt: w.resetsAt,
                                     windowMinutes: w.windowMinutes, confidence: confidence,
-                                    corrected: w.corrected)
+                                    corrected: correctionVisible,
+                                    correctedAt: correctionVisible ? w.correctedAt : nil,
+                                    correctedReason: correctionVisible ? w.correctedReason : nil)
         }
 
         let fiveHour = windowState(provider?.primary, defaultMinutes: 300)
@@ -442,7 +506,7 @@ public final class LimitEngine {
             lastReadingAt: provider?.primary?.observedAt ?? provider?.secondary?.observedAt,
             warning: warning,
             planType: provider?.planType,
-            lastSourceDescription: lastEvent.map { "\($0.sourceKind) event at \(ISO8601.format($0.timestamp))" }
+            lastSourceDescription: lastEvent.map { "\($0.sourceKind) event at \(LocalTime.format($0.timestamp))" }
         )
     }
 
@@ -526,8 +590,10 @@ public final class LimitEngine {
             lastEventAt: lastEvent?.timestamp,
             lastReadingAt: lastEvent?.timestamp,
             warning: warning,
-            planType: nil,
-            lastSourceDescription: lastEvent.map { "\($0.sourceKind) event at \(ISO8601.format($0.timestamp))" }
+            // plan 標籤與 statusline 窗口可用性無關(plan-only reading 落地於 store):
+            // 官方讀值失效退回預算估算時,chip 不得消失。
+            planType: store["claude-code"]?.planType,
+            lastSourceDescription: lastEvent.map { "\($0.sourceKind) event at \(LocalTime.format($0.timestamp))" }
         )
     }
 
