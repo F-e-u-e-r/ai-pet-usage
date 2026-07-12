@@ -53,6 +53,11 @@ enum SpriteExport {
                 }
             }
         }
+
+        // EngineV2 packs(E2a):附 palette 的 pack 也進同一個 preview 頁。
+        // 狗/貓 pack 幀與 legacy 完全相同(遷移 golden 釘住),不重複輸出,只列鳥。
+        html += packSection(pack: SpeciesPacks.birdPack(), emoji: "🐦", outURL: outURL)
+
         html += htmlFooter
 
         let indexURL = outURL.appendingPathComponent("index.html")
@@ -82,14 +87,73 @@ enum SpriteExport {
         """
     }
 
+    // MARK: - EngineV2 pack 區段(G1:鳥 idle/fly 真 sheets;動作依固定順序)
+
+    private static func packSection(pack: SpeciesPack, emoji: String, outURL: URL) -> String {
+        var html = "<h1>\(emoji) \(pack.displayName) — EngineV2 pack</h1>\n"
+        html += """
+        <div class="checklist">
+        <strong>G1 驗收清單(藍鳥)</strong>
+        <ul>
+        <li>50% 尺寸下仍可辨識為鳥(藍身、橘喙、奶白腹)</li>
+        <li>灰階下剪影可辨:喙(深框)、翅(暗階)、尾(腳間暗楔)</li>
+        <li>外框在深色背景不融入;idle 兩幀呼吸、flyFlap 四相翅位清晰</li>
+        <li>drag 驚訝白瞪眼、working 低頭打字可讀</li>
+        </ul>
+        </div>\n
+        """
+        let order: [PetActionID] = [.idle, .flyFlap, .glide, .drag, .working1]
+        let fps = 1.0 / EngineLoop.frameDuration
+        for action in order {
+            guard let frames = pack.frames[action], !frames.isEmpty else { continue }
+            let rowFrames = frames.map { $0.components(separatedBy: "\n") }
+            html += gridSection(label: "action: \(action.rawValue)",
+                                slug: "pack-\(pack.id)-\(action.rawValue)",
+                                frames: rowFrames, fps: fps,
+                                palette: pack.palette, gridWidth: pack.gridWidth,
+                                gridHeight: pack.gridHeight, outURL: outURL)
+        }
+        return html
+    }
+
+    /// 泛化區段:任意 (palette, grid) 的三變體 strip(legacy sprite 與 V2 pack 共用)。
+    private static func gridSection(label: String, slug: String, frames: [[String]], fps: Double,
+                                    palette: [Character: UInt32], gridWidth: Int, gridHeight: Int,
+                                    outURL: URL) -> String {
+        var imgs = ""
+        for (variant, cell, gray) in [("100", 6, false), ("50", 3, false), ("gray", 6, true)] {
+            let name = "\(slug)-\(variant).png"
+            if let image = renderStrip(frames: frames, palette: palette,
+                                       gridWidth: gridWidth, gridHeight: gridHeight,
+                                       cell: cell, grayscale: gray, backgroundHex: backgrounds[0].hex) {
+                writePNG(image, to: outURL.appendingPathComponent(name))
+                imgs += "<figure><img src=\"\(name)\" alt=\"\(slug) \(variant)\"><figcaption>\(variant == "gray" ? "grayscale" : variant + "%")</figcaption></figure>\n"
+            }
+        }
+        return """
+        <section>
+        <h2>\(label) · \(frames.count) frame(s) · \(String(format: "%.1f", fps)) fps</h2>
+        <div class="strips">\(imgs)</div>
+        </section>\n
+        """
+    }
+
     // MARK: - CoreGraphics 渲染(整數 cell、無反鋸齒 = nearest-neighbor)
 
     private static func renderStrip(frames: [[String]], sprite: PixelSprite, cell: Int,
                                     grayscale: Bool, backgroundHex: UInt32) -> CGImage? {
+        renderStrip(frames: frames, palette: sprite.palette,
+                    gridWidth: sprite.width, gridHeight: sprite.height,
+                    cell: cell, grayscale: grayscale, backgroundHex: backgroundHex)
+    }
+
+    private static func renderStrip(frames: [[String]], palette: [Character: UInt32],
+                                    gridWidth: Int, gridHeight: Int, cell: Int,
+                                    grayscale: Bool, backgroundHex: UInt32) -> CGImage? {
         guard !frames.isEmpty else { return nil }
         let pad = 8, gap = 8
-        let frameW = sprite.width * cell
-        let frameH = sprite.height * cell
+        let frameW = gridWidth * cell
+        let frameH = gridHeight * cell
         let width = pad * 2 + frames.count * frameW + (frames.count - 1) * gap
         let height = pad * 2 + frameH
 
@@ -106,7 +170,7 @@ enum SpriteExport {
             let originX = pad + fi * (frameW + gap)
             for (ri, row) in frame.enumerated() {
                 for (ci, ch) in row.enumerated() where ch != "." {
-                    guard var rgb = sprite.palette[ch] else { continue }
+                    guard var rgb = palette[ch] else { continue }
                     if grayscale { rgb = luma(rgb) }
                     // CG 原點在左下,列由上往下 → y 需翻轉
                     let rect = CGRect(x: originX + ci * cell,

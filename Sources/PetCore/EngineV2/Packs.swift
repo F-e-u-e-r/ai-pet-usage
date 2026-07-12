@@ -36,12 +36,16 @@ public struct SpeciesPack: Sendable {
     public var locomotion: LocomotionProfile
     public var anchorOffsets: [PetActionID: CGPoint]      // 底部中心錨之偏移
     public var mirrorSafe: Set<PetActionID>
+    /// 幀字元 → 0xRRGGBB(§8 契約的 E2a 加法擴充;預設空 = 尚未附美術,
+    /// 渲染端沿 legacy 路徑取色)。既有呼叫點/測試零改動。
+    public var palette: [Character: UInt32]
 
     public init(id: String, displayName: String, gridWidth: Int, gridHeight: Int,
                 frames: [PetActionID: [String]], requiredSlots: Set<PetActionID>,
                 optionalSlots: Set<PetActionID>, fallback: [PetActionID: PetActionID],
                 behavior: BehaviorTable, locomotion: LocomotionProfile,
-                anchorOffsets: [PetActionID: CGPoint], mirrorSafe: Set<PetActionID>) {
+                anchorOffsets: [PetActionID: CGPoint], mirrorSafe: Set<PetActionID>,
+                palette: [Character: UInt32] = [:]) {
         self.id = id
         self.displayName = displayName
         self.gridWidth = gridWidth
@@ -54,6 +58,7 @@ public struct SpeciesPack: Sendable {
         self.locomotion = locomotion
         self.anchorOffsets = anchorOffsets
         self.mirrorSafe = mirrorSafe
+        self.palette = palette
     }
 }
 

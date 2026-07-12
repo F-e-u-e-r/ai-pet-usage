@@ -8,18 +8,23 @@ import Foundation
 
 public struct ProviderBrand: Sendable, Equatable {
     public let id: String
-    /// 選單列/迷你量表用短代號(CC/CX/AG/GK)。
+    /// 選單列/迷你量表用「極短代號」(CC/CX/AG/GK)— 寬度最吝嗇的場合。
     public let code: String
-    /// dropdown、hover、輔助功能、報告用全名。
+    /// 面板列/表格欄用「中等短名」(Claude/Codex/Grok)— 一眼可讀但不佔滿列寬;
+    /// reset 倒數等右側資訊因此不再被截斷。
+    public let shortName: String
+    /// dropdown hover、輔助功能、報告用全名(Claude Code/Grok Code)。
     public let displayName: String
     /// 身分 dot 顏色(0xRRGGBB)。
     public let dotColor: UInt32
     /// 深色 dot(GK 碳黑)需要淺色描邊,否則融入深色選單列/儀表板。
     public let needsOutline: Bool
 
-    public init(id: String, code: String, displayName: String, dotColor: UInt32, needsOutline: Bool) {
+    public init(id: String, code: String, shortName: String, displayName: String,
+                dotColor: UInt32, needsOutline: Bool) {
         self.id = id
         self.code = code
+        self.shortName = shortName
         self.displayName = displayName
         self.dotColor = dotColor
         self.needsOutline = needsOutline
@@ -30,13 +35,13 @@ public enum ProviderBrands {
     /// 已知 provider 的固定識別色。AG 規格建議 rainbow,選單列尺寸下改用紫色替代
     /// (spec 自己註明 rainbow 太吵時 fallback 紫色)。
     public static let known: [ProviderBrand] = [
-        ProviderBrand(id: "antigravity", code: "AG", displayName: "Antigravity",
+        ProviderBrand(id: "antigravity", code: "AG", shortName: "Antigravity", displayName: "Antigravity",
                       dotColor: 0x8B5CF6, needsOutline: false),
-        ProviderBrand(id: "claude-code", code: "CC", displayName: "Claude Code",
+        ProviderBrand(id: "claude-code", code: "CC", shortName: "Claude", displayName: "Claude Code",
                       dotColor: 0xE8823A, needsOutline: false),
-        ProviderBrand(id: "codex", code: "CX", displayName: "Codex",
+        ProviderBrand(id: "codex", code: "CX", shortName: "Codex", displayName: "Codex",
                       dotColor: 0x3B82F6, needsOutline: false),
-        ProviderBrand(id: "grok-code", code: "GK", displayName: "Grok Code",
+        ProviderBrand(id: "grok-code", code: "GK", shortName: "Grok", displayName: "Grok Code",
                       dotColor: 0x2E3138, needsOutline: true),
     ]
 
@@ -44,6 +49,7 @@ public enum ProviderBrands {
         if let hit = known.first(where: { $0.id == providerId }) { return hit }
         return ProviderBrand(id: providerId,
                              code: shortProviderCode(providerId),
+                             shortName: displayName ?? providerId,
                              displayName: displayName ?? providerId,
                              dotColor: 0x9AA1AB,
                              needsOutline: false)

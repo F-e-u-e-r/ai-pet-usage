@@ -18,6 +18,10 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     var isWanderMoving = false   // internal:EngineV2Driver(30Hz origin 寫入)沿用同一抑制旗標(FIX-7)
     private var wanderHeading: Int = 1
     private var wanderPhaseUntil: Date = .distantPast
+    /// 漫遊範圍帶的 home(寵物中心 x;A1/D4):於漫遊開啟、拖曳落定、app 啟動、
+    /// 範圍變更時重錨;不持久化(重啟以還原位置重錨)。V2 driver 亦讀此值收窄 RegionMap。
+    private(set) var wanderHomeCenterX: CGFloat?
+    private var lastWanderEnabled = false
 
     init(model: AppModel) {
         self.model = model
@@ -92,6 +96,7 @@ final class PetPanelController: NSObject, NSWindowDelegate {
     func show() {
         if panel == nil { panel = makePanel() }
         panel?.orderFrontRegardless()
+        if wanderHomeCenterX == nil { reanchorWanderHome() }  // (c) 啟動:錨定 + 帶內夾限
         restartWanderLoop()
         if EngineV2.isEnabled, let panel {
             if engineV2Driver == nil { engineV2Driver = EngineV2Driver(panel: panel, model: model, controller: self) }
@@ -109,10 +114,9 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         stopWanderLoop()
         engineV2Driver?.stop()
         engineV2Driver = nil
-        // 拖曳去抖尚未落地就 teardown(例如切到 monitor-only)會遺失最後位置,先補寫一次再取消。
-        if positionSaveTask != nil, let panel, !isWanderMoving {
-            model?.savePetPosition(panel.frame.origin)
-        }
+        // teardown 前一律補寫最後位置(grok P2-1):V2 deep-idle 已停表、或拖曳去抖
+        // 未落地等路徑,條件式補寫都可能漏;無條件寫一次冪等且最保險。
+        persistPositionNow()
         positionSaveTask?.cancel()
         positionSaveTask = nil
         panel?.delegate = nil
@@ -122,16 +126,29 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     func apply(settings: AppSettings) {
         guard let panel else {
+            // panel 未建也要同步開關快照,否則啟動後首次 apply 會把「本來就開」
+            // 誤判成 off→on 而多做一次重錨(codex P2)。
+            lastWanderEnabled = settings.petWanderEnabled
             if settings.petVisible { show() }
             return
         }
+        // (a) 漫遊由關轉開 → 重錨 + 帶內夾限。
+        let wanderJustEnabled = settings.petWanderEnabled && !lastWanderEnabled
+        lastWanderEnabled = settings.petWanderEnabled
         panel.ignoresMouseEvents = settings.clickThrough
         let newSize = panelSize()
+        var sizeChanged = false
         if abs(panel.frame.width - newSize.width) > 1 {
             var frame = panel.frame
             frame.size = newSize
             panel.setFrame(frame, display: true)
             panel.contentView?.frame = NSRect(origin: .zero, size: newSize)
+            sizeChanged = true
+        }
+        if wanderJustEnabled || sizeChanged {
+            // 開關轉開或寵物尺寸改變:帶的 origin 轉換與 V2 收窄輸入都變 →
+            // 走完整「重錨 + 帶內夾限 + V2 同步重算」(grok R2 P3:size 路徑不抄近路)。
+            reanchorWanderHome()
         }
         if settings.petVisible { show() } else { hide() }
         restartWanderLoop()
@@ -147,6 +164,8 @@ final class PetPanelController: NSObject, NSWindowDelegate {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
                 self?.model?.savePetPosition(origin)
+                // (b) 手動拖曳落定 → 統一重錨(帶隨放置點走,必為帶內;V2 同步重算)。
+                self?.reanchorWanderHome()
                 self?.positionSaveTask = nil // 完成後清空,destroy() 才不會把已落地的 task 誤判為 pending
             }
         }
@@ -203,16 +222,43 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         guard let screen = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
         var origin = panel.frame.origin
         origin.x += CGFloat(wanderHeading) * 1.4
-        let minX = screen.minX + 12
-        let maxX = screen.maxX - panel.frame.width - 12
-        if origin.x <= minX || origin.x >= maxX {
+        // 漫遊範圍帶(A1):home ± range%×螢幕寬,center-x 語意 → origin 轉換。
+        let band = WanderBand.centerBand(homeCenterX: wanderHomeCenterX ?? panel.frame.midX,
+                                         rangePercent: model.settings.petWanderRangePercent,
+                                         screen: screen, petWidth: panel.frame.width)
+        let originBand = WanderBand.originRange(centerBand: band, petWidth: panel.frame.width)
+        if origin.x <= originBand.lowerBound || origin.x >= originBand.upperBound {
             wanderHeading *= -1
             model.setWanderDirection(wanderHeading)
-            origin.x = min(max(origin.x, minX), maxX)
+            origin.x = min(max(origin.x, originBand.lowerBound), originBand.upperBound)
         }
         isWanderMoving = true
         panel.setFrameOrigin(origin)
         isWanderMoving = false
+    }
+
+    /// 統一的「重錨 + 帶內夾限」(codex P2:四個觸發點 (a)–(d) 共用):
+    /// 以當下位置重錨 home;home 可能被 centerBand 夾進螢幕可行區,帶外(貼緣放置)
+    /// 則一次性 clamp 回帶內並保存;V2 引擎同步重算收窄帶(不等 Observation)。
+    func reanchorWanderHome() {
+        guard let panel, let model else { return }
+        wanderHomeCenterX = panel.frame.midX
+        if let screen = (panel.screen ?? NSScreen.main)?.visibleFrame {
+            let band = WanderBand.centerBand(homeCenterX: panel.frame.midX,
+                                             rangePercent: model.settings.petWanderRangePercent,
+                                             screen: screen, petWidth: panel.frame.width)
+            // home 本身也夾進帶(貼緣放置時 centerBand 已把可行區夾窄)。
+            wanderHomeCenterX = min(max(panel.frame.midX, band.lowerBound), band.upperBound)
+            let originBand = WanderBand.originRange(centerBand: band, petWidth: panel.frame.width)
+            let clampedX = min(max(panel.frame.origin.x, originBand.lowerBound), originBand.upperBound)
+            if clampedX != panel.frame.origin.x {
+                isWanderMoving = true   // 程序性移動:抑制 windowDidMove 的持久化去抖
+                panel.setFrameOrigin(NSPoint(x: clampedX, y: panel.frame.origin.y))
+                isWanderMoving = false
+                model.savePetPosition(panel.frame.origin)
+            }
+        }
+        engineV2Driver?.wanderBandDidChange()
     }
 
     /// 漫遊結束/隱藏時保存最後位置。
@@ -303,12 +349,6 @@ struct PetView: View {
 
         TimelineView(.animation(minimumInterval: 1.0 / 10, paused: paused)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            let walking = model.wanderDirection != 0
-            let state = PixelPets.animState(for: mood.mood, walking: walking, species: settings.resolvedSpecies)
-            let sprite = PixelPets.sprite(for: settings.resolvedSpecies)
-            let rows = animator.frame(species: settings.resolvedSpecies, target: state, sprite: sprite,
-                                      at: context.date, reduceMotion: paused,
-                                      speed: mood.animationSpeed)
 
             VStack(spacing: 2) {
                 if context.date < bubbleUntil {
@@ -316,14 +356,36 @@ struct PetView: View {
                         .transition(.opacity)
                 }
                 ZStack(alignment: .topTrailing) {
-                    PixelFrameView(rows: rows,
-                                   palette: sprite.palette,
-                                   gridWidth: sprite.width,
-                                   gridHeight: sprite.height,
-                                   flipped: model.wanderDirection < 0)
-                        .frame(width: size * 1.3, height: size * 1.15)
-                        .saturation(mood.mood == .exhausted ? 0.35 : 1)
-                        .opacity(mood.mood == .sleeping ? 0.85 : 1)
+                    // 用量環(A11 定案 R):sprite 後方、同視窗圖層 → 天然跟隨寵物移動。
+                    UsageRing(limits: model.orderedLimitStates,
+                              warn: settings.core.warnThresholdPercent,
+                              danger: settings.core.dangerThresholdPercent)
+                        .frame(width: size * 1.25, height: size * 1.25)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+
+                    // E2a:V2 引擎開啟時渲染 driver 發佈的 pack 幀快照(藍鳥真美術);
+                    // 快照未達(首 commit 前的極短窗)寧可空白也不閃 legacy 皮
+                    //(bird 的 resolvedSpecies 會錯落到 dog;grok P2-3)。
+                    // flag 關(v2Frame 恆 nil 且 isEnabled false)走 legacy,行為位元不變。
+                    if EngineV2.isEnabled {
+                        if let v2 = model.v2Frame {
+                            PixelFrameView(rows: v2.rows,
+                                           palette: v2.palette,
+                                           gridWidth: v2.gridWidth,
+                                           gridHeight: v2.gridHeight,
+                                           flipped: v2.mirrored)
+                                .frame(width: size * 1.3, height: size * 1.15)
+                                .saturation(mood.mood == .exhausted ? 0.35 : 1)
+                                .opacity(mood.mood == .sleeping ? 0.85 : 1)
+                        } else {
+                            Color.clear.frame(width: size * 1.3, height: size * 1.15)
+                        }
+                    } else {
+                        // legacy 渲染路徑(V2 關):animator 幀計算只在此分支發生(grok P3-3)。
+                        legacySpriteView(at: context.date, paused: paused, size: size)
+                            .saturation(mood.mood == .exhausted ? 0.35 : 1)
+                            .opacity(mood.mood == .sleeping ? 0.85 : 1)
+                    }
 
                     if let glyph = PixelGlyphs.glyph(for: mood.mood) {
                         let isAlert = mood.mood == .warning || mood.mood == .exhausted
@@ -343,26 +405,6 @@ struct PetView: View {
                     }
                 }
 
-                // 每家 provider 各一條迷你量表:識別 dot + 代號 + severity 上色量表
-                VStack(spacing: 2) {
-                    ForEach(model.orderedLimitStates.prefix(4)) { limit in
-                        let brand = ProviderBrands.brand(for: limit.providerId)
-                        HStack(spacing: 4) {
-                            ProviderDot(brand: brand, size: 5)
-                            Text(brand.code)
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Theme.textSecondary)
-                                .frame(width: 16, alignment: .trailing)
-                            GaugeBar(percent: limit.fiveHour.usedPercent ?? 0,
-                                     warn: settings.core.warnThresholdPercent,
-                                     danger: settings.core.dangerThresholdPercent)
-                                .frame(height: 3)
-                                .opacity(limit.fiveHour.usedPercent == nil ? 0.25 : 0.9)
-                        }
-                        .help("\(brand.displayName) — 5h window usage")
-                    }
-                }
-                .frame(width: size * 1.0)
             }
             .padding(6)
         }
@@ -390,6 +432,24 @@ struct PetView: View {
         .help(PetInfo.tooltip)
         .contextMenu { PetContextMenu() }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    }
+
+    /// legacy sprite 幀(V2 關的原路徑;抽出以免 V2 開啟時仍逐 tick 計算 animator 幀)。
+    private func legacySpriteView(at date: Date, paused: Bool, size: Double) -> some View {
+        let settings = model.settings
+        let walking = model.wanderDirection != 0
+        let state = PixelPets.animState(for: model.mood.mood, walking: walking,
+                                        species: settings.resolvedSpecies)
+        let sprite = PixelPets.sprite(for: settings.resolvedSpecies)
+        let rows = animator.frame(species: settings.resolvedSpecies, target: state, sprite: sprite,
+                                  at: date, reduceMotion: paused,
+                                  speed: model.mood.animationSpeed)
+        return PixelFrameView(rows: rows,
+                              palette: sprite.palette,
+                              gridWidth: sprite.width,
+                              gridHeight: sprite.height,
+                              flipped: model.wanderDirection < 0)
+            .frame(width: size * 1.3, height: size * 1.15)
     }
 
     private func showBubble(_ text: String, seconds: TimeInterval) {
@@ -500,6 +560,63 @@ struct PixelBubble: View {
     }
 }
 
+/// 用量環(A11 定案 R):顯示「最受限 provider」的 5h 用量。
+/// 進度弧色 = 該 provider 的 identity 色;≥warn 橘、≥danger 紅(嚴重度只上在進度弧,
+/// 底環恆為低對比)。全部 provider 皆無 5h 百分比 → 只畫底環。並列最大值以
+/// orderedLimitStates 順序穩定 tie-break。點擊泡泡第 0 頁仍有全 provider 明細。
+struct UsageRing: View {
+    let limits: [ProviderLimitState]
+    let warn: Double
+    let danger: Double
+
+    private var mostConstrained: (state: ProviderLimitState, percent: Double)? {
+        var best: (ProviderLimitState, Double)?
+        for st in limits {
+            guard let p = st.fiveHour.usedPercent else { continue }
+            if best == nil || p > best!.1 { best = (st, p) }   // 穩定順序:先到者於並列時勝
+        }
+        return best
+    }
+
+    /// 底部缺口(A11/F10):環在 6 點鐘方向留 8%,徽章/腳部不與環打架。
+    /// 起點旋轉到缺口右緣,可用弧長 = 92%。
+    private let gapFraction: Double = 0.08
+
+    var body: some View {
+        let usable = 1 - gapFraction
+        ZStack {
+            Circle()
+                .trim(from: 0, to: usable)
+                .stroke(Theme.textDisabled.opacity(0.22), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(90 + 360 * gapFraction / 2))
+            if let top = mostConstrained {
+                Circle()
+                    .trim(from: 0, to: usable * min(1, max(0.01, top.percent / 100)))
+                    .stroke(arcColor(top), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .rotationEffect(.degrees(90 + 360 * gapFraction / 2))
+            }
+        }
+        .help(helpText)
+        .accessibilityLabel(helpText)
+        .allowsHitTesting(false)
+    }
+
+    private func arcColor(_ top: (state: ProviderLimitState, percent: Double)) -> Color {
+        if top.percent >= danger { return .red }
+        if top.percent >= warn { return .orange }
+        let brand = ProviderBrands.brand(for: top.state.providerId)
+        return Color(red: Double((brand.dotColor >> 16) & 0xFF) / 255,
+                     green: Double((brand.dotColor >> 8) & 0xFF) / 255,
+                     blue: Double(brand.dotColor & 0xFF) / 255)
+    }
+
+    private var helpText: String {
+        guard let top = mostConstrained else { return "No 5h limit data" }
+        let brand = ProviderBrands.brand(for: top.state.providerId)
+        return "Most constrained: \(brand.displayName) \(Int(top.percent.rounded()))% (5h)"
+    }
+}
+
 struct GaugeBar: View {
     let percent: Double
     let warn: Double
@@ -543,7 +660,7 @@ struct PetContextMenu: View {
             NSApp.activate(ignoringOtherApps: true)
             openWindow(id: "dashboard")
         }
-        Button(model.settings.petWanderEnabled ? "Wandering: On" : "Wandering: Off") {
+        Button(model.settings.petWanderEnabled ? "Pet Movement: On" : "Pet Movement: Off") {
             model.updateSettings { $0.petWanderEnabled.toggle() }
         }
         Button(model.settings.quietMode ? "Quiet Mode: On" : "Quiet Mode: Off") {

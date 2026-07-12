@@ -22,7 +22,8 @@ struct TrendsView: View {
                 .frame(maxWidth: 340)
 
                 if let trends = model.trends, !trends.daily.isEmpty {
-                    HStack(spacing: 12) {
+                    // A3:等高卡列(caption 有無不再造成高度不齊)。
+                    EqualHeightTileRow {
                         StatTile(title: "Current streak", value: dayCountLabel(trends.streak.current))
                         StatTile(title: "Longest streak", value: dayCountLabel(trends.streak.longest))
                         StatTile(title: "This week",
@@ -43,7 +44,7 @@ struct TrendsView: View {
                         .frame(maxWidth: 220)
                         DailyBarChart(daily: trends.daily, startDay: trends.startDay,
                                       endDay: trends.endDay, metric: metric)
-                            .frame(height: 150)
+                            .frame(height: 165)   // A9:含 X 軸日期標籤的高度
                     }
 
                     section("Activity heatmap") {
@@ -116,7 +117,7 @@ func dayTooltip(day: Date, bucket: DayBucket?) -> String {
     return lines.joined(separator: "\n")
 }
 
-// MARK: - 每日 bar chart(tokens / cost;補零到完整日期範圍;每 bar hover 顯示明細)
+// MARK: - 每日 bar chart(tokens / cost;A9 加 XY 軸;A10 游標 tooltip;單一 plot hover)
 
 struct DailyBarChart: View {
     let daily: [DayBucket]
@@ -124,41 +125,112 @@ struct DailyBarChart: View {
     let endDay: Date
     let metric: TrendMetric
     private let calendar = Calendar.current
+    @State private var hoveredDay: Date?
+    @State private var cursor: CGPoint = .zero
+
+    private static let axisDayFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "M/d"; return f
+    }()
 
     var body: some View {
         let byDay = Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
         let days = TrendCalendar.days(from: startDay, to: endDay, calendar: calendar)
-        let maxV = max(0.0001, days.map { value(byDay[$0]) }.max() ?? 0)
-        GeometryReader { geo in
-            let n = max(1, days.count)
-            let gap: CGFloat = days.count > 45 ? 1 : 2
-            let barW = max(1, (geo.size.width - gap * CGFloat(n - 1)) / CGFloat(n))
-            HStack(alignment: .bottom, spacing: gap) {
-                ForEach(days, id: \.self) { day in
-                    let b = byDay[day]
-                    let hasUsage = (b?.tokens ?? 0) > 0
-                    let v = value(b)
-                    // 成本模式下「有用量但已知成本為 0」(整日未定價)不可畫成無用量的灰條;
-                    // 以橘色固定小高度條表示「有活動、成本未知」。
-                    let unpricedOnly = metric == .cost && hasUsage && v <= 0
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(!hasUsage ? Color.secondary.opacity(0.12)
-                              : unpricedOnly ? Color.orange.opacity(0.55)
-                              : Color.accentColor.opacity(0.85))
-                        .frame(width: barW,
-                               height: !hasUsage ? 1
-                                   : unpricedOnly ? 6
-                                   : max(2, geo.size.height * CGFloat(v / maxV)))
-                        .help(dayTooltip(day: day, bucket: b))
+        let rawMax = days.map { value(byDay[$0]) }.max() ?? 0
+        let niceMax = niceCeiling(max(rawMax, 0.0001))
+        HStack(alignment: .top, spacing: 6) {
+            // Y 軸刻度(與 HourlyChart 同款;cost 模式以 $ 呈現)
+            VStack(alignment: .trailing) {
+                Text(axisLabel(niceMax))
+                Spacer()
+                Text(axisLabel(niceMax / 2))
+                Spacer()
+                Text(metric == .tokens ? "0" : "$0")
+            }
+            .font(Theme.FontScale.micro)
+            .foregroundStyle(Theme.textMuted)
+            .frame(width: 40)
+            .padding(.bottom, 12)
+
+            GeometryReader { geo in
+                let n = max(1, days.count)
+                let gap: CGFloat = days.count > 45 ? 1 : 2
+                let barArea = geo.size.height - 12   // 底部留 X 軸標籤帶
+                let barW = max(1, (geo.size.width - gap * CGFloat(n - 1)) / CGFloat(n))
+                // X 軸標籤步距:約 7 個標籤,首標必畫(F19)。
+                let stride = max(1, n / 7)
+                ZStack(alignment: .bottom) {
+                    VStack {
+                        Divider()
+                        Spacer()
+                        Divider()
+                        Spacer()
+                        Divider().opacity(0)
+                    }
+                    .padding(.bottom, 12)
+
+                    HStack(alignment: .bottom, spacing: gap) {
+                        ForEach(Array(days.enumerated()), id: \.element) { i, day in
+                            let b = byDay[day]
+                            let hasUsage = (b?.tokens ?? 0) > 0
+                            let v = value(b)
+                            // 成本模式下「有用量但已知成本為 0」(整日未定價)不可畫成無用量的
+                            // 灰條;以橘色固定小高度條表示「有活動、成本未知」。
+                            let unpricedOnly = metric == .cost && hasUsage && v <= 0
+                            VStack(spacing: 2) {
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(!hasUsage ? Color.secondary.opacity(0.12)
+                                          : hoveredDay == day ? Color.accentColor
+                                          : unpricedOnly ? Color.orange.opacity(0.55)
+                                          : Color.accentColor.opacity(0.85))
+                                    .frame(width: barW,
+                                           height: !hasUsage ? 1
+                                               : unpricedOnly ? 6
+                                               : max(2, barArea * CGFloat(v / niceMax)))
+                                Text(i % stride == 0 ? Self.axisDayFormatter.string(from: day) : " ")
+                                    .font(Theme.FontScale.micro)
+                                    .foregroundStyle(Theme.textMuted)
+                                    .fixedSize()
+                                    .frame(width: barW, height: 10)
+                            }
+                            .accessibilityLabel(dayTooltip(day: day, bucket: b))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                    // 單一 plot hover(A10):x → 日;tooltip 錨在游標,近緣翻轉。
+                    // 90 天檔的 gap 累積不可忽略:以 bar+gap 為步距反推(grok P3-2)。
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let p):
+                                cursor = p
+                                let step = barW + gap
+                                let idx = min(max(0, Int((p.x / max(step, 1)).rounded(.down))), n - 1)
+                                hoveredDay = days[idx]
+                            case .ended:
+                                hoveredDay = nil
+                            }
+                        }
+                    if let day = hoveredDay {
+                        CursorTooltip(cursor: cursor, container: geo.size) {
+                            Text(dayTooltip(day: day, bucket: byDay[day]))
+                                .font(.caption)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
     }
 
     private func value(_ b: DayBucket?) -> Double {
         guard let b else { return 0 }
         return metric == .tokens ? Double(b.tokens) : b.cost.knownUSD
+    }
+
+    private func axisLabel(_ v: Double) -> String {
+        metric == .tokens ? tokenLabel(Int(v)) : String(format: "$%.2f", v)
     }
 }
 
@@ -171,6 +243,8 @@ struct UsageHeatmap: View {
     private let calendar = Calendar.current
     private let cell: CGFloat = 12
     private let gap: CGFloat = 3
+    @State private var hoveredDay: Date?
+    @State private var cursor: CGPoint = .zero
 
     var body: some View {
         let byDay = Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
@@ -188,9 +262,52 @@ struct UsageHeatmap: View {
                     }
                 }
                 .padding(.vertical, 2)
+                // A10:格座標反推日 → 游標 tooltip(取代 .help 的系統延遲樣式)。
+                .coordinateSpace(name: "heatmap")
+                .overlay {
+                    GeometryReader { geo in
+                        ZStack(alignment: .topLeading) {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onContinuousHover(coordinateSpace: .named("heatmap")) { phase in
+                                    switch phase {
+                                    case .active(let p):
+                                        cursor = p
+                                        // 命中 gap/補齊格 → 保留上一個有效日(tooltip 不閃;
+                                        // grok P3-7),格內才更新(codex P3 的餘數判定)。
+                                        if let hit = day(at: p, weeks: weeks) { hoveredDay = hit }
+                                    case .ended:
+                                        hoveredDay = nil
+                                    }
+                                }
+                            if let day = hoveredDay {
+                                CursorTooltip(cursor: cursor, container: geo.size) {
+                                    Text(dayTooltip(day: day, bucket: byDay[day]))
+                                        .font(.caption)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             legend()
         }
+    }
+
+    /// heatmap 座標 → 日(欄 = 週、列 = 週幾)。floor + 餘數判定:負座標與 gap 區
+    /// 都回 nil(Int() 對負小數朝 0 截斷會把上緣 padding 誤算成 row 0;codex P3)。
+    private func day(at p: CGPoint, weeks: [[Date?]]) -> Date? {
+        let stride = cell + gap
+        let localX = p.x
+        let localY = p.y - 2   // 上緣 padding 2
+        guard localX >= 0, localY >= 0 else { return nil }
+        let col = Int((localX / stride).rounded(.down))
+        let row = Int((localY / stride).rounded(.down))
+        guard col >= 0, col < weeks.count, row >= 0, row < 7 else { return nil }
+        // gap 區不算命中(餘數超過 cell 寬)。
+        guard localX - CGFloat(col) * stride < cell, localY - CGFloat(row) * stride < cell else { return nil }
+        return weeks[col][row]
     }
 
     private func cellView(_ day: Date?, byDay: [Date: DayBucket], maxV: Int) -> some View {
@@ -200,7 +317,7 @@ struct UsageHeatmap: View {
         return RoundedRectangle(cornerRadius: 2)
             .fill(Self.color(for: level))
             .frame(width: cell, height: cell)
-            .help(day.map { dayTooltip(day: $0, bucket: bucket) } ?? "")
+            .accessibilityLabel(day.map { dayTooltip(day: $0, bucket: bucket) } ?? "")
     }
 
     private func legend() -> some View {
