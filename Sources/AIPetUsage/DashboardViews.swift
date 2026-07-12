@@ -14,10 +14,10 @@ func costDisplay(_ c: CostResult) -> (value: String, caption: String?) {
         return ("Pricing unavailable", "\(tk(c.unknownModelTokens)) tokens unpriced")
     }
     if c.unknownModelTokens > 0 {
-        return (String(format: "$%.2f+", c.knownUSD),
+        return (ReportGenerator.fmtUSD(c.knownUSD) + "+",
                 "+ means \(tk(c.unknownModelTokens)) tokens are unpriced")
     }
-    return (String(format: "$%.2f", c.knownUSD), c.isEstimated ? "cache rates estimated" : nil)
+    return (ReportGenerator.fmtUSD(c.knownUSD), c.isEstimated ? "cache rates estimated" : nil)
 }
 
 func costText(_ c: CostResult) -> String { costDisplay(c).value }
@@ -493,7 +493,7 @@ struct TodayView: View {
 
     private func burnCaption(_ dash: DashboardState) -> String {
         if dash.burnCostPerHour >= 0.005 {
-            return String(format: "≈ $%.2f/h", dash.burnCostPerHour)
+            return "≈ \(ReportGenerator.fmtUSD(dash.burnCostPerHour))/h"
         }
         return dash.todayCost.unknownModelTokens > 0 ? "cost rate unavailable" : "≈ $0.00/h"
     }
@@ -730,8 +730,13 @@ struct ProjectsView: View {
 
             if model.rangePreset == .custom {
                 HStack {
+                    // R3(三方裁定 A):en_CA locale → yyyy-MM-dd 零補位,消除系統
+                    // locale 的「 6/ 7/2026」空白補位與 D/M 歧義,並與 app 全域日期
+                    // 格式一致。只套在這兩個 picker,不外擴(codex 條件)。
                     DatePicker("From", selection: $model.customStart, displayedComponents: .date)
+                        .environment(\.locale, Locale(identifier: "en_CA"))
                     DatePicker("To", selection: $model.customEnd, displayedComponents: .date)
+                        .environment(\.locale, Locale(identifier: "en_CA"))
                     Button("Apply") { Task { await model.reloadProjectPage() } }
                 }
                 .font(.caption)

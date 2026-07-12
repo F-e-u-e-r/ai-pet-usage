@@ -49,9 +49,10 @@ public enum WanderBand {
         return CGRect(x: minX, y: vf.minY, width: maxX - minX, height: vf.height)
     }
 
-    /// 範圍百分比的合法化(設定檔手改防護;UI 滑桿 25–100,解碼一律夾回)。
+    /// 範圍百分比的合法化(設定檔手改防護;UI 滑桿 10–100,解碼一律夾回)。
+    /// 下限 10%(R3 使用者要求):寵物活動被壓到很窄仍保有一點生氣。
     public static func clampRangePercent(_ value: Double) -> Double {
         guard value.isFinite else { return 100 }
-        return min(100, max(25, value))
+        return min(100, max(10, value))
     }
 }

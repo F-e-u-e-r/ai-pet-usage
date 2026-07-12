@@ -533,10 +533,15 @@ final class AppModel {
 
     // MARK: - 螢幕漫遊(pixel pet)
 
-    /// -1 左行 / 0 靜止 / 1 右行;由 PetPanelController 的漫遊迴圈驅動,PetView 據此切換走路動畫與翻面。
+    /// -1 左行 / 0 靜止 / 1 右行;由 PetPanelController 的漫遊迴圈驅動,PetView 據此切換走路動畫。
     private(set) var wanderDirection: Int = 0
+
+    /// 朝向(與移動解耦;R3):停下(direction=0,含點擊觸發的拖曳暫停)時保留
+    /// 最後行進方向 —— 向左走時被點擊,寵物面朝左彈泡泡,不再瞬間轉回預設右向。
+    private(set) var petFacingDirection: Int = 1
 
     func setWanderDirection(_ direction: Int) {
         if wanderDirection != direction { wanderDirection = direction }
+        if direction != 0, petFacingDirection != direction { petFacingDirection = direction }
     }
 }

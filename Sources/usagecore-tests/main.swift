@@ -129,6 +129,11 @@ runSuite("ReportTests", [
     ("testReportSectionsAndRedaction", report.testReportSectionsAndRedaction),
 ])
 
+let fmtUSDTests = FmtUSDTests()
+runSuite("FmtUSDTests", [
+    ("testThousandsSeparatorAndDecimals", fmtUSDTests.testThousandsSeparatorAndDecimals),
+])
+
 let localTime = LocalTimeTests()
 runSuite("LocalTimeTests", [
     ("testFormatsWithUTCOffset", localTime.testFormatsWithUTCOffset),

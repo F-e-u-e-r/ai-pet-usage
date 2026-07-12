@@ -121,7 +121,7 @@ Task {
                   "   last data: \(fmtDate(snap.updatedAt))")
         }
         print(String(repeating: "─", count: 72))
-        print("today: \(ReportGenerator.fmtTokens(dash.todayTotals.total)) tokens, ~$\(String(format: "%.2f", dash.todayCost.knownUSD))" +
+        print("today: \(ReportGenerator.fmtTokens(dash.todayTotals.total)) tokens, ~\(ReportGenerator.fmtUSD(dash.todayCost.knownUSD))" +
               (dash.todayCost.unknownModelTokens > 0 ? " (+\(ReportGenerator.fmtTokens(dash.todayCost.unknownModelTokens)) tokens unpriced)" : ""))
         if !dash.topProjects.isEmpty {
             print("top projects:")

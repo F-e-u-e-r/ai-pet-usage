@@ -130,7 +130,7 @@ struct PetSettings: View {
                 Slider(value: Binding(
                     get: { model.settings.petWanderRangePercent },
                     set: { v in model.updateSettings { $0.petWanderRangePercent = v } }
-                ), in: 25...100, step: 5) {
+                ), in: 10...100, step: 5) {
                     Text("Movement range (\(Int(model.settings.petWanderRangePercent))% of screen)")
                 }
                 .disabled(!model.settings.petWanderEnabled)
@@ -296,7 +296,7 @@ struct LimitsPricingSettings: View {
                             Text("\(entry.model.providerId)/\(entry.model.modelId)").font(.callout)
                             Spacer()
                             if let price = entry.price {
-                                Text("$\(price.inputPerMillion, specifier: "%.2f") in / $\(price.outputPerMillion, specifier: "%.2f") out per M\(price.userOverride ? " (override)" : "")")
+                                Text("\(ReportGenerator.fmtUSD(price.inputPerMillion)) in / \(ReportGenerator.fmtUSD(price.outputPerMillion)) out per M\(price.userOverride ? " (override)" : "")")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else {
                                 Text("unknown — excluded from cost").font(.caption).foregroundStyle(.orange)

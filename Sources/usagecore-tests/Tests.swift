@@ -1886,6 +1886,20 @@ final class GrokCodeAdapterTests: XCTestCase {
     }
 }
 
+// MARK: - fmtUSD(千分位金額)
+
+final class FmtUSDTests: XCTestCase {
+    /// 千分位契約(R3):分隔符固定 ,/.,不隨 locale 漂移;decimals 參數化。
+    func testThousandsSeparatorAndDecimals() {
+        XCTAssertEqual(ReportGenerator.fmtUSD(1234.56), "$1,234.56")
+        XCTAssertEqual(ReportGenerator.fmtUSD(1000), "$1,000.00")
+        XCTAssertEqual(ReportGenerator.fmtUSD(1000, decimals: 0), "$1,000")
+        XCTAssertEqual(ReportGenerator.fmtUSD(4196.18), "$4,196.18")
+        XCTAssertEqual(ReportGenerator.fmtUSD(0.5), "$0.50")
+        XCTAssertEqual(ReportGenerator.fmtUSD(1234567.891, decimals: 3), "$1,234,567.891")
+    }
+}
+
 // MARK: - LocalTime(人讀時間戳)
 
 final class LocalTimeTests: XCTestCase {
