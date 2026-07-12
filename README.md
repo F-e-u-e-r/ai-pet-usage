@@ -8,7 +8,7 @@
 ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)
 ![SwiftUI + AppKit](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-6E4AFF)
 ![Local-first](https://img.shields.io/badge/privacy-local--first-2EA043)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
 Your AI usage becomes a living companion — no dashboards to open, no commands to run.
 
@@ -117,4 +117,6 @@ Provider priority: **v1 core** — Codex and Claude Code · **v1 stretch/researc
 
 Copyright (C) 2026 F-e-u-e-r
 
-This project is licensed under the [GNU AGPL-3.0](LICENSE). All code and pixel art are original to this repository.
+This project is licensed under the [GNU AGPL-3.0-only](LICENSE). All code and pixel art (the dog, cat, and bird string-grid sprites) are original to this repository and carry the same license.
+
+The app reads local data files produced by third-party tools (Claude Code, Codex, and Grok CLI session logs and status files). Reading them does not change their respective ownership or terms, and this project never redistributes their contents — everything stays on your machine (see [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)).

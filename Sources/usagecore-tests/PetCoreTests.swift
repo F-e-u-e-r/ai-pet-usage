@@ -320,3 +320,56 @@ final class CoordinatorIntegrationTests: XCTestCase {
         expectation.wait()
     }
 }
+
+// MARK: - UsageRingModel(R2 B1/B2 幾何與過濾契約)
+
+final class UsageRingModelTests: XCTestCase {
+    private func limit(_ id: String, fiveHour: Double?) -> ProviderLimitState {
+        ProviderLimitState(
+            providerId: id,
+            fiveHour: LimitWindowState(usedPercent: fiveHour, windowMinutes: 300,
+                                       confidence: fiveHour == nil ? .unknown : .high),
+            weekly: LimitWindowState(windowMinutes: 10080, confidence: .unknown)
+        )
+    }
+
+    /// 過濾:nil 跳過(Grok 現況)、順序保留、上限 capacity。
+    func testEntriesFilterOrderAndCap() {
+        let entries = UsageRingModel.entries(from: [
+            limit("claude-code", fiveHour: 41),
+            limit("codex", fiveHour: 4),
+            limit("grok-code", fiveHour: nil),
+        ])
+        XCTAssertEqual(entries.map(\.providerId), ["claude-code", "codex"])
+        XCTAssertEqual(entries.map(\.percent), [41, 4])
+
+        let five = (0..<6).map { limit("p\($0)", fiveHour: Double($0)) }
+        XCTAssertEqual(UsageRingModel.entries(from: five).count, UsageRingModel.capacity)
+
+        XCTAssertTrue(UsageRingModel.entries(from: [limit("grok-code", fiveHour: nil)]).isEmpty)
+    }
+
+    /// 幾何:自 sprite 淨空向外疊(第一家最外),絕不向內縮;最內環 = base。
+    func testDiametersGrowOutwardFromSpriteClearBase() {
+        let s = 96.0
+        let base = UsageRingModel.baseDiameter(petSize: s)
+        XCTAssertEqual(base, 168, "1.75 × 96")
+        // 兩家:第 0 家(外)= base+13、第 1 家(內)= base。
+        XCTAssertEqual(UsageRingModel.diameter(index: 0, count: 2, petSize: s), base + 13)
+        XCTAssertEqual(UsageRingModel.diameter(index: 1, count: 2, petSize: s), base)
+        // 單家 = base;四家最外 = base+39 = 容量外徑。
+        XCTAssertEqual(UsageRingModel.diameter(index: 0, count: 1, petSize: s), base)
+        XCTAssertEqual(UsageRingModel.diameter(index: 0, count: 4, petSize: s),
+                       UsageRingModel.capacityOuterDiameter(petSize: s))
+        // 最內環永不小於 base(不回蓋 sprite;codex P1 的幾何釘)。
+        for n in 1...4 {
+            XCTAssertEqual(UsageRingModel.diameter(index: n - 1, count: n, petSize: s), base)
+        }
+    }
+
+    /// 面板尺寸下限:容量外徑 + 邊距(64pt 全範圍不裁;數值對齊計畫 v3)。
+    func testCapacityOuterDiameterAcrossSizes() {
+        XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 64), 64 * 1.75 + 39)
+        XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 160), 160 * 1.75 + 39)
+    }
+}
