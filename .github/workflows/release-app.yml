@@ -57,19 +57,20 @@ jobs:
         if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
+        # 發行說明以 printf 逐行寫檔(--notes-file):heredoc 內文若頂格會截斷
+        # YAML 的 run 區塊(alpha-v0.1.2 首跑即因此 startup failure)。
         run: |
+          printf '%s\n' \
+            '**Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized.**' \
+            '' \
+            'macOS will quarantine this download. To open the first time, either:' \
+            '- right-click **AI Pet Usage.app** → **Open** → **Open**, or' \
+            '- run `xattr -d com.apple.quarantine "AI Pet Usage.app"` after unzipping.' \
+            '' \
+            'Requirements: macOS 14+. Intel Macs: build from source (see README → Install).' \
+            'Everything is local-first — the app reads Claude Code / Codex / Grok CLI logs on your machine and uploads nothing.' \
+            > "$RUNNER_TEMP/notes.md"
           gh release create "${GITHUB_REF_NAME}" dist/*.zip \
             --title "AI Pet Usage ${GITHUB_REF_NAME}" \
             --prerelease \
-            --notes "$(cat <<'NOTES'
-**Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized.**
-
-macOS will quarantine this download. To open the first time, either:
-- right-click **AI Pet Usage.app** → **Open** → **Open**, or
-- run `xattr -d com.apple.quarantine "AI Pet Usage.app"` after unzipping.
-
-Requirements: macOS 14+. Intel Macs: build from source (see README → Install).
-Everything is local-first — the app reads Claude Code / Codex / Grok CLI logs on
-your machine and uploads nothing.
-NOTES
-)"
+            --notes-file "$RUNNER_TEMP/notes.md"
