@@ -221,21 +221,33 @@ public enum ReportGenerator {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// token 精簡格式,全 app 單一出處(Trends 的 tokenLabel 亦轉呼叫此處)。
+    /// 進位溢位防護(codex R4):999,999,999/1e6 四捨五入成 "1,000.00M" —
+    /// 係數格式化後若進位到 ≥1000,自動升一級單位("1.00B"),永不出現 1,000.xx 係數。
     public static func fmtTokens(_ n: Int) -> String {
         let d = Double(n)
-        switch abs(d) {
-        case 1_000_000_000...: return String(format: "%.2fB", d / 1e9)
-        case 1_000_000...: return String(format: "%.2fM", d / 1e6)
-        case 1_000...: return String(format: "%.1fk", d / 1e3)
-        default: return "\(n)"
+        guard abs(d) >= 1_000 else { return "\(n)" }
+        let units: [(divisor: Double, suffix: String, decimals: Int)] = [
+            (1e3, "k", 1), (1e6, "M", 2), (1e9, "B", 2), (1e12, "T", 2),
+        ]
+        var index = units.lastIndex { abs(d) >= $0.divisor } ?? 0
+        while index < units.count {
+            let u = units[index]
+            let body = grouped(d / u.divisor, decimals: u.decimals)
+            if !body.hasPrefix("1,000") && !body.hasPrefix("-1,000") {
+                return body + u.suffix
+            }
+            index += 1   // 係數被四捨五入進位到 1000 → 升級單位重算
         }
+        let last = units[units.count - 1]
+        return grouped(d / last.divisor, decimals: last.decimals) + last.suffix
     }
 
-    /// 金額(千分位;R3 使用者要求全 app 一致):$1,234.56。分隔符固定 ","/"."
-    /// (與 app 英文文案一致,不隨系統 locale 漂移)。
-    public static func fmtUSD(_ value: Double, decimals: Int = 2) -> String {
+    /// 千分位數字 **單一出處**(R4 使用者提議的抽取):en_US_POSIX、固定 ,/.。
+    /// fmtUSD / fmtTokens 皆為此函式的薄包裝;未來任何數字顯示直接呼叫。
+    public static func grouped(_ value: Double, decimals: Int) -> String {
         let f = NumberFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")   // 分組/數字規則不隨系統 locale 漂移
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.numberStyle = .decimal
         f.usesGroupingSeparator = true
         f.groupingSeparator = ","
@@ -243,8 +255,13 @@ public enum ReportGenerator {
         f.groupingSize = 3
         f.minimumFractionDigits = decimals
         f.maximumFractionDigits = decimals
-        let body = f.string(from: NSNumber(value: value)) ?? String(format: "%.\(decimals)f", value)
-        return "$" + body
+        return f.string(from: NSNumber(value: value)) ?? String(format: "%.\(decimals)f", value)
+    }
+
+    /// 金額(千分位;R3 使用者要求全 app 一致):$1,234.56。分隔符固定 ","/"."
+    /// (與 app 英文文案一致,不隨系統 locale 漂移)。
+    public static func fmtUSD(_ value: Double, decimals: Int = 2) -> String {
+        "$" + grouped(value, decimals: decimals)
     }
 
     static func fmtCost(_ c: CostResult) -> String {

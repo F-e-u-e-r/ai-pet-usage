@@ -1897,6 +1897,24 @@ final class FmtUSDTests: XCTestCase {
         XCTAssertEqual(ReportGenerator.fmtUSD(4196.18), "$4,196.18")
         XCTAssertEqual(ReportGenerator.fmtUSD(0.5), "$0.50")
         XCTAssertEqual(ReportGenerator.fmtUSD(1234567.891, decimals: 3), "$1,234,567.891")
+        // R4:fmtUSD/fmtTokens 皆為 grouped() 薄包裝(使用者提議的單一出處抽取)。
+        XCTAssertEqual(ReportGenerator.grouped(1000, decimals: 1), "1,000.0")
+    }
+
+    /// token 格式單一方言(R4):≥1e9 走 B 分支(修 Trends 舊 tokenLabel 的 "1000.0M");
+    /// 進位溢位升級(codex):係數四捨五入到 1000 → 自動升一級,永不見 "1,000.xxM"。
+    func testFmtTokensUnifiedDialect() {
+        XCTAssertEqual(ReportGenerator.fmtTokens(1_000_000_000), "1.00B")
+        XCTAssertEqual(ReportGenerator.fmtTokens(1_914_600_000), "1.91B")
+        XCTAssertEqual(ReportGenerator.fmtTokens(608_900_000), "608.90M")
+        XCTAssertEqual(ReportGenerator.fmtTokens(563_500_000), "563.50M")
+        XCTAssertEqual(ReportGenerator.fmtTokens(1_500), "1.5k")
+        XCTAssertEqual(ReportGenerator.fmtTokens(950), "950")
+        // 進位邊界(codex R4 P3 指名案例)
+        XCTAssertEqual(ReportGenerator.fmtTokens(999_999_999), "1.00B")
+        XCTAssertEqual(ReportGenerator.fmtTokens(999_999), "1.00M")
+        XCTAssertEqual(ReportGenerator.fmtTokens(999_949), "999.9k")
+        XCTAssertEqual(ReportGenerator.fmtTokens(-999_999_999), "-1.00B")
     }
 }
 

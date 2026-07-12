@@ -311,17 +311,17 @@ struct HourlyChart: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            // Y 軸刻度
+            // Y 軸刻度(R4:動態寬,與 Trends 日圖一致)
             VStack(alignment: .trailing) {
-                Text(tk(niceMax))
+                Text(tk(niceMax)).fixedSize()
                 Spacer()
-                Text(tk(niceMax / 2))
+                Text(tk(niceMax / 2)).fixedSize()
                 Spacer()
                 Text("0")
             }
             .font(Theme.FontScale.micro)
             .foregroundStyle(Theme.textMuted)
-            .frame(width: 34)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.bottom, 12)
 
             GeometryReader { geo in

@@ -1,0 +1,75 @@
+# 無 Developer ID 的 alpha 出包(R4 三方裁定 T4):
+#   - tag `alpha-v*` 推送時自動建 GitHub Release 並附上 Apple Silicon zip;
+#   - workflow_dispatch 僅出 artifact(不建 Release),供手動驗證;
+#   - ad-hoc 簽章(STRICT_SIGN=1:簽失敗即紅,並 --verify --strict);
+#   - zip 而非 dmg:未公證時 dmg 不減 Gatekeeper 摩擦,只多一層製作;
+#   - 版號由 tag 注入 Info.plist(alpha-v0.1.2 → 0.1.2),About 與 Release 一致;
+#   - runner 為 arm64;Intel 使用者請 build from source(README Install)。
+name: release-app
+
+on:
+  push:
+    tags: ["alpha-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app bundle (ad-hoc signed, strict)
+        run: |
+          # 只有「tag push」才用 tag 版號;workflow_dispatch(即使跑在 tag ref 上)
+          # 一律 dev 版號 — 與下方「dispatch 僅出 artifact、不建 Release」同一守門。
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#alpha-v}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          VERSION="${VERSION}" STRICT_SIGN=1 Scripts/build-app.sh
+
+      - name: Verify signature and launchability structure
+        run: |
+          codesign --verify --deep --strict "dist/AI Pet Usage.app"
+          plutil -lint "dist/AI Pet Usage.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+            "dist/AI Pet Usage.app/Contents/Info.plist"
+
+      - name: Zip (ditto keeps resource forks + bundle structure)
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "AI Pet Usage.app" \
+            "AI-Pet-Usage-${GITHUB_REF_NAME:-manual}-arm64.zip"
+          ls -la *.zip
+
+      - name: Upload artifact (always; the only output for workflow_dispatch)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Pet-Usage-${{ github.ref_name }}-arm64
+          path: dist/*.zip
+
+      - name: Create GitHub Release (tag pushes only)
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip \
+            --title "AI Pet Usage ${GITHUB_REF_NAME}" \
+            --prerelease \
+            --notes "$(cat <<'NOTES'
+**Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized.**
+
+macOS will quarantine this download. To open the first time, either:
+- right-click **AI Pet Usage.app** → **Open** → **Open**, or
+- run `xattr -d com.apple.quarantine "AI Pet Usage.app"` after unzipping.
+
+Requirements: macOS 14+. Intel Macs: build from source (see README → Install).
+Everything is local-first — the app reads Claude Code / Codex / Grok CLI logs on
+your machine and uploads nothing.
+NOTES
+)"

@@ -624,6 +624,20 @@ final class EngineV2PackTests: XCTestCase {
         XCTAssertEqual(SpeciesPacks.displayInfo(packId: "dog")?.name, PetSpecies.dog.displayName)
         XCTAssertNil(SpeciesPacks.displayInfo(packId: "ghost"))
     }
+
+    /// 狗跳躍幀回歸(R4;使用者回報耳被裁):跳躍第一幀的頭頂兩列(耳尖/眉)
+    /// 必須與 idle 完全相同 — 舊缺陷是整身上移 2 列把耳尖擠出網格;
+    /// 跳躍改以收腿 + 底部騰空列表現,頭部永不裁切。
+    func testDogJumpFramePreservesEarTips() throws {
+        let sprite = PixelPets.sprite(for: .dog)
+        let idle = sprite.animations[.idle]![0]
+        let jump = sprite.animations[.jump]![0]
+        XCTAssertEqual(jump[0], idle[0], "跳躍幀頂列(耳尖)必須與 idle 相同")
+        XCTAssertEqual(jump[1], idle[1], "跳躍幀第 2 列(眉/耳廓)必須與 idle 相同")
+        // 離地表現:底部至少兩列全空(騰空),而非把身體頂出畫格。
+        XCTAssertTrue(jump[jump.count - 1].allSatisfy { $0 == "." })
+        XCTAssertTrue(jump[jump.count - 2].allSatisfy { $0 == "." })
+    }
 }
 
 // MARK: - 漫遊範圍帶(A1;center-x 座標契約)
