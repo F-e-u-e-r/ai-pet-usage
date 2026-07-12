@@ -698,10 +698,12 @@ final class WanderBandTests: XCTestCase {
 
     func testClampRangePercent() {
         XCTAssertEqual(WanderBand.clampRangePercent(60), 60)
-        XCTAssertEqual(WanderBand.clampRangePercent(5), 25)
+        // 下限 10(R3 使用者調整,原 25)。
+        XCTAssertEqual(WanderBand.clampRangePercent(10), 10)
+        XCTAssertEqual(WanderBand.clampRangePercent(5), 10)
         XCTAssertEqual(WanderBand.clampRangePercent(400), 100)
         XCTAssertEqual(WanderBand.clampRangePercent(.nan), 100)
-        XCTAssertEqual(WanderBand.clampRangePercent(-10), 25)
+        XCTAssertEqual(WanderBand.clampRangePercent(-10), 10)
     }
 
     func testDegenerateScreenReturnsSinglePoint() {

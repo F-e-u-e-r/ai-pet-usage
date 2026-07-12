@@ -96,9 +96,9 @@ func tokenLabel(_ n: Int) -> String {
     return "\(n)"
 }
 
-/// 成本精簡格式($3.40 / $3.40+);「+」表示當範圍含未定價 model 的用量(不讓缺定價看起來像零花費)。
+/// 成本精簡格式($3.40 / $1,234.56+);「+」表示當範圍含未定價 model 的用量(不讓缺定價看起來像零花費)。
 func costLabel(_ c: CostResult) -> String {
-    var s = String(format: "$%.2f", c.knownUSD)
+    var s = ReportGenerator.fmtUSD(c.knownUSD)
     if c.unknownModelTokens > 0 { s += "+" }
     return s
 }
@@ -138,17 +138,18 @@ struct DailyBarChart: View {
         let rawMax = days.map { value(byDay[$0]) }.max() ?? 0
         let niceMax = niceCeiling(max(rawMax, 0.0001))
         HStack(alignment: .top, spacing: 6) {
-            // Y 軸刻度(與 HourlyChart 同款;cost 模式以 $ 呈現)
+            // Y 軸刻度(與 HourlyChart 同款;cost 模式以 $ 呈現)。
+            // R3:寬度容納 "$1,000" 不換行(fixedSize + 52pt;大額軸標去小數)。
             VStack(alignment: .trailing) {
-                Text(axisLabel(niceMax))
+                Text(axisLabel(niceMax)).fixedSize()
                 Spacer()
-                Text(axisLabel(niceMax / 2))
+                Text(axisLabel(niceMax / 2)).fixedSize()
                 Spacer()
                 Text(metric == .tokens ? "0" : "$0")
             }
             .font(Theme.FontScale.micro)
             .foregroundStyle(Theme.textMuted)
-            .frame(width: 40)
+            .frame(width: 52, alignment: .trailing)
             .padding(.bottom, 12)
 
             GeometryReader { geo in
@@ -230,7 +231,8 @@ struct DailyBarChart: View {
     }
 
     private func axisLabel(_ v: Double) -> String {
-        metric == .tokens ? tokenLabel(Int(v)) : String(format: "$%.2f", v)
+        // 軸標:金額 ≥$100 去小數(避免 "$1,000.00" 過寬),小額保留兩位。
+        metric == .tokens ? tokenLabel(Int(v)) : ReportGenerator.fmtUSD(v, decimals: v >= 100 ? 0 : 2)
     }
 }
 
@@ -244,55 +246,74 @@ struct UsageHeatmap: View {
     private let cell: CGFloat = 12
     private let gap: CGFloat = 3
     @State private var hoveredDay: Date?
-    @State private var cursor: CGPoint = .zero
 
     var body: some View {
         let byDay = Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
         let maxV = daily.map(\.tokens).max() ?? 0
         let weeks = weekColumns()
-        VStack(alignment: .leading, spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: gap) {
-                    ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                        VStack(spacing: gap) {
-                            ForEach(0..<7, id: \.self) { row in
-                                cellView(week[row], byDay: byDay, maxV: maxV)
-                            }
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-                // A10:格座標反推日 → 游標 tooltip(取代 .help 的系統延遲樣式)。
-                .coordinateSpace(name: "heatmap")
-                .overlay {
-                    GeometryReader { geo in
-                        ZStack(alignment: .topLeading) {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onContinuousHover(coordinateSpace: .named("heatmap")) { phase in
-                                    switch phase {
-                                    case .active(let p):
-                                        cursor = p
-                                        // 命中 gap/補齊格 → 保留上一個有效日(tooltip 不閃;
-                                        // grok P3-7),格內才更新(codex P3 的餘數判定)。
-                                        if let hit = day(at: p, weeks: weeks) { hoveredDay = hit }
-                                    case .ended:
-                                        hoveredDay = nil
-                                    }
-                                }
-                            if let day = hoveredDay {
-                                CursorTooltip(cursor: cursor, container: geo.size) {
-                                    Text(dayTooltip(day: day, bucket: byDay[day]))
-                                        .font(.caption)
-                                        .multilineTextAlignment(.leading)
+        // R3(使用者):熱圖資料集中在左側、格子區很窄,游標 tooltip 被夾成細條難讀 →
+        // 改為**右側固定資訊卡**(寬 220,不換行擠壓);hover 格子即更新,移開保留最後一日。
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: gap) {
+                        ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                            VStack(spacing: gap) {
+                                ForEach(0..<7, id: \.self) { row in
+                                    cellView(week[row], byDay: byDay, maxV: maxV)
                                 }
                             }
                         }
                     }
+                    .padding(.vertical, 2)
+                    .coordinateSpace(name: "heatmap")
+                    .overlay {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onContinuousHover(coordinateSpace: .named("heatmap")) { phase in
+                                switch phase {
+                                case .active(let p):
+                                    // 命中 gap/補齊格不清空 —— 資訊卡穩定顯示最後有效日。
+                                    if let hit = day(at: p, weeks: weeks) { hoveredDay = hit }
+                                case .ended:
+                                    break   // 移開熱圖仍保留,讓使用者慢慢讀
+                                }
+                            }
+                    }
                 }
+                legend()
             }
-            legend()
+            detailCard(byDay: byDay)
         }
+    }
+
+    /// 右側固定資訊卡:hover 的日期明細(日期/tokens/est. cost/top project/top model)。
+    private func detailCard(byDay: [Date: DayBucket]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let day = hoveredDay {
+                let b = byDay[day]
+                Text(trendDayFormatter.string(from: day))
+                    .font(.caption.weight(.semibold))
+                if let b, b.tokens > 0 {
+                    Text("\(tokenLabel(b.tokens)) tokens · \(costLabel(b.cost)) est.")
+                        .font(.caption)
+                    if let p = b.topProject {
+                        Text("top project: \(p)").font(.caption2).foregroundStyle(Theme.textSecondary)
+                    }
+                    if let m = b.topModel {
+                        Text("top model: \(m)").font(.caption2).foregroundStyle(Theme.textSecondary)
+                    }
+                } else {
+                    Text("no usage").font(.caption).foregroundStyle(Theme.textSecondary)
+                }
+            } else {
+                Text("Hover a day for details")
+                    .font(.caption).foregroundStyle(Theme.textMuted)
+            }
+        }
+        .padding(10)
+        .frame(width: 220, alignment: .topLeading)   // 220 = 卡片可見總寬(含 padding)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// heatmap 座標 → 日(欄 = 週、列 = 週幾)。floor + 餘數判定:負座標與 gap 區

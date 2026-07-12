@@ -34,11 +34,27 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 - 🪶 **Monitor-only (low RAM) mode** — Settings → General: the floating pet window and animations are never created, and the feeding/XP engine is only instantiated in full-pet mode (switching to monitor-only releases it); usage tracking, menu bar, pages, notifications, and export keep working.
 - ⌨️ **Headless `aipet` CLI** — status, reports, and sprite export from the terminal.
 
+## 📦 Install (alpha)
+
+There is no packaged download yet — the alpha installs by building from source (about a minute):
+
+```bash
+git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
+cd ai-pet-usage
+Scripts/build-app.sh
+open "dist/AI Pet Usage.app"
+```
+
+- **Requirements**: macOS 14+ with the Xcode Command Line Tools (`xcode-select --install`). No other dependencies — the app is pure SwiftPM.
+- **First launch**: the alpha build is not notarized. If Gatekeeper complains, right-click the app → **Open** once (or allow it under System Settings → Privacy & Security).
+- The app lives in the menu bar; enable **launch at login** in Settings if you want it always on.
+- Signed/notarized downloads and a Homebrew cask are planned for the beta (see [`ROADMAP.md`](ROADMAP.md)).
+
 ## 🚀 Build & run
 
 ```bash
 Scripts/swiftpm.sh build                 # build everything
-Scripts/swiftpm.sh run usagecore-tests   # run the test suite (69 tests)
+Scripts/swiftpm.sh run usagecore-tests   # run the test suite
 Scripts/build-app.sh                     # produce dist/AI Pet Usage.app
 open "dist/AI Pet Usage.app"
 

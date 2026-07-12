@@ -231,14 +231,30 @@ public enum ReportGenerator {
         }
     }
 
+    /// 金額(千分位;R3 使用者要求全 app 一致):$1,234.56。分隔符固定 ","/"."
+    /// (與 app 英文文案一致,不隨系統 locale 漂移)。
+    public static func fmtUSD(_ value: Double, decimals: Int = 2) -> String {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")   // 分組/數字規則不隨系統 locale 漂移
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = true
+        f.groupingSeparator = ","
+        f.decimalSeparator = "."
+        f.groupingSize = 3
+        f.minimumFractionDigits = decimals
+        f.maximumFractionDigits = decimals
+        let body = f.string(from: NSNumber(value: value)) ?? String(format: "%.\(decimals)f", value)
+        return "$" + body
+    }
+
     static func fmtCost(_ c: CostResult) -> String {
-        var s = String(format: "$%.2f", c.knownUSD)
+        var s = fmtUSD(c.knownUSD)
         if c.unknownModelTokens > 0 { s += "+ (partial)" }
         else if c.isEstimated { s += " (est.)" }
         return s
     }
 
-    static func money(_ v: Double) -> String { String(format: "$%.3f", v) }
+    static func money(_ v: Double) -> String { fmtUSD(v, decimals: 3) }
     static func pct(_ v: Double) -> String { String(format: "%.1f%%", v) }
 
     private static let css = """

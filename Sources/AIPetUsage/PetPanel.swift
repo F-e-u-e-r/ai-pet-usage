@@ -70,11 +70,17 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         return panel
     }
 
+    /// 泡泡保留區(R3,雙審裁定 A:泡泡完全在環圈之上):page 0 至多 4 行 11pt mono
+    /// ≈78pt,取 92 留餘裕;字級不隨 petSize 縮放 → 固定 pt。常駐加高(勿隨泡泡
+    /// show/hide 改尺寸 → 寵物跳)。
+    static let bubbleReserve: CGFloat = 92
+
     private func panelSize() -> NSSize {
         let base = model?.settings.petSize ?? 96
-        // R2 B1/B3:面板須容納 4 環容量外徑 + 邊距;頂部餘裕兼泡泡區(視窗透明)。
+        // R2 B1/B3:面板須容納 4 環容量外徑 + 邊距;R3:再加泡泡保留區(視窗透明,向上長)。
         let capD = UsageRingModel.capacityOuterDiameter(petSize: base)
-        return NSSize(width: max(base * 2.6, capD + 12), height: max(base * 2.0, capD + 14))
+        return NSSize(width: max(base * 2.6, capD + 12),
+                      height: max(base * 2.0, capD + 14) + Self.bubbleReserve)
     }
 
     private func restoreOrigin(for size: NSSize) -> NSPoint {
@@ -145,9 +151,15 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         panel.ignoresMouseEvents = settings.clickThrough
         let newSize = panelSize()
         var sizeChanged = false
-        if abs(panel.frame.width - newSize.width) > 1 {
+        // R3(codex):寬**或**高變更都要 resize(泡泡保留區只動高度,舊的 width-only
+        // 比較會漏);resize 後把 origin 夾回目前螢幕(視窗變高可能頂出上緣)。
+        if abs(panel.frame.width - newSize.width) > 1 || abs(panel.frame.height - newSize.height) > 1 {
             var frame = panel.frame
             frame.size = newSize
+            if let vf = (panel.screen ?? NSScreen.main)?.visibleFrame {
+                frame.origin.y = min(max(frame.origin.y, vf.minY), max(vf.minY, vf.maxY - newSize.height))
+                frame.origin.x = min(max(frame.origin.x, vf.minX), max(vf.minX, vf.maxX - newSize.width))
+            }
             panel.setFrame(frame, display: true)
             panel.contentView?.frame = NSRect(origin: .zero, size: newSize)
             sizeChanged = true
@@ -438,26 +450,34 @@ struct PetView: View {
                     .frame(width: size * 1.3, height: size * 1.15)
                 }
                 .frame(width: capD, height: capD)
+                // R3(grok P1):命中區 = 環容器 —— 上方泡泡保留區是「空氣」,
+                // 點到不得觸發泡泡/選單(視窗層仍會擋事件,屬透明浮窗既有代價)。
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if Date() < bubbleUntil {
+                        bubblePage = (bubblePage + 1) % 3
+                    } else {
+                        bubblePage = 0
+                    }
+                    showBubble(bubblePageText(bubblePage), seconds: 6)
+                }
+                .help(PetInfo.tooltip)
+                .contextMenu { PetContextMenu() }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 6)
-                .overlay(alignment: .top) {
+                .overlay(alignment: .bottom) {
+                    // R3 裁定 A:泡泡完全在環圈之上(底部 = 6 + capD + 8 縫),
+                    // 尾巴向下指向寵物;不參與 layout、不吃命中。
                     if context.date < bubbleUntil {
                         PixelBubble(text: bubbleText, maxWidth: geo.size.width - 12)
+                            .padding(.bottom, capD + 14)
+                            .allowsHitTesting(false)
                             .transition(.opacity)
                     }
                 }
             }
         }
         .opacity(settings.petOpacity)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if Date() < bubbleUntil {
-                bubblePage = (bubblePage + 1) % 3
-            } else {
-                bubblePage = 0
-            }
-            showBubble(bubblePageText(bubblePage), seconds: 6)
-        }
         .onChange(of: model.mood.mood) { _, newMood in
             guard settings.petSpeechEnabled,
                   let phrases = PetSpeech.phrases(for: newMood), !phrases.isEmpty else { return }
@@ -469,9 +489,7 @@ struct PetView: View {
                 showBubble(notice.text, seconds: 4)
             }
         }
-        .help(PetInfo.tooltip)
-        .contextMenu { PetContextMenu() }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        // help/contextMenu/tap 已收斂到環容器(R3 命中區 = capD;保留區點擊不觸發)。
     }
 
     /// legacy sprite 幀(V2 關的原路徑;抽出以免 V2 開啟時仍逐 tick 計算 animator 幀)。
@@ -488,7 +506,7 @@ struct PetView: View {
                               palette: sprite.palette,
                               gridWidth: sprite.width,
                               gridHeight: sprite.height,
-                              flipped: model.wanderDirection < 0)
+                              flipped: model.petFacingDirection < 0)
             .frame(width: size * 1.3, height: size * 1.15)
     }
 
