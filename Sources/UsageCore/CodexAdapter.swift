@@ -166,15 +166,22 @@ public struct CodexAdapter: ProviderAdapter {
             }
 
             if let limits = payload.obj("rate_limits") {
+                // Codex 的 primary/secondary 欄位「不」固定對應 5h/週(觀察到 Codex 暫撤 5h 時
+                // 只回報週窗口且放在 primary、secondary 為 null),故以 window_minutes 分類到
+                // 5h/週兩槽,而非 JSON 位置。RateLimitReading 契約:primary=5h、secondary=週。
+                let planType = limits.str("plan_type")
+                let (fiveHour, weekly) = classifyWindows(parseWindow(limits.obj("primary"), observedAt: ts),
+                                                         parseWindow(limits.obj("secondary"), observedAt: ts))
                 let reading = RateLimitReading(
                     providerId: "codex",
                     observedAt: ts,
-                    primary: parseWindow(limits.obj("primary"), observedAt: ts),
-                    secondary: parseWindow(limits.obj("secondary"), observedAt: ts),
-                    planType: limits.str("plan_type"),
+                    primary: fiveHour,
+                    secondary: weekly,
+                    planType: planType,
                     sourcePath: sourcePath
                 )
-                if reading.primary != nil || reading.secondary != nil {
+                // 兩窗皆無但有 plan:仍發 plan-only 讀數以保留方案標籤(chip 不因無法分類而消失)。
+                if reading.primary != nil || reading.secondary != nil || planType != nil {
                     readings.append(reading)
                 }
             }
@@ -193,5 +200,24 @@ public struct CodexAdapter: ProviderAdapter {
             resetsAt = observedAt.addingTimeInterval(inSeconds)
         }
         return RateLimitWindowReading(usedPercent: percent, windowMinutes: windowMinutes, resetsAt: resetsAt)
+    }
+
+    /// 以 window_minutes「精確」把兩個窗口分類到 5h/週兩槽(而非 JSON 的 primary/secondary
+    /// 位置——Codex 的位置不保證窗型:曾觀察到週窗口被放在 primary、secondary 為 null)。
+    /// fail-closed:只有已知的 Codex 窗長才歸位(5h=300、週=10080);其餘(未知/0/未來的
+    /// 60 分或 30 天等新窗長)一律忽略,不塞進 UI 寫死「5h/weekly」標籤的既有槽位而誤標。
+    /// 同型重覆(理論上不會)保留第一個。
+    static func classifyWindows(_ a: RateLimitWindowReading?, _ b: RateLimitWindowReading?)
+        -> (fiveHour: RateLimitWindowReading?, weekly: RateLimitWindowReading?) {
+        var fiveHour: RateLimitWindowReading?
+        var weekly: RateLimitWindowReading?
+        for w in [a, b].compactMap({ $0 }) {
+            switch w.windowMinutes {
+            case 300:   if fiveHour == nil { fiveHour = w }
+            case 10080: if weekly == nil { weekly = w }
+            default:    break   // 未知窗長:忽略,不誤標到 5h/週槽
+            }
+        }
+        return (fiveHour, weekly)
     }
 }

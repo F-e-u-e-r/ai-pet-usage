@@ -40,6 +40,7 @@ let codex = CodexAdapterTests()
 runSuite("CodexAdapterTests", [
     ("testParsesTotalsDeltasAndRateLimits", codex.testParsesTotalsDeltasAndRateLimits),
     ("testIncrementalPreservesContext", codex.testIncrementalPreservesContext),
+    ("testCodexClassifiesWindowsByDurationThroughRefresh", codex.testCodexClassifiesWindowsByDurationThroughRefresh),
 ])
 
 let grok = GrokCodeAdapterTests()
@@ -114,6 +115,8 @@ runSuite("LimitEngineTests", [
     ("testPrimaryOnlyReadingsDoNotDisturbStaleWeekly", limits.testPrimaryOnlyReadingsDoNotDisturbStaleWeekly),
     ("testOutOfOrderHighReadingKeepsPendingDecrease", limits.testOutOfOrderHighReadingKeepsPendingDecrease),
     ("testPlanOnlyReadingSetsPlanTypeWithoutWindows", limits.testPlanOnlyReadingSetsPlanTypeWithoutWindows),
+    ("testLoadSanitizesCrossTypedCodexWindows", limits.testLoadSanitizesCrossTypedCodexWindows),
+    ("testCodexWeeklyOnlySnapshotTombstonesFiveHour", limits.testCodexWeeklyOnlySnapshotTombstonesFiveHour),
 ])
 
 let pricing = PricingTests()
@@ -198,6 +201,8 @@ runSuite("PixelArtTests", [
     ("testGlyphsWellFormed", pixel.testGlyphsWellFormed),
     ("testSpeechPhrases", pixel.testSpeechPhrases),
     ("testMicroAnimationFramesWellFormed", pixel.testMicroAnimationFramesWellFormed),
+    ("testDogEatFramePreservesHeadCrown", pixel.testDogEatFramePreservesHeadCrown),
+    ("testCatJumpFramePreservesHeadCrown", pixel.testCatJumpFramePreservesHeadCrown),
 ])
 
 let animatorTests = PixelAnimatorTests()

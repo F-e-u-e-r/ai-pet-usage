@@ -305,8 +305,13 @@ public enum PixelPets {
         "....................",
     ]
 
-    /// 躍起接零食(整體上移、後腿收起、零食在口前)
+    /// 躍起接零食:頭部維持 idle 列位(耳尖/眉,idle 第 0–1 列完整保留)——舊版把全身
+    /// 上移 2 列,耳尖掉出 18 列網格頂(使用者回報「餵食後頭被切」),與 dogJumpA 同一
+    /// bug class(R3 修了跳躍卻漏了進食)。改以「收腿 + 底部騰空列」表現離地,零食漂浮
+    /// 於頭部右上(第 1–2 列)。內容 = dogJumpA + 零食(T)。
     static let dogEatA = [
+        ".............AA.....",
+        ".....MM.....AAAA.TT.",
         "....MMMMAAAAAAAA.TT.",
         "....MMMAAAAAAAAAA...",
         ".....MMAAAAAAKKAA...",
@@ -321,8 +326,6 @@ public enum PixelPets {
         "..AAAAAAAAAAAAA.....",
         "..AAAAAAAAAAAAA.....",
         "....AAAA..AAAA......",
-        "....................",
-        "....................",
         "....................",
         "....................",
     ]
@@ -959,7 +962,12 @@ public enum PixelPets {
         "......UUUUUU........",
     ]
 
+    /// 慶祝跳躍:頭部維持 idle 列位(耳尖,idle 第 0–1 列完整保留)——舊版把全身上移
+    /// 2 列,貓耳尖掉出網格頂(與 dogEatA/dogJumpA 同 bug class;R3「貓不受影響」對跳躍
+    /// 誤判)。改以「收腳 + 底部騰空列」表現離地。內容 = catIdleA 前 15 列 + 收起的腳。
     static let catJumpA = [
+        "....O.......O.......",
+        "...OPO.....OPO......",
         "...OBBO...OBBO......",
         "..OBBBBBBBBBBBO.....",
         "..OBBSBBBBBSBBO.....",
@@ -971,11 +979,9 @@ public enum PixelPets {
         "OBBWWBBBBBBBBBBBO...",
         "OBBWWBBBBBBBBBBOOOO.",
         "OBBBBBBBBBBBBBBOBBO.",
+        "OBBBBBBBBBBBBBBOBBO.",
         ".OBBBBBBBBBBBBBOBO..",
-        ".OBBOBBBBBBOBBOO....",
         "..OBBO..OBBO........",
-        "....................",
-        "....................",
         "....................",
         "....................",
     ]
