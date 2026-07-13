@@ -2,7 +2,7 @@
 
 This document lists exactly which local files the app reads, what is extracted, and why. It is the source of truth for the in-app "Providers" and "Data & Privacy" settings copy.
 
-Everything is read-only. Nothing is uploaded. There is no telemetry and no account login.
+Everything is read-only. Your usage data is never uploaded — no telemetry, no account login. The only optional network call is a GitHub version check for app updates (opt-in; Settings → General), which sends no usage data.
 
 ## Codex (`providerId: codex`)
 

@@ -38,9 +38,15 @@
 
 ## 📦 安裝(alpha)
 
-**下載**:到 [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) 取得最新的 `AI-Pet-Usage-…-arm64.zip`(Apple Silicon;ad-hoc 簽章、未經公證 —— 首次啟動請右鍵 → **打開**,或執行 `xattr -d com.apple.quarantine "AI Pet Usage.app"`)。
+**Homebrew(Apple Silicon)** —— 推薦:
 
-或從原始碼建置(約一分鐘;Intel Mac 必須這樣做):
+```bash
+brew install --cask F-e-u-e-r/tap/ai-pet-usage
+```
+
+一併處理安裝、`brew upgrade` 與 `brew uninstall`。**或**到 [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) 取得最新的 `AI-Pet-Usage-…-arm64.zip`,把 app 拖進 Applications。
+
+從原始碼建置(約一分鐘;Intel Mac 必須這樣做):
 
 ```bash
 git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
@@ -49,10 +55,10 @@ Scripts/build-app.sh
 open "dist/AI Pet Usage.app"
 ```
 
-- **需求**:macOS 14+ 並安裝 Xcode Command Line Tools（`xcode-select --install`）。無其他相依 —— 這個 app 是純 SwiftPM。
-- **首次啟動**:alpha 版未經公證。若 Gatekeeper 阻擋,右鍵點 app → **打開** 一次(或到 系統設定 → 隱私權與安全性 允許)。
-- app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。
-- 已簽章/已公證的下載與 Homebrew cask 規劃於 beta(見 [`ROADMAP.md`](ROADMAP.md))。
+- **需求**:macOS 14+。Homebrew cask 與預先建置的 zip 為 Apple Silicon;從原始碼建置需 Xcode Command Line Tools（`xcode-select --install`）。
+- **首次啟動**:alpha 為 ad-hoc 簽章、**未經公證**,macOS 首次會封鎖。先嘗試打開 app,再到 **系統設定 → 隱私權與安全性** 選 **「強制打開」/「仍要打開」**(依 macOS 版本而定;僅在你信任此版本時)。Homebrew **不會**移除這一次性核准 —— 只有 Developer ID 公證能(規劃於 beta)。
+- app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。可**檢查 GitHub 更新**(opt-in —— Settings → General → *Automatically check for updates*;僅版本檢查,不送任何使用資料),或從選單列隨時手動檢查。
+- Developer ID 簽章/公證的下載規劃於 beta(見 [`ROADMAP.md`](ROADMAP.md))。
 
 ## 🚀 建置與執行
 
@@ -91,7 +97,7 @@ open "dist/AI Pet Usage.app"
 ## 🛡️ 隱私 —— 預設本機優先
 
 - ✅ 只讀取已知的本機使用量檔案,或使用者設定的路徑。
-- 🚫 不上傳使用量資料。
+- 🚫 不上傳使用量資料。可選的更新檢查(Settings → General)只向 GitHub 查詢最新版本 —— 不送任何使用資料,且可關閉。
 - 🚫 不需要帳號憑證。
 - 💬 每個權限提示都會說明為何需要。
 - 🧩 Provider 轉接器保持隔離,資料來源變動不影響寵物引擎。

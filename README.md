@@ -38,9 +38,15 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 
 ## 📦 Install (alpha)
 
-**Download**: grab the latest `AI-Pet-Usage-…-arm64.zip` from [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) (Apple Silicon; ad-hoc signed, not notarized — right-click → **Open** on first launch, or `xattr -d com.apple.quarantine "AI Pet Usage.app"`).
+**Homebrew (Apple Silicon)** — recommended:
 
-Or build from source (about a minute; required for Intel Macs):
+```bash
+brew install --cask F-e-u-e-r/tap/ai-pet-usage
+```
+
+This handles install, `brew upgrade`, and `brew uninstall`. **Or** grab the latest `AI-Pet-Usage-…-arm64.zip` from [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) and drag the app to Applications.
+
+Build from source (about a minute; required for Intel Macs):
 
 ```bash
 git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
@@ -49,10 +55,10 @@ Scripts/build-app.sh
 open "dist/AI Pet Usage.app"
 ```
 
-- **Requirements**: macOS 14+ with the Xcode Command Line Tools (`xcode-select --install`). No other dependencies — the app is pure SwiftPM.
-- **First launch**: the alpha build is not notarized. If Gatekeeper complains, right-click the app → **Open** once (or allow it under System Settings → Privacy & Security).
-- The app lives in the menu bar; enable **launch at login** in Settings if you want it always on.
-- Signed/notarized downloads and a Homebrew cask are planned for the beta (see [`ROADMAP.md`](ROADMAP.md)).
+- **Requirements**: macOS 14+. The Homebrew cask and the prebuilt zip are Apple Silicon; building from source needs the Xcode Command Line Tools (`xcode-select --install`).
+- **First launch**: the alpha is ad-hoc signed and **not notarized**, so macOS blocks it the first time. Try to open the app, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (only if you trust the release). Homebrew does *not* remove this one-time approval — only Developer ID notarization would (planned for the beta).
+- The app lives in the menu bar; enable **launch at login** in Settings if you want it always on. It can **check GitHub for updates** (opt-in — Settings → General → *Automatically check for updates*; a version check only, no usage data is sent), or check on demand from the menu bar.
+- Developer ID–signed/notarized downloads are planned for the beta (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## 🚀 Build & run
 
@@ -91,7 +97,7 @@ This machine's CommandLineTools installation has two version-mismatch defects (a
 ## 🛡️ Privacy — local-first by default
 
 - ✅ Reads only known local usage files or user-configured paths.
-- 🚫 Does not upload usage data.
+- 🚫 Does not upload usage data. The optional update check (Settings → General) contacts GitHub for the latest version only — no usage data is sent, and it can be turned off.
 - 🚫 Does not require account credentials.
 - 💬 Every permission prompt explains why it is needed.
 - 🧩 Provider adapters stay isolated, so data-source changes do not affect the pet engine.

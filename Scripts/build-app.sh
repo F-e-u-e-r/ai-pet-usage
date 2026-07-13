@@ -6,8 +6,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/dist/AI Pet Usage.app"
 BUNDLE_ID="dev.aipetusage.app"
-# 版號可由環境注入(release workflow 以 tag 驅動,如 VERSION=0.1.2);預設沿舊值。
-VERSION="${VERSION:-0.1.0}"
+# 版號由環境注入(release workflow 以 tag 驅動,如 VERSION=0.1.2)。CFBundleShortVersionString /
+# CFBundleVersion **必須是數字**(Apple 契約),故本機預設數字 0.0.0;「是否正式版」改由
+# AIPetUsageBuildChannel 標記(source/dev 版不觸發更新提示,見 UpdateChecker),避免誤報。
+VERSION="${VERSION:-0.0.0}"
+BUILD_CHANNEL="${BUILD_CHANNEL:-source}"
 
 "$ROOT/Scripts/swiftpm.sh" build -c release --product AIPetUsage
 "$ROOT/Scripts/swiftpm.sh" build -c release --product aipet
@@ -37,10 +40,11 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
+    <key>AIPetUsageBuildChannel</key><string>${BUILD_CHANNEL}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Local-first. No data leaves this Mac.</string>
+    <key>NSHumanReadableCopyright</key><string>Local-first. Your usage data never leaves this Mac.</string>
 </dict>
 </plist>
 EOF

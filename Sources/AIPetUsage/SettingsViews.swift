@@ -19,6 +19,7 @@ struct SettingsRoot: View {
 
 struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(UpdateChecker.autoCheckDefaultsKey) private var autoUpdateCheck = false
 
     var body: some View {
         Form {
@@ -80,6 +81,12 @@ struct GeneralSettings: View {
                     get: { model.settings.quietMode },
                     set: { v in model.updateSettings { $0.quietMode = v } }
                 ))
+                Toggle("Automatically check for updates", isOn: $autoUpdateCheck)
+                Text("Off by default. When on, checks GitHub for new releases about once a day — a version check only, no usage data is sent. You can also check any time from the menu bar.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Check for Updates Now…") {
+                    Task { @MainActor in await UpdateChecker.shared.checkForUpdates(manual: true) }
+                }
             }
         }
         .formStyle(.grouped)
@@ -439,7 +446,7 @@ struct DataPrivacySettings: View {
             }
             Section("Privacy") {
                 Text("""
-                • All parsing and storage happen on this Mac. Nothing is uploaded; there is no telemetry and no account login.
+                • Usage data is parsed and stored only on this Mac and is never uploaded — no telemetry, no account login. The one optional network call is a GitHub version check for updates (opt-in; Settings → General), which sends no usage data.
                 • Only token counts, model IDs, project paths, timestamps, and rate-limit numbers are read — never prompts or message contents.
                 • HTML reports are local files and redact full project paths by default.
                 """)
