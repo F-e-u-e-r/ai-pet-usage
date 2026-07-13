@@ -20,8 +20,6 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # 完整取回 annotated tag 物件,下方「What's new」的 git tag %(contents) 才非空
 
       - name: Build app bundle (ad-hoc signed, strict)
         run: |
@@ -69,6 +67,10 @@ jobs:
         run: |
           # 「What's new」僅取自「附註標籤(annotated tag)」訊息;lightweight tag 的 %(contents)
           # 會回傳其指向的 commit 訊息(非空),故先確認是 tag 物件再取,否則退回預設。
+          # actions/checkout 會以 SHA 二次重抓、把 pushed tag 覆寫成 lightweight(cat-file 看到
+          # "commit"、%(contents) 變成 commit 訊息),fetch-depth 也擋不住;故此處顯式重抓
+          # annotated tag 物件還原,cat-file 才會是 "tag"、%(contents) 才是 tag 訊息(本機已驗證)。
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}" 2>/dev/null || true
           NOTES=""
           if [ "$(git cat-file -t "${GITHUB_REF_NAME}" 2>/dev/null)" = "tag" ]; then
             NOTES="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" 2>/dev/null)"
