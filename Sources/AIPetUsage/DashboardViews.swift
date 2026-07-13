@@ -279,6 +279,16 @@ struct LimitBar: View {
                 }
             }
         }
+        .help(helpText)
+    }
+
+    /// idle / no-data 的說明性 tooltip(第三位 reviewer:主文短、tooltip 詳)。空字串 = 無 tooltip。
+    private var helpText: String {
+        if window.idle { return "No active 5h window found in local Claude logs." }
+        if window.usedPercent == nil, window.usedTokens == nil, showBudgetAffordance {
+            return "No local Claude usage found."
+        }
+        return ""
     }
 
     private var valueText: String {
@@ -291,7 +301,7 @@ struct LimitBar: View {
             return s
         }
         if let t = window.usedTokens { return "\(tk(t)) tokens · — %" }
-        return "no data"
+        return "unknown"   // 無 active block、無用量、非 idle → 明確標「unknown」(有別於 idle)
     }
 
     private var resetText: String {
@@ -626,7 +636,8 @@ struct AgentCard: View {
             HStack(spacing: 14) {
                 metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
                 metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) }
-                        ?? (limit?.fiveHour.idle == true ? "idle" : "— %"))
+                        ?? (limit?.fiveHour.idle == true ? "idle"
+                            : (snapshot.providerId == "claude-code" ? "unknown" : "— %")))
                 metric("weekly", snapshot.weeklyUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
             }
             if snapshot.sessionUsagePercent == nil, snapshot.providerId == "claude-code",
@@ -640,9 +651,11 @@ struct AgentCard: View {
             }
             // A3:reset 行恆渲染(無資料顯示 —)→ 三張卡行數一致、等高不跳動。
             Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" }
-                    ?? (limit?.fiveHour.idle == true ? "no active 5h window" : "5h resets: —"))
+                    ?? (limit?.fiveHour.idle == true ? "no active 5h window"
+                        : (snapshot.providerId == "claude-code" ? "no local Claude usage found" : "5h resets: —")))
                 .font(Theme.FontScale.secondaryInfo)
                 .foregroundStyle(Theme.textSecondary)
+                .help(limit?.fiveHour.idle == true ? "No active 5h window found in local Claude logs." : "")
             if let err = snapshot.errorMessage {
                 Text(err).font(.caption2).foregroundStyle(.red).lineLimit(2)
             }
