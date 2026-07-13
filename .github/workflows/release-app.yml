@@ -26,12 +26,12 @@ jobs:
           # 只有「tag push」才用 tag 版號;workflow_dispatch(即使跑在 tag ref 上)
           # 一律 dev 版號 — 與下方「dispatch 僅出 artifact、不建 Release」同一守門。
           if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#alpha-v}"
+            VERSION="${GITHUB_REF_NAME#alpha-v}"; CHANNEL="release"
           else
-            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+            VERSION="0.0.0"; CHANNEL="dev"   # 數字版號(Apple 契約);dev channel 抑制 app 內更新提示
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          VERSION="${VERSION}" STRICT_SIGN=1 Scripts/build-app.sh
+          VERSION="${VERSION}" BUILD_CHANNEL="${CHANNEL}" STRICT_SIGN=1 Scripts/build-app.sh
 
       - name: Verify signature and launchability structure
         run: |
@@ -43,14 +43,19 @@ jobs:
       - name: Zip (ditto keeps resource forks + bundle structure)
         run: |
           cd dist
+          # 檔名 label 用允許清單消毒:GitHub ref / 分支名可含特殊字元,artifact 名亦拒 " < > | 等。
+          # 非 [A-Za-z0-9._-] 一律換 '-'。tag push 的 alpha-v0.1.2 不變 → 與 cask 期望的資產名一致。
+          LABEL="${GITHUB_REF_NAME:-manual}"
+          LABEL="${LABEL//[^A-Za-z0-9._-]/-}"
+          echo "ZIP_LABEL=${LABEL}" >> "$GITHUB_ENV"
           ditto -c -k --sequesterRsrc --keepParent "AI Pet Usage.app" \
-            "AI-Pet-Usage-${GITHUB_REF_NAME:-manual}-arm64.zip"
+            "AI-Pet-Usage-${LABEL}-arm64.zip"
           ls -la *.zip
 
       - name: Upload artifact (always; the only output for workflow_dispatch)
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Pet-Usage-${{ github.ref_name }}-arm64
+          name: AI-Pet-Usage-${{ env.ZIP_LABEL }}-arm64
           path: dist/*.zip
 
       - name: Create GitHub Release (tag pushes only)
@@ -60,16 +65,25 @@ jobs:
         # 發行說明以 printf 逐行寫檔(--notes-file):heredoc 內文若頂格會截斷
         # YAML 的 run 區塊(alpha-v0.1.2 首跑即因此 startup failure)。
         run: |
-          printf '%s\n' \
-            '**Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized.**' \
-            '' \
-            'macOS will quarantine this download. To open the first time, either:' \
-            '- right-click **AI Pet Usage.app** → **Open** → **Open**, or' \
-            '- run `xattr -d com.apple.quarantine "AI Pet Usage.app"` after unzipping.' \
-            '' \
-            'Requirements: macOS 14+. Intel Macs: build from source (see README → Install).' \
-            'Everything is local-first — the app reads Claude Code / Codex / Grok CLI logs on your machine and uploads nothing.' \
-            > "$RUNNER_TEMP/notes.md"
+          # 「What's new」僅取自「附註標籤(annotated tag)」訊息;lightweight tag 的 %(contents)
+          # 會回傳其指向的 commit 訊息(非空),故先確認是 tag 物件再取,否則退回預設。
+          NOTES=""
+          if [ "$(git cat-file -t "${GITHUB_REF_NAME}" 2>/dev/null)" = "tag" ]; then
+            NOTES="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" 2>/dev/null)"
+          fi
+          [ -n "$NOTES" ] || NOTES="See the commit history for changes in this build."
+          {
+            printf '## What'\''s new\n\n%s\n\n' "$NOTES"
+            printf '## Install\n\n'
+            printf 'Homebrew (Apple Silicon, recommended):\n\n'
+            printf '    brew install --cask F-e-u-e-r/tap/ai-pet-usage\n\n'
+            printf 'Or download the arm64 zip below and drag the app to Applications.\n\n'
+            printf '**Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized.**\n'
+            printf 'macOS blocks the first launch: open the app, then System Settings -> Privacy & Security -> **Open Anyway** (only if you trust this release).\n'
+            printf 'Homebrew does not remove this one-time approval; only Developer ID notarization would.\n\n'
+            printf 'Requirements: macOS 14+. Intel Macs: build from source (see README -> Install).\n'
+            printf 'Local-first: the app reads Claude Code / Codex / Grok CLI logs on your machine; it never uploads usage data.\n'
+          } > "$RUNNER_TEMP/notes.md"
           gh release create "${GITHUB_REF_NAME}" dist/*.zip \
             --title "AI Pet Usage ${GITHUB_REF_NAME}" \
             --prerelease \

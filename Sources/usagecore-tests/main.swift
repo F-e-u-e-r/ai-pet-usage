@@ -127,6 +127,13 @@ runSuite("PricingTests", [
     ("testBundledPriceListCoversCurrentModels", pricing.testBundledPriceListCoversCurrentModels),
 ])
 
+let updateModel = UpdateModelTests()
+runSuite("UpdateModelTests", [
+    ("testParseVersionIsStrictAndFailsClosed", updateModel.testParseVersionIsStrictAndFailsClosed),
+    ("testIsNewerIsNumericNotLexical", updateModel.testIsNewerIsNumericNotLexical),
+    ("testLatestApplicableSkipSuppressesThatVersionAndOlder", updateModel.testLatestApplicableSkipSuppressesThatVersionAndOlder),
+])
+
 let report = ReportTests()
 runSuite("ReportTests", [
     ("testReportSectionsAndRedaction", report.testReportSectionsAndRedaction),

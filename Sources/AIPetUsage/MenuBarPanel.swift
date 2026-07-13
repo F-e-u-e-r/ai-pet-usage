@@ -59,6 +59,10 @@ struct MenuBarPanel: View {
                 NSApp.activate(ignoringOtherApps: true)
                 openSettings()
             }
+            PanelActionRow(title: "Check for Updates…") {
+                dismiss()
+                Task { @MainActor in await UpdateChecker.shared.checkForUpdates(manual: true) }
+            }
             PanelActionRow(title: "Quit AI Pet Usage", trailing: "⌘Q", shortcut: "q") {
                 NSApp.terminate(nil)
             }

@@ -523,7 +523,7 @@ struct OnboardingCard: View {
                     openSettings()
                 }
                 .controlSize(.small)
-                Text("Everything is read locally — nothing is uploaded.")
+                Text("Everything is read locally — your usage data is never uploaded.")
                     .font(.caption2).foregroundStyle(Theme.textMuted)
             }
         }

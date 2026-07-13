@@ -48,6 +48,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             AppDelegate.sharedModel?.start()
         }
+        // A2 app 內更新檢查(opt-in,預設關)。啟動延遲首檢 + 每 6h 週期;checkForUpdates 內部
+        // 再驗開關/每日節流/失敗退避,故長時間執行也能可靠約每日檢查一次,使用者關閉後即停。
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            await UpdateChecker.shared.checkForUpdates(manual: false)
+        }
+        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
+            Task { @MainActor in await UpdateChecker.shared.checkForUpdates(manual: false) }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
