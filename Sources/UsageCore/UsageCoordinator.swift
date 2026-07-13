@@ -374,7 +374,8 @@ public actor UsageCoordinator {
             }
         }
         if let claude = limitStates.first(where: { $0.providerId == "claude-code" }),
-           claude.fiveHour.usedPercent == nil {
+           claude.fiveHour.usedPercent == nil, !claude.fiveHour.idle {
+            // idle(閒置)不是資料問題,不列入 data-quality 警告(cross-model round-2)。
             quality.append("claude-code: percent unavailable — install the statusline hook (Scripts/claude-statusline-hook.sh) for official limits, or set a token budget in Settings for an estimate")
         }
 

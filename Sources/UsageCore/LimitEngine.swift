@@ -606,19 +606,37 @@ public final class LimitEngine {
             return Double(tokens) / Double(budget) * 100
         }
 
-        let fiveTokens = block?.tokens ?? 0
-        let fivePercent = percent(fiveTokens, budget: settings.claudeFiveHourTokenBudget)
-        let fiveHour = LimitWindowState(
-            usedPercent: fivePercent,
-            usedTokens: fiveTokens,
-            budgetTokens: settings.claudeFiveHourTokenBudget,
-            resetAt: block?.end,
-            windowMinutes: 300,
-            confidence: settings.claudeFiveHourTokenBudget != nil ? .estimated : .unknown
-        )
-        let weeklyPercent = percent(weeklyTokens, budget: settings.claudeWeeklyTokenBudget)
+        // idle = 本週有活動,但當前無 active 5h 區塊(區別於「從未使用」)。採 weekly(7d)資格窗
+        // 而非 block 計算用的 8d,避免 7d23h→8d01h 的武斷斷崖(cross-model round-2)。
+        let fiveIdle = (block == nil) && weeklyTokens > 0
+        let fiveHour: LimitWindowState
+        if let block {
+            fiveHour = LimitWindowState(
+                usedPercent: percent(block.tokens, budget: settings.claudeFiveHourTokenBudget),
+                usedTokens: block.tokens,
+                budgetTokens: settings.claudeFiveHourTokenBudget,
+                resetAt: block.end,
+                windowMinutes: 300,
+                confidence: settings.claudeFiveHourTokenBudget != nil ? .estimated : .unknown
+            )
+        } else {
+            // 無 active block:idle(本週有活動)或無資料(從未使用)。一律**不給百分比**——
+            // 即使設了 budget,percent(0,budget)=0 會被面板誤 render 成「0% 安全餘量」(cross-model
+            // round-2 的 fail-closed:漏檢只退成「—」,不造假)。usedTokens 僅 idle 給 0(誠實),
+            // 從未使用給 nil(無資料)。
+            fiveHour = LimitWindowState(
+                usedPercent: nil,
+                usedTokens: fiveIdle ? 0 : nil,
+                budgetTokens: settings.claudeFiveHourTokenBudget,
+                resetAt: nil,
+                windowMinutes: 300,
+                confidence: fiveIdle ? .estimated : .unknown,
+                idle: fiveIdle
+            )
+        }
+        // weekly 同樣不造假:本週零用量 → 百分比 nil(非 0%);usedTokens 保留(rolling 7-day 誠實計數)。
         let weekly = LimitWindowState(
-            usedPercent: weeklyPercent,
+            usedPercent: weeklyTokens > 0 ? percent(weeklyTokens, budget: settings.claudeWeeklyTokenBudget) : nil,
             usedTokens: weeklyTokens,
             budgetTokens: settings.claudeWeeklyTokenBudget,
             resetAt: nil, // 帳本無法得知官方週重置點;顯示為 rolling 7-day 估算
@@ -626,11 +644,12 @@ public final class LimitEngine {
             confidence: settings.claudeWeeklyTokenBudget != nil ? .estimated : .unknown
         )
 
+        // 投影只在有 active block 時計算:idle 後首小時的殘留 burn 不得產生「exhausts at …」(round-2)。
         var projected: Date?
-        if let budget = settings.claudeFiveHourTokenBudget, burn > 1000 {
-            let remaining = Double(budget - fiveTokens)
+        if let block, let budget = settings.claudeFiveHourTokenBudget, burn > 1000 {
+            let remaining = Double(budget - block.tokens)
             if remaining > 0 { projected = now.addingTimeInterval(remaining / burn * 3600) }
-            else if fiveTokens >= budget { projected = now }
+            else if block.tokens >= budget { projected = now }
         }
 
         let warning = deriveWarning(fiveHour: fiveHour, weekly: weekly, settings: settings,

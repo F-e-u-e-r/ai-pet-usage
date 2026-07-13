@@ -186,6 +186,9 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
     public var resetAt: Date?
     public var windowMinutes: Int
     public var confidence: Confidence
+    /// 有近期活動(本週用量 > 0)但當前無 active 5h 區塊 → **idle(閒置)**,與「從未使用/無資料」
+    /// 明確區分。idle 時 usedPercent 恆為 nil(絕不造假 0%),各面板顯示「idle / no active 5h window」。
+    public var idle: Bool
     /// 同一窗口內「最近 24h 內」發生過向下修正(Full Reindex 或二筆確認的官方下修),
     /// UI/報告/CLI 據此標示。組裝層統一以 correctedAt 閘 24h — 修正是一次性事件,
     /// 不是永久狀態;超過 24h 或缺 correctedAt(舊 state)一律不 surface。
@@ -194,7 +197,8 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
     public var correctedReason: CorrectionReason?
 
     public init(usedPercent: Double? = nil, usedTokens: Int? = nil, budgetTokens: Int? = nil,
-                resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, corrected: Bool = false,
+                resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, idle: Bool = false,
+                corrected: Bool = false,
                 correctedAt: Date? = nil, correctedReason: CorrectionReason? = nil) {
         // 使用率天花板 100%:官方讀值或預算估算(tokens/budget×100)可能回報 >100,
         // 對外一律夾到 [0, 100],避免 UI 出現 101% / 103%。
@@ -204,6 +208,7 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
         self.resetAt = resetAt
         self.windowMinutes = windowMinutes
         self.confidence = confidence
+        self.idle = idle
         self.corrected = corrected
         self.correctedAt = correctedAt
         self.correctedReason = correctedReason

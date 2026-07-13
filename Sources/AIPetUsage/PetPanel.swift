@@ -534,6 +534,7 @@ struct PetView: View {
         case 0:
             let lines = model.orderedLimitStates.prefix(4).map { st -> String in
                 let code = shortProviderCode(st.providerId)
+                if st.fiveHour.idle { return "\(code) idle 5h" }
                 guard let p = st.fiveHour.usedPercent else { return "\(code) — no data" }
                 var line = "\(code) \(Int(p.rounded()))% 5h"
                 if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }

@@ -266,7 +266,8 @@ struct LimitBar: View {
                 Text(window.confidence.rawValue).font(.caption2).foregroundStyle(Theme.textMuted)
             }
             // review #3:百分比缺失時,原因與解法直接放在卡片裡
-            if window.usedPercent == nil, showBudgetAffordance {
+            // 只有「真的沒設 budget 且非 idle」才提示設定;idle/有 budget 不提示(cross-model round-2)。
+            if window.usedPercent == nil, !window.idle, window.budgetTokens == nil, showBudgetAffordance {
                 HStack(spacing: 6) {
                     Text("Percent unavailable").font(.caption2).foregroundStyle(Theme.textMuted)
                     Button("Set estimated budget…") {
@@ -281,6 +282,7 @@ struct LimitBar: View {
     }
 
     private var valueText: String {
+        if window.idle { return "idle" }
         if let p = window.usedPercent {
             var s = String(format: "%.1f%%", p)
             if let t = window.usedTokens, let b = window.budgetTokens {
@@ -293,6 +295,7 @@ struct LimitBar: View {
     }
 
     private var resetText: String {
+        if window.idle { return "no active 5h window" }
         if let reset = window.resetAt { return "resets in \(countdown(to: reset))" }
         if window.windowMinutes >= 10080, window.usedTokens != nil { return "rolling 7-day" }
         return ""
@@ -622,10 +625,12 @@ struct AgentCard: View {
             .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
             HStack(spacing: 14) {
                 metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
-                metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
+                metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) }
+                        ?? (limit?.fiveHour.idle == true ? "idle" : "— %"))
                 metric("weekly", snapshot.weeklyUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
             }
-            if snapshot.sessionUsagePercent == nil, snapshot.providerId == "claude-code" {
+            if snapshot.sessionUsagePercent == nil, snapshot.providerId == "claude-code",
+               limit?.fiveHour.idle != true, limit?.fiveHour.budgetTokens == nil {
                 Button("Set estimated budget…") {
                     NSApp.activate(ignoringOtherApps: true)
                     openSettings()
@@ -634,7 +639,8 @@ struct AgentCard: View {
                 .font(.caption2)
             }
             // A3:reset 行恆渲染(無資料顯示 —)→ 三張卡行數一致、等高不跳動。
-            Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" } ?? "5h resets: —")
+            Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" }
+                    ?? (limit?.fiveHour.idle == true ? "no active 5h window" : "5h resets: —"))
                 .font(Theme.FontScale.secondaryInfo)
                 .foregroundStyle(Theme.textSecondary)
             if let err = snapshot.errorMessage {

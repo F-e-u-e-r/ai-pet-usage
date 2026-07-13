@@ -46,6 +46,7 @@ public enum MoodEngine {
         // 每家 provider 各自的 5h 百分比都列出(使用者要求同時看到 Claude 與 Codex)。
         let providerParts = limits.map { st -> String in
             let code = shortProviderCode(st.providerId)
+            if st.fiveHour.idle { return "\(code) idle" }
             if let p = st.fiveHour.usedPercent { return "\(code) \(Int(p))%" }
             return "\(code) —"
         }

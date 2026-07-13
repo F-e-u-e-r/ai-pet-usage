@@ -455,7 +455,8 @@ final class AppModel {
         let states = dashboard.limitStates.map { st in
             (id: st.providerId,
              displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
-             percent: st.fiveHour.usedPercent)
+             percent: st.fiveHour.usedPercent,
+             idle: st.fiveHour.idle)
         }
         return MenuBadgeBuilder.badges(from: states,
                                        warn: settings.core.warnThresholdPercent,

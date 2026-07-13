@@ -1145,6 +1145,44 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertNil(LimitEngine.fiveHourBlock(events: events, now: date("2026-01-16T09:00:00Z")))
     }
 
+    // 閒置的 Claude 5h:本週有活動但當前無 active block → idle(不消失、不造假 0%)。
+    // 對照 Codex 的持久化窗口一致地「仍存在」。(cross-model round-2 合議:fail-closed)
+    func testClaudeIdleFiveHourShowsIdleNotFakePercent() {
+        func ev(_ ts: String, tokens: Int) -> UsageEvent {
+            UsageEvent(id: UUID().uuidString, providerId: "claude-code", timestamp: date(ts),
+                       tokens: TokenBreakdown(input: tokens), sourceKind: "test")
+        }
+        let now = date("2026-01-15T20:00:00Z")
+        let engine = LimitEngine(stateURL: nil)   // 無官方讀值 → 走帳本估算路徑
+
+        // (1) 6h 前有活動(當前 5h 區塊已空)、本週用量>0 → idle;無 budget → 百分比 nil。
+        let idleLedger = UsageLedger(fileURL: nil)
+        idleLedger.append([ev("2026-01-15T14:00:00Z", tokens: 5_000)])  // block 14:00–19:00 已過期
+        let idle = engine.limitState(providerId: "claude-code", ledger: idleLedger, settings: settings, now: now)
+        XCTAssertTrue(idle.fiveHour.idle, "本週有活動但當前 5h 無 session → idle")
+        XCTAssertNil(idle.fiveHour.usedPercent, "idle 不給百分比(無 budget)")
+        XCTAssertNil(idle.projectedExhaustionAt, "idle 不得投影耗盡")
+
+        // (2) 設了 budget 也不得造假 0%(fail-closed)。
+        var budgeted = settings
+        budgeted.claudeFiveHourTokenBudget = 100_000
+        let idleBudgeted = engine.limitState(providerId: "claude-code", ledger: idleLedger, settings: budgeted, now: now)
+        XCTAssertTrue(idleBudgeted.fiveHour.idle)
+        XCTAssertNil(idleBudgeted.fiveHour.usedPercent, "有 budget 的 idle 仍不得顯示 0%")
+
+        // (3) 完全無活動 → 非 idle(無資料;選單列徽章仍會被丟棄)。
+        let empty = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil), settings: settings, now: now)
+        XCTAssertFalse(empty.fiveHour.idle, "從未使用 → 非 idle(無資料)")
+        XCTAssertNil(empty.fiveHour.usedPercent)
+
+        // (4) 當前 5h 區塊內有活動 → 非 idle,且有百分比(有 budget)。
+        let active = UsageLedger(fileURL: nil)
+        active.append([ev("2026-01-15T18:30:00Z", tokens: 20_000)])  // block 18:00–23:00,now 在窗內
+        let activeState = engine.limitState(providerId: "claude-code", ledger: active, settings: budgeted, now: now)
+        XCTAssertFalse(activeState.fiveHour.idle, "當前區塊有活動 → 非 idle")
+        XCTAssertEqual(activeState.fiveHour.usedPercent, 20, "20000/100000 = 20%")
+    }
+
     func testClaudeOfficialReadingsBeatBudgetEstimation() {
         // statusline 讀值存在時,Claude 應走 reading-backed 路徑(高信心),
         // 不再依賴使用者預算。
