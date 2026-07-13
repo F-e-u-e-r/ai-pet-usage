@@ -266,7 +266,8 @@ struct LimitBar: View {
                 Text(window.confidence.rawValue).font(.caption2).foregroundStyle(Theme.textMuted)
             }
             // review #3:百分比缺失時,原因與解法直接放在卡片裡
-            if window.usedPercent == nil, showBudgetAffordance {
+            // 只有「真的沒設 budget 且非 idle」才提示設定;idle/有 budget 不提示(cross-model round-2)。
+            if window.usedPercent == nil, !window.idle, window.budgetTokens == nil, showBudgetAffordance {
                 HStack(spacing: 6) {
                     Text("Percent unavailable").font(.caption2).foregroundStyle(Theme.textMuted)
                     Button("Set estimated budget…") {
@@ -278,9 +279,20 @@ struct LimitBar: View {
                 }
             }
         }
+        .help(helpText)
+    }
+
+    /// idle / no-data 的說明性 tooltip(第三位 reviewer:主文短、tooltip 詳)。空字串 = 無 tooltip。
+    private var helpText: String {
+        if window.idle { return "No active 5h window found in local Claude logs." }
+        if window.usedPercent == nil, window.usedTokens == nil, showBudgetAffordance {
+            return "No local Claude usage found."
+        }
+        return ""
     }
 
     private var valueText: String {
+        if window.idle { return "idle" }
         if let p = window.usedPercent {
             var s = String(format: "%.1f%%", p)
             if let t = window.usedTokens, let b = window.budgetTokens {
@@ -289,10 +301,11 @@ struct LimitBar: View {
             return s
         }
         if let t = window.usedTokens { return "\(tk(t)) tokens · — %" }
-        return "no data"
+        return "unknown"   // 無 active block、無用量、非 idle → 明確標「unknown」(有別於 idle)
     }
 
     private var resetText: String {
+        if window.idle { return "no active 5h window" }
         if let reset = window.resetAt { return "resets in \(countdown(to: reset))" }
         if window.windowMinutes >= 10080, window.usedTokens != nil { return "rolling 7-day" }
         return ""
@@ -308,6 +321,29 @@ struct HourlyChart: View {
     private var slots: [Int] { Array(0...Calendar.current.component(.hour, from: Date())) }
     private var maxTokens: Int { max(1, buckets.map(\.tokens).max() ?? 1) }
     private var niceMax: Int { Int(niceCeiling(Double(maxTokens))) }
+
+    /// 依面板寬度選出要標 X 軸的小時索引:slot 寬決定 clock-friendly 步距(1/2/3/4/6/12/24);
+    /// 首格與當前(末)小時必標;移除與末格過近的倒數第二標(當前小時優先)。bar 少時 slotW
+    /// 大 → step=1 → 每格皆標(早晨僅數根長條時的訴求)。跨模型合議(grok-4.5 max +
+    /// gpt-5.6-sol max,2026-07-13)的寬度感知 nice-step 方案,取代原寫死的 `hour % 6`。
+    static func axisLabelIndices(count n: Int, width: CGFloat) -> Set<Int> {
+        guard n > 1 else { return [0] }
+        let last = n - 1
+        guard width > 0 else { return [0, last] }   // 退化版面(width 0):首末都保留
+        let slotW = width / CGFloat(n)
+        let minSpacing: CGFloat = 34   // 2 位數 micro 標籤 + 間距下限
+        let rawStep = max(1, Int((minSpacing / slotW).rounded(.up)))
+        let step = [1, 2, 3, 4, 6, 12, 24].first { $0 >= rawStep } ?? 24
+        var ticks = Array(Swift.stride(from: 0, through: last, by: step))
+        if ticks.last != last { ticks.append(last) }
+        // 僅丟「內部」標(count≥3),永不丟首格 —— cross-model round-2(gpt-5.6-sol max)
+        // 指出 count≥2 時倒數第二標可能就是 index 0,窄版面會破壞「首格必標」不變量。
+        if ticks.count >= 3,
+           CGFloat(last - ticks[ticks.count - 2]) * slotW < minSpacing {
+            ticks.remove(at: ticks.count - 2)   // 當前小時優先
+        }
+        return Set(ticks)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -328,6 +364,7 @@ struct HourlyChart: View {
                 let barArea = geo.size.height - 12
                 let n = max(1, slots.count)
                 let slotW = geo.size.width / CGFloat(n)
+                let labeled = Self.axisLabelIndices(count: n, width: geo.size.width)
                 ZStack(alignment: .bottom) {
                     // 網格線
                     VStack {
@@ -340,7 +377,7 @@ struct HourlyChart: View {
                     .padding(.bottom, 12)
 
                     HStack(alignment: .bottom, spacing: 2) {
-                        ForEach(slots, id: \.self) { hour in
+                        ForEach(Array(slots.enumerated()), id: \.element) { i, hour in
                             let tokens = bucket(hour)?.tokens ?? 0
                             VStack(spacing: 2) {
                                 // 零用量 → 1pt 淡基線,不得看起來有量(review 低項)
@@ -351,12 +388,17 @@ struct HourlyChart: View {
                                     .frame(height: tokens > 0
                                            ? max(2, barArea * CGFloat(tokens) / CGFloat(niceMax))
                                            : 1)
-                                Text(hour % 6 == 0 ? "\(hour)" : " ")
+                                // X 軸標籤:自適應步距(見 axisLabelIndices);%02d 對齊 tooltip 的 %02d:00。
+                                Text(labeled.contains(i) ? String(format: "%02d", hour) : " ")
                                     .font(Theme.FontScale.micro)
                                     .foregroundStyle(Theme.textMuted)
+                                    .fixedSize(horizontal: true, vertical: false)
                                     .frame(height: 10)
                             }
-                            .frame(maxWidth: .infinity, alignment: .bottom)
+                            // minWidth:0 + maxWidth:∞ 才會採用「提議寬度」等分;僅 maxWidth 時
+                            // fixedSize 標籤的理想寬會變成 slot 最小寬,使有標格比空白格寬(cross-model
+                            // round-2:gpt-5.6-sol max,Apple frame 文件)。label 溢出到空白鄰格不影響幾何。
+                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .bottom)
                             // VoiceOver:自訂 tooltip 不可達,逐 bar 保留朗讀標籤。
                             .accessibilityLabel("\(hour):00, \(tk(tokens)) tokens")
                         }
@@ -593,10 +635,13 @@ struct AgentCard: View {
             .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
             HStack(spacing: 14) {
                 metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
-                metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
+                metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) }
+                        ?? (limit?.fiveHour.idle == true ? "idle"
+                            : (snapshot.providerId == "claude-code" ? "unknown" : "— %")))
                 metric("weekly", snapshot.weeklyUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
             }
-            if snapshot.sessionUsagePercent == nil, snapshot.providerId == "claude-code" {
+            if snapshot.sessionUsagePercent == nil, snapshot.providerId == "claude-code",
+               limit?.fiveHour.idle != true, limit?.fiveHour.budgetTokens == nil {
                 Button("Set estimated budget…") {
                     NSApp.activate(ignoringOtherApps: true)
                     openSettings()
@@ -605,9 +650,12 @@ struct AgentCard: View {
                 .font(.caption2)
             }
             // A3:reset 行恆渲染(無資料顯示 —)→ 三張卡行數一致、等高不跳動。
-            Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" } ?? "5h resets: —")
+            Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" }
+                    ?? (limit?.fiveHour.idle == true ? "no active 5h window"
+                        : (snapshot.providerId == "claude-code" ? "no local Claude usage found" : "5h resets: —")))
                 .font(Theme.FontScale.secondaryInfo)
                 .foregroundStyle(Theme.textSecondary)
+                .help(limit?.fiveHour.idle == true ? "No active 5h window found in local Claude logs." : "")
             if let err = snapshot.errorMessage {
                 Text(err).font(.caption2).foregroundStyle(.red).lineLimit(2)
             }

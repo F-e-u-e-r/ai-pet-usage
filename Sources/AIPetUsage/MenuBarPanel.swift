@@ -133,26 +133,27 @@ private struct ProviderStatusRow: View {
                 .font(.callout.weight(.medium))
                 .lineLimit(1)
             Spacer(minLength: 4)
-            windowText("5h", state.fiveHour.usedPercent)
-            windowText("wk", state.weekly.usedPercent)
+            windowText("5h", state.fiveHour)
+            windowText("wk", state.weekly)
             Text(resetLabel)
                 .font(.caption).monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 78, alignment: .trailing)
         }
         .help("\(brand.displayName) (\(brand.code)) — official/estimated 5h & weekly usage")
-        .accessibilityLabel("\(brand.displayName): 5 hour \(state.fiveHour.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data"), weekly \(state.weekly.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")")
+        .accessibilityLabel("\(brand.displayName): 5 hour \(state.fiveHour.idle ? "idle" : (state.fiveHour.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")), weekly \(state.weekly.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")")
     }
 
-    private func windowText(_ label: String, _ percent: Double?) -> some View {
+    private func windowText(_ label: String, _ window: LimitWindowState) -> some View {
+        let percent = window.usedPercent
         let severity = UsageSeverity.of(percent: percent,
                                         warn: model.settings.core.warnThresholdPercent,
                                         danger: model.settings.core.dangerThresholdPercent)
         return HStack(spacing: 2) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(percent.map { "\(Int($0.rounded()))%" } ?? "—")
+            Text(window.idle ? "idle" : (percent.map { "\(Int($0.rounded()))%" } ?? "—"))
                 .font(.callout.weight(.semibold)).monospacedDigit()
-                .foregroundStyle(severityColor(severity) ?? .primary)
+                .foregroundStyle(window.idle ? Color.secondary : (severityColor(severity) ?? .primary))
         }
     }
 

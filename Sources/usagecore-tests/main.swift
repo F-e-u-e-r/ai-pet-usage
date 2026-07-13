@@ -100,6 +100,7 @@ runSuite("LimitEngineTests", [
     ("testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity", limits.testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity),
     ("testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset", limits.testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset),
     ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
+    ("testClaudeIdleFiveHourShowsIdleNotFakePercent", limits.testClaudeIdleFiveHourShowsIdleNotFakePercent),
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
     // 同窗官方下修(二筆確認;DATA_SOURCES policy 通道 (c))
     ("testSameWindowSingleLowerReadingStaysPinned", limits.testSameWindowSingleLowerReadingStaysPinned),
@@ -223,6 +224,7 @@ runSuite("PixelAnimatorTests", [
 let brandTests = ProviderBrandTests()
 runSuite("ProviderBrandTests", [
     ("testBadgesAlphabeticalOmitMissingAndSeverity", brandTests.testBadgesAlphabeticalOmitMissingAndSeverity),
+    ("testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData", brandTests.testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData),
     ("testSeverityThresholdsAndCompactFilter", brandTests.testSeverityThresholdsAndCompactFilter),
     ("testAccessibilitySummaryUsesFullNames", brandTests.testAccessibilitySummaryUsesFullNames),
     ("testIdentityDotsAreStableAndDistinct", brandTests.testIdentityDotsAreStableAndDistinct),

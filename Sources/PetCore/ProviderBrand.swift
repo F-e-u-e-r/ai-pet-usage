@@ -87,11 +87,13 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
     public let needsOutline: Bool
     public let percent: Int
     public let severity: UsageSeverity
+    /// true = 該 provider 有近期活動但當前 5h 無 session → 顯示中性「idle」而非百分比(不丟徽章)。
+    public let idle: Bool
 
     public var id: String { providerId }
 
     public init(providerId: String, code: String, displayName: String, dotColor: UInt32,
-                needsOutline: Bool, percent: Int, severity: UsageSeverity) {
+                needsOutline: Bool, percent: Int, severity: UsageSeverity, idle: Bool = false) {
         self.providerId = providerId
         self.code = code
         self.displayName = displayName
@@ -99,6 +101,7 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
         self.needsOutline = needsOutline
         self.percent = percent
         self.severity = severity
+        self.idle = idle
     }
 }
 
@@ -106,12 +109,20 @@ public enum MenuBadgeBuilder {
     /// 由 (providerId, displayName, 5h%) 建出選單列徽章。規則(spec §2/§5):
     /// 依顯示名稱字母序穩定排序(不得依 severity 重排)、未偵測/無資料省略、
     /// identity 色恆定、severity 只上在百分比文字。
-    public static func badges(from states: [(id: String, displayName: String?, percent: Double?)],
+    public static func badges(from states: [(id: String, displayName: String?, percent: Double?, idle: Bool)],
                               warn: Double, danger: Double,
                               onlyWarnings: Bool = false) -> [MenuBadge] {
         states.compactMap { st -> MenuBadge? in
-            guard let p = st.percent else { return nil }
             let brand = ProviderBrands.brand(for: st.id, displayName: st.displayName)
+            // idle-first:idle 恆無百分比(引擎已 fail-closed 為 nil),顯示中性「idle」徽章而非被丟掉;
+            // compact(onlyWarnings)模式只顯示警告 → idle 省略。
+            if st.idle {
+                if onlyWarnings { return nil }
+                return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+                                 dotColor: brand.dotColor, needsOutline: brand.needsOutline,
+                                 percent: 0, severity: .normal, idle: true)
+            }
+            guard let p = st.percent else { return nil }
             let severity = UsageSeverity.of(percent: p, warn: warn, danger: danger)
             if onlyWarnings, severity == .normal { return nil }
             return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
@@ -130,7 +141,8 @@ public enum MenuBadgeBuilder {
             parts.append("No usage data")
         } else {
             parts.append(contentsOf: badges.map {
-                "\($0.displayName) \($0.percent) percent, \($0.severity.accessibilityWord)"
+                $0.idle ? "\($0.displayName) idle"
+                        : "\($0.displayName) \($0.percent) percent, \($0.severity.accessibilityWord)"
             })
         }
         return parts.joined(separator: ". ") + "."

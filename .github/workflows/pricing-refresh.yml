@@ -1,0 +1,77 @@
+# 每日價目更新:在 GitHub Actions(egress 不受限,可直連 openrouter)重新產生
+# generated 價目並開 PR。取代原雲端 Claude routine —— 後者的執行環境封鎖
+# openrouter.ai(CONNECT 403),故其 fetch 永遠失敗、從不開 PR(見 update-price-list.py)。
+#
+# 設計:
+#   - 每日 01:00 UTC(= 09:00 Asia/Taipei,UTC+8 無 DST,與原 routine 同時段)+ 手動 dispatch;
+#   - 重用既有、已驗證的 Scripts/update-price-list.py(僅收 anthropic/openai/x-ai/google,
+#     規則見該檔),不改資料來源與 schema;
+#   - 開 PR 前先跑 Scripts/validate-price-list.py(schema + 對 HEAD 的漂移閘門),
+#     不過即讓 job 紅字並不開 PR —— 壞資料永遠進不了 PR;
+#   - 無變更即結束(不開空 PR);
+#   - 合併永遠是 owner 的事(此 workflow 只開 PR,永不 auto-merge)。
+#
+# 已知殘餘限制:GITHUB_TOKEN 開的 PR 不會再觸發 pricing-validate.yml / swift-tests
+# (GitHub 防遞迴設計)。故本 job 內建 validate 作為機械閘門;owner 合併前仍會看 diff。
+# 若日後要在 auto-PR 上再跑 Swift Codable 端對端測試,需改用 PAT 觸發。
+name: pricing-refresh
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # 09:00 Asia/Taipei
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 漂移閘門需要 HEAD 的 generated 舊檔比對
+
+      - name: Regenerate generated price list from OpenRouter
+        run: python3 Scripts/update-price-list.py
+
+      - name: Detect changes
+        id: diff
+        run: |
+          GEN="Sources/UsageCore/Resources/model-prices-generated.json"
+          if git diff --quiet -- "$GEN"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No pricing changes; nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff --stat -- "$GEN"
+          fi
+
+      - name: Validate (schema + drift vs HEAD)
+        if: steps.diff.outputs.changed == 'true'
+        run: python3 Scripts/validate-price-list.py --base HEAD
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          BRANCH="chore/pricing-auto-${DATE}"
+          GEN="Sources/UsageCore/Resources/model-prices-generated.json"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$GEN"
+          git commit -m "chore(pricing): refresh generated price list (${DATE})"
+          git push --force-with-lease origin "$BRANCH"
+          if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
+            echo "PR already open for $BRANCH; branch updated in place."
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore(pricing): auto price refresh ${DATE}" \
+              --body $'Automated regeneration of `model-prices-generated.json` from the OpenRouter public API.\n\nRuns in GitHub Actions where egress is unrestricted (the retired cloud routine could not reach openrouter.ai — CONNECT 403). Schema + drift gates passed in-job. Merge after reviewing the diff.'
+          fi

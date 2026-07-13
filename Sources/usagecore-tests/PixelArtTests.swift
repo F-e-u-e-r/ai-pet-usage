@@ -199,14 +199,36 @@ final class PixelAnimatorTests: XCTestCase {
 final class ProviderBrandTests: XCTestCase {
     func testBadgesAlphabeticalOmitMissingAndSeverity() {
         let badges = MenuBadgeBuilder.badges(from: [
-            (id: "codex", displayName: "Codex", percent: 53),
-            (id: "claude-code", displayName: "Claude Code", percent: 91),
-            (id: "grok-code", displayName: nil, percent: nil), // 無資料 → 略過
+            (id: "codex", displayName: "Codex", percent: 53, idle: false),
+            (id: "claude-code", displayName: "Claude Code", percent: 91, idle: false),
+            (id: "grok-code", displayName: nil, percent: nil, idle: false), // 無資料 → 略過
         ], warn: 80, danger: 95)
         XCTAssertEqual(badges.map(\.code), ["CC", "CX"], "依顯示名稱字母序,無資料省略")
         XCTAssertEqual(badges[0].severity, .warn)
         XCTAssertEqual(badges[1].severity, .normal)
         XCTAssertEqual(badges[0].percent, 91)
+    }
+
+    func testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData() {
+        // idle(percent nil, idle:true)→ 不被丟掉,顯示中性 idle 徽章;無資料(idle:false)仍省略。
+        let full = MenuBadgeBuilder.badges(from: [
+            (id: "claude-code", displayName: "Claude Code", percent: nil, idle: true),
+            (id: "codex", displayName: "Codex", percent: 53, idle: false),
+            (id: "grok-code", displayName: "Grok", percent: nil, idle: false), // 無資料 → 略過
+        ], warn: 80, danger: 95)
+        XCTAssertEqual(full.map(\.code), ["CC", "CX"], "idle 的 Claude 不得從選單列消失;無資料的 Grok 仍省略")
+        XCTAssertTrue(full[0].idle, "idle 徽章帶 idle 旗標")
+        XCTAssertEqual(full[0].severity, .normal, "idle 中性,不上 severity 色")
+
+        let summary = MenuBadgeBuilder.accessibilitySummary(petName: nil, badges: full)
+        XCTAssertTrue(summary.contains("Claude Code idle"), "a11y 念 idle 而非百分比")
+
+        // compact(onlyWarnings)只顯示警告 → idle 省略(Codex 53% 未達 warn 亦省略)。
+        let compact = MenuBadgeBuilder.badges(from: [
+            (id: "claude-code", displayName: "Claude Code", percent: nil, idle: true),
+            (id: "codex", displayName: "Codex", percent: 53, idle: false),
+        ], warn: 80, danger: 95, onlyWarnings: true)
+        XCTAssertEqual(compact.map(\.code), [], "compact 模式 idle 不算警告 → 省略")
     }
 
     func testSeverityThresholdsAndCompactFilter() {
@@ -217,16 +239,16 @@ final class ProviderBrandTests: XCTestCase {
         XCTAssertEqual(UsageSeverity.of(percent: nil, warn: 80, danger: 95), .normal)
 
         let compact = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", percent: 91),
-            (id: "codex", displayName: "Codex", percent: 53),
+            (id: "claude-code", displayName: "Claude Code", percent: 91, idle: false),
+            (id: "codex", displayName: "Codex", percent: 53, idle: false),
         ], warn: 80, danger: 95, onlyWarnings: true)
         XCTAssertEqual(compact.map(\.code), ["CC"], "Compact 模式只留 ≥warn 的 provider")
     }
 
     func testAccessibilitySummaryUsesFullNames() {
         let badges = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", percent: 91),
-            (id: "codex", displayName: "Codex", percent: 53),
+            (id: "claude-code", displayName: "Claude Code", percent: 91, idle: false),
+            (id: "codex", displayName: "Codex", percent: 53, idle: false),
         ], warn: 80, danger: 95)
         let summary = MenuBadgeBuilder.accessibilitySummary(petName: "Golden Retriever", badges: badges)
         XCTAssertEqual(summary,

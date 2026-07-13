@@ -189,7 +189,9 @@ public enum ReportGenerator {
 
     private static func limitRow(providerId: String, name: String, w: LimitWindowState, warning: WarningState, df: DateFormatter) -> String {
         var used = "—"
-        if let p = w.usedPercent {
+        if w.idle {
+            used = "idle"
+        } else if let p = w.usedPercent {
             used = pct(p)
             if let t = w.usedTokens, let b = w.budgetTokens {
                 used += " (\(fmtTokens(t)) / \(fmtTokens(b)))"
@@ -197,7 +199,7 @@ public enum ReportGenerator {
         } else if let t = w.usedTokens {
             used = "\(fmtTokens(t)) tokens (no budget set)"
         }
-        var resets = w.resetAt.map { df.string(from: $0) } ?? "—"
+        var resets = w.idle ? "no active 5h window" : (w.resetAt.map { df.string(from: $0) } ?? "—")
         if name == "Weekly", w.resetAt == nil, w.usedTokens != nil {
             resets = "rolling 7-day"
         }

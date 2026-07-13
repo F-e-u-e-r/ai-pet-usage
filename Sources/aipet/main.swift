@@ -35,6 +35,7 @@ func fmtDate(_ d: Date?) -> String {
 }
 
 func fmtWindow(_ w: LimitWindowState) -> String {
+    if w.idle { return "   idle    (idle — no active 5h window)" }
     var out = ""
     if let p = w.usedPercent { out += String(format: "%5.1f%%", p) } else { out += "   — " }
     if let t = w.usedTokens {

@@ -63,10 +63,16 @@ struct MenuBarBadgeView: View {
                     Text(badge.code)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(baseColor.opacity(0.85))
-                    Text("\(badge.percent)%")
-                        .font(.system(size: 11, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(severityColor(badge.severity) ?? baseColor)
+                    if badge.idle {
+                        Text("idle")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(baseColor.opacity(0.55))
+                    } else {
+                        Text("\(badge.percent)%")
+                            .font(.system(size: 11, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(severityColor(badge.severity) ?? baseColor)
+                    }
                 }
             }
         }

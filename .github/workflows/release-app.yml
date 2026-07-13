@@ -20,6 +20,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 完整取回 annotated tag 物件,下方「What's new」的 git tag %(contents) 才非空
 
       - name: Build app bundle (ad-hoc signed, strict)
         run: |
