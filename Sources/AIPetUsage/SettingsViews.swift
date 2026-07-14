@@ -141,7 +141,7 @@ struct PetSettings: View {
                     Text("Movement range (\(Int(model.settings.petWanderRangePercent))% of screen)")
                 }
                 .disabled(!model.settings.petWanderEnabled)
-                Text("The pet roams around wherever you last placed it. Narrowing the range moves it back inside the new band once. Movement pauses during warnings, quiet mode, and when Reduce Motion is enabled.")
+                Text("The pet stays near where you last placed it — walking pets roam a horizontal band; the flying bird treats the range as a home box (smaller range = smaller area and lower flight). Movement pauses during warnings, quiet mode, and when Reduce Motion is enabled.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Speech bubbles on mood changes", isOn: Binding(
                     get: { model.settings.petSpeechEnabled },

@@ -1483,3 +1483,163 @@ final class EngineV2LocomotionGateTests: XCTestCase {
                       "wander 開:巡航應恢復位移,實得 x=\(loop.motion.state.position.x)")
     }
 }
+
+// MARK: - Flyer range% 封套 + 飛-停-落循環(bird 修法:home 錨定小盒 + 起飛/降落,不做水平巡航)
+
+final class FlyerEnvelopeCycleTests: XCTestCase {
+
+    /// 800×600 參照:water=[0,108]、airMinY=108、airH=492、canonical hover=[304.8, 501.6]、groundY=0。
+    private func birdLoop(rangePercent: Double, seed: UInt64 = 7,
+                          screen: CGRect = CGRect(x: 0, y: 0, width: 800, height: 600))
+        -> (EngineLoop, RegionMap) {
+        let regions = RegionMap(visibleFrame: screen, flyerRangePercent: rangePercent)
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
+                              position: CGPoint(x: screen.midX, y: regions.groundY),
+                              regions: regions, seed: seed)
+        return (loop, regions)
+    }
+
+    /// 100%:封套 = 傳統無界(ceiling=vf.maxY、hover=正典)→ golden 不動的基礎;預設與顯式 100 一致。
+    func testEnvelopeIdentityAt100Percent() {
+        let full = RegionMap(visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 600))   // 預設 100
+        XCTAssertEqual(full.flyer.ceiling, 600, "100% 天花板 = vf.maxY")
+        XCTAssertEqual(full.flyer.hover.lowerBound, full.hover.lowerBound)
+        XCTAssertEqual(full.flyer.hover.upperBound, full.hover.upperBound)
+        let explicit = RegionMap(visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 600),
+                                 flyerRangePercent: 100)
+        XCTAssertEqual(explicit.flyer, full.flyer, "顯式 100 == 預設")
+    }
+
+    /// 10%:自地面線 ground-lerp(ceiling=60、hover≈[30.48,50.16]),非水面上的一小片;正典幾何不動。
+    func testEnvelopeGroundLerpAt10Percent() {
+        let r = RegionMap(visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 600), flyerRangePercent: 10)
+        XCTAssertEqual(r.flyer.ceiling, 60, accuracy: 1e-9, "groundY 0 + 0.1×600")
+        XCTAssertEqual(r.flyer.hover.lowerBound, 30.48, accuracy: 1e-6)
+        XCTAssertEqual(r.flyer.hover.upperBound, 50.16, accuracy: 1e-6)
+        XCTAssertEqual(r.hover.lowerBound, 304.8, accuracy: 1e-6, "正典 hover 不受 range 影響")
+        XCTAssertEqual(r.groundY, 0)
+    }
+
+    /// 非零原點:ground-lerp 以 groundY(=minY)為錨,非 0。
+    func testEnvelopeAnchorsToGroundYNonZeroOrigin() {
+        let r = RegionMap(visibleFrame: CGRect(x: 0, y: 100, width: 800, height: 600), flyerRangePercent: 10)
+        XCTAssertEqual(r.groundY, 100)
+        XCTAssertEqual(r.flyer.ceiling, 100 + 0.1 * 600, accuracy: 1e-9, "自 groundY 起算,非 0")
+    }
+
+    /// 核心修法:100% 下鳥不再永久懸停 —— 起飛後會下降落地(grounded 再現)。
+    func testFlyerLandsInsteadOfPermanentHoverAt100() {
+        let (loop, regions) = birdLoop(rangePercent: 100)
+        var tookOff = false, landedAfterTakeoff = false
+        for _ in 0..<900 {   // 30s
+            loop.tick(dt: 1.0 / 30, regions: regions)
+            if !loop.motion.state.grounded { tookOff = true }
+            if tookOff, loop.motion.state.grounded { landedAfterTakeoff = true }
+        }
+        XCTAssertTrue(tookOff, "鳥應曾起飛離地")
+        XCTAssertTrue(landedAfterTakeoff, "起飛後應下降落地,而非永久懸停")
+    }
+
+    /// 10%:整段飛行位置 y 恆不超過封套天花板(60),且會落地(不卡半空)。
+    func testFlyerStaysBelowCeilingAndLandsAt10Percent() {
+        let (loop, regions) = birdLoop(rangePercent: 10)
+        var maxY: CGFloat = -.greatestFiniteMagnitude
+        var tookOff = false, landedAfterTakeoff = false
+        for _ in 0..<900 {
+            loop.tick(dt: 1.0 / 30, regions: regions)
+            maxY = max(maxY, loop.motion.state.position.y)
+            if !loop.motion.state.grounded { tookOff = true }
+            if tookOff, loop.motion.state.grounded { landedAfterTakeoff = true }
+        }
+        XCTAssertTrue(maxY <= regions.flyer.ceiling + 1e-6,
+                      "飛行高度不得超過 10% 封套天花板 \(regions.flyer.ceiling),實得 \(maxY)")
+        XCTAssertTrue(tookOff && landedAfterTakeoff, "10% 下仍應起飛並落地")
+    }
+
+    /// flyer 天花板只約束 .flyer;walker/swimmer 仍用 vf.maxY(封套不下修其他物種)。
+    func testFlyerCeilingDoesNotLowerWalkerOrSwimmer() {
+        let regions = RegionMap(visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 600), flyerRangePercent: 10)
+        let flyer = MotionController(profile: .flyer, position: CGPoint(x: 400, y: 300), regions: regions)
+        let walker = MotionController(profile: .walker, position: CGPoint(x: 400, y: 300), regions: regions)
+        let swimmer = MotionController(profile: .swimmer, position: CGPoint(x: 400, y: 300), regions: regions)
+        for m in [flyer, walker, swimmer] { m.applyImpulse(CGVector(dx: 0, dy: 500)) }
+        _ = flyer.tick(dt: 1.0 / 30, regions: regions)
+        _ = walker.tick(dt: 1.0 / 30, regions: regions)
+        _ = swimmer.tick(dt: 1.0 / 30, regions: regions)
+        XCTAssertTrue(flyer.state.position.y <= regions.flyer.ceiling + 1e-6,
+                      "flyer 被封套天花板(60)夾住,實得 \(flyer.state.position.y)")
+        XCTAssertTrue(walker.state.position.y > regions.flyer.ceiling,
+                      "walker 不受 flyer 天花板約束(用 vf.maxY),實得 \(walker.state.position.y)")
+        XCTAssertTrue(swimmer.state.position.y > regions.flyer.ceiling,
+                      "swimmer 不受 flyer 天花板約束(用 vf.maxY),實得 \(swimmer.state.position.y)")
+    }
+
+    /// 睡眠洞:飛行中進入睡眠(flyerResting=true)→ 強制下降落地,不卡半空(停表前必落地)。
+    func testSleepForcesDescentNoMidairFreeze() {
+        let (loop, regions) = birdLoop(rangePercent: 100)
+        var airborne = false
+        for _ in 0..<300 {
+            loop.tick(dt: 1.0 / 30, regions: regions)
+            if !loop.motion.state.grounded { airborne = true; break }
+        }
+        XCTAssertTrue(airborne, "前置:鳥應已起飛")
+        loop.flyerResting = true
+        var landedTick = -1
+        for i in 0..<150 {   // 5s 內(睡眠停表前)
+            loop.tick(dt: 1.0 / 30, regions: regions)
+            if loop.motion.state.grounded { landedTick = i; break }
+        }
+        XCTAssertTrue(landedTick >= 0, "睡眠下 flyer 應下降落地,不得半空凍結")
+        // 落地後續 tick:睡眠下起飛衝量被 gate → 不得再起飛(re-hop),恆保持接地。
+        for _ in 0..<120 {
+            loop.tick(dt: 1.0 / 30, regions: regions)
+            XCTAssertTrue(loop.motion.state.grounded, "睡眠下落地後不得再起飛(re-hop)")
+        }
+    }
+
+    /// 決定性:同 seed 兩 run(含循環的獨立 RNG 流)位置序列位元一致。
+    func testCycleDeterministicSameSeed() {
+        func run() -> [CGFloat] {
+            let (loop, regions) = birdLoop(rangePercent: 10, seed: 123)
+            var ys: [CGFloat] = []
+            for _ in 0..<300 {
+                loop.tick(dt: 1.0 / 30, regions: regions)
+                ys.append(loop.motion.state.position.y)
+            }
+            return ys
+        }
+        XCTAssertEqual(run(), run(), "同 seed 兩 run 必須位元一致(獨立 RNG 流仍決定性)")
+    }
+
+    /// snapToGround(driver 於深閒置停表前對空中 flyer 呼叫的最後硬保證):位置落地、速度歸零、接地。
+    func testSnapToGroundForcesLanding() {
+        let regions = RegionMap(visibleFrame: CGRect(x: 0, y: 100, width: 800, height: 600))
+        let m = MotionController(profile: .flyer, position: CGPoint(x: 400, y: 480), regions: regions)
+        m.applyImpulse(CGVector(dx: 30, dy: 200))   // 空中、帶速度
+        m.snapToGround(regions.groundY)
+        XCTAssertEqual(m.state.position.y, regions.groundY, "snap 落到地面線")
+        XCTAssertEqual(m.state.velocity.dx, 0)
+        XCTAssertEqual(m.state.velocity.dy, 0)
+        XCTAssertTrue(m.state.grounded, "標記接地")
+    }
+
+    /// snap 後 commitPresentedPose 必須把「呈現位置」移到地面(driver 停表前的視覺落地保證;
+    /// 只更新 sim 而不 commit 會讓面板停半空 —— 雙審獨立抓到的 HIGH residual)。
+    func testSnapThenCommitPresentsGroundedPose() {
+        let regions = RegionMap(visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let loop = EngineLoop(pack: SpeciesPacks.birdPack(),
+                              position: CGPoint(x: 400, y: 350), regions: regions, seed: 7)
+        let spy = PoseSpy()
+        loop.presenter = spy
+        for _ in 0..<300 {   // 先飛起來(抓到空中即停)
+            loop.tick(dt: 1.0 / 30, regions: regions)
+            if !loop.motion.state.grounded { break }
+        }
+        // 模擬 driver 深閒置停表前:snap + commitPresentedPose。
+        loop.motion.snapToGround(regions.groundY)
+        loop.commitPresentedPose()
+        XCTAssertEqual(spy.poses.last?.position.y, regions.groundY,
+                       "commit 後呈現位置在地面(面板才會移到地面,不凍半空)")
+        XCTAssertTrue(loop.motion.state.grounded)
+    }
+}

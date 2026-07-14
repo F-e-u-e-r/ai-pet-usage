@@ -393,4 +393,18 @@ runSuite("EngineV2LocomotionGateTests", [
     ("testWanderDisabledStopsCruiseButKeepsPoseCycle", engineLocomotionGate.testWanderDisabledStopsCruiseButKeepsPoseCycle),
 ])
 
+let flyerEnvelopeCycle = FlyerEnvelopeCycleTests()
+runSuite("FlyerEnvelopeCycleTests", [
+    ("testEnvelopeIdentityAt100Percent", flyerEnvelopeCycle.testEnvelopeIdentityAt100Percent),
+    ("testEnvelopeGroundLerpAt10Percent", flyerEnvelopeCycle.testEnvelopeGroundLerpAt10Percent),
+    ("testEnvelopeAnchorsToGroundYNonZeroOrigin", flyerEnvelopeCycle.testEnvelopeAnchorsToGroundYNonZeroOrigin),
+    ("testFlyerLandsInsteadOfPermanentHoverAt100", flyerEnvelopeCycle.testFlyerLandsInsteadOfPermanentHoverAt100),
+    ("testFlyerStaysBelowCeilingAndLandsAt10Percent", flyerEnvelopeCycle.testFlyerStaysBelowCeilingAndLandsAt10Percent),
+    ("testFlyerCeilingDoesNotLowerWalkerOrSwimmer", flyerEnvelopeCycle.testFlyerCeilingDoesNotLowerWalkerOrSwimmer),
+    ("testSleepForcesDescentNoMidairFreeze", flyerEnvelopeCycle.testSleepForcesDescentNoMidairFreeze),
+    ("testCycleDeterministicSameSeed", flyerEnvelopeCycle.testCycleDeterministicSameSeed),
+    ("testSnapToGroundForcesLanding", flyerEnvelopeCycle.testSnapToGroundForcesLanding),
+    ("testSnapThenCommitPresentsGroundedPose", flyerEnvelopeCycle.testSnapThenCommitPresentsGroundedPose),
+])
+
 finishTestRun()

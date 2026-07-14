@@ -172,6 +172,23 @@ public final class MotionController: MotionControlling {
         velocity.dx = 0
     }
 
+    /// 一次性垂直 clamp(range 縮小 → flyer 天花板下移):位置若高於新天花板,拉回並吸掉
+    /// 上行動量,避免下一 tick 邊界反應造成可見瞬移。界內為 no-op;呼叫端只對 `.flyer` 套用。
+    public func clampBelowCeiling(_ ceiling: CGFloat) {
+        guard position.y > ceiling else { return }
+        position.y = ceiling
+        if velocity.dy > 0 { velocity.dy = 0 }
+    }
+
+    /// 深閒置停表前的一次性落地 snap:位置落到地面線、速度歸零、標記接地。停表後無 tick 可再
+    /// 帶其落定,故此為「飛行中的 flyer 絕不半空凍結」的最後硬保證(呼叫端只對空中的 .flyer 用)。
+    public func snapToGround(_ groundY: CGFloat) {
+        position.y = groundY
+        velocity = .zero
+        grounded = true
+        region = .ground   // 消 stale .air:醒來首個行為轉移用對區域(否則下一 tick 前錯判)。
+    }
+
     // MARK: 拖曳
 
     public func beginDrag(at point: CGPoint) {
@@ -268,9 +285,11 @@ public final class MotionController: MotionControlling {
             velocity.dx = -abs(velocity.dx) * EngineV2.bounceEnergy
         }
 
-        // 天花板:夾回 + 向下反彈。
-        if position.y > vf.maxY {
-            position.y = vf.maxY
+        // 天花板:夾回 + 向下反彈。Flyer 用 range% 封套的(可能較低)天花板;
+        // walker/swimmer 仍用 vf.maxY —— 封套絕不下修其他物種的界。
+        let ceilingY = (profile == .flyer) ? regions.flyer.ceiling : vf.maxY
+        if position.y > ceilingY {
+            position.y = ceilingY
             velocity.dy = -abs(velocity.dy) * EngineV2.bounceEnergy
         }
 
