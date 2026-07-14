@@ -61,6 +61,8 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
 
     func start() {
         guard EngineV2.isEnabled else { return }
+        regions = currentRegions()   // A1:先以收窄帶/flyer 封套建 regions,loop 即以「有界」regions 建立
+                                     //(舊碼以 init 的全幀 regions 建 loop 再 rebuild → 首幀短暫無界)。
         if loop == nil {
             let origin = panel?.frame.origin ?? .zero
             let size = panel?.frame.size ?? .zero
@@ -69,7 +71,7 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
         } else {
             rebuildLoopIfPackChanged()   // FIX-2:show/hide 週期間物種可能已切換
         }
-        rebuildRegions()   // A1:啟動即套用漫遊範圍收窄帶
+        rebuildRegions()   // A1:再導出 + 一次性水平/天花板夾限
         // 首 commit 前不留 legacy 空窗(grok P2-3):立即發佈目前動作的第 0 幀。
         if let loop { publishFrame(action: loop.currentAction, frameIndex: 0, mirrored: false) }
         armTimer()
@@ -188,6 +190,13 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
         // 深閒置停表(睡眠 5s / quiet‧dock 10s;§2.2):invalidate 後由
         // start() 或相位觀察(armPhaseWatch → .arm 指令)重掛(FIX-1)。
         if governor.directive(timerArmed: true, at: now) == .stop {
+            // 停表前最後硬保證:飛行中的 flyer 一次性 snap 落地,絕不讓鳥在半空被凍結
+            //(停表後無 tick 可再帶其落定;補睡眠 re-hop / reduce-motion 慢降剛好卡在停表瞬間的邊界)。
+            if loop?.motion.profile == .flyer, loop?.motion.state.grounded == false {
+                loop?.motion.snapToGround(regions.groundY)
+                loop?.commitPresentedPose()   // 面板實際移到地面(commit 才 setFrameOrigin;publishFrame 只
+                                              // 換 sprite);且讓隨後 stop() 存下的是地面 origin,不是半空。
+            }
             stop()
             return
         }
@@ -202,6 +211,9 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
         // FIX-9:legacy 的 petWanderEnabled 同樣約束引擎運動(關 = 姿勢照播、原地不動;
         // timer 不停 —— mood/overlay 動畫照常)。
         loop.locomotionEnabled = model?.settings.petWanderEnabled ?? false
+        // 睡眠/靜默 → flyer 循環強制下降落地(補睡眠 5s 停表前的半空凍結洞;sleeping 不在 masks 內,
+        // 必須顯式傳入;quiet 已由 masks 停 glue,此為雙保險)。
+        loop.flyerResting = (model?.mood.mood == .sleeping) || (model?.settings.quietMode == true)
         _ = loop.tick(dt: dt, regions: regions)
     }
 
@@ -236,20 +248,29 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
         regions = currentRegions()
         // 帶可能已變窄:對引擎位置做一次性水平 clamp(F3;避免下一 tick 的邊界瞬移)。
         loop?.motion.clampHorizontally(into: regions.bounds)
+        // range 縮小 → flyer 天花板下移;鳥若在新天花板之上,一次性拉回並吸掉上行動量
+        //(循環隨後自然下降落地)。僅 .flyer 套用,不動其他物種。
+        if loop?.motion.profile == .flyer {
+            loop?.motion.clampBelowCeiling(regions.flyer.ceiling)
+        }
     }
 
     /// 螢幕 visibleFrame → 依漫遊範圍帶水平收窄(§4 高度公式不動;home 取面板控制器)。
     private func currentRegions() -> RegionMap {
         let vf = (panel?.screen ?? NSScreen.main)?.visibleFrame
             ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let range = model?.settings.petWanderRangePercent ?? 100
+        let range = WanderBand.clampRangePercent(model?.settings.petWanderRangePercent ?? 100)
+        // range=100 恆走全幀路徑(WanderBand.centerBand 在 100% 會多加 pet margin、位移 X;
+        // flyer 封套預設 100 = 傳統無界)。僅 <100 才收窄 X 並縮放 flyer 垂直封套。
         guard range < 100, let panel else { return RegionMap(visibleFrame: vf) }
         let petW = panel.frame.width
         let home = controller?.wanderHomeCenterX ?? panel.frame.midX
         let band = WanderBand.centerBand(homeCenterX: home, rangePercent: range,
                                          screen: vf, petWidth: petW)
         // bounds = center band 本身(Motion 夾 center-x;外接半寬只屬 legacy origin)。
-        return RegionMap(visibleFrame: WanderBand.narrowedFrame(visibleFrame: vf, centerBand: band))
+        // flyerRangePercent 以 ground-lerp 縮放 flyer 垂直封套;water/air/hover/bounds 不動。
+        return RegionMap(visibleFrame: WanderBand.narrowedFrame(visibleFrame: vf, centerBand: band),
+                         flyerRangePercent: range)
     }
 
     /// 漫遊帶輸入(home/range/寵物尺寸)變更時由面板控制器**同步**呼叫 —— phase watch

@@ -8,6 +8,9 @@ import CoreGraphics
 /// 語意(計畫 A1/D4):home 錨定 — home = 寵物當下 center-x,於
 /// (a) 漫遊由關轉開、(b) 手動拖曳落定、(c) app 啟動、(d) 範圍百分比變更 時重錨;
 /// 重錨後若當下位置在新帶外,做一次性 clamp(呼叫端負責)。100% = 整個螢幕(原行為)。
+///
+/// 註:此帶僅管**水平** center-x。flyer(鳥)的**垂直**飛行範圍另由 `RegionMap.FlyerEnvelope`
+/// 以同一 range% 自地面線 ground-lerp 縮放(見 Regions.swift)—— movement range 對鳥是兩軸 home 盒。
 public enum WanderBand {
 
     /// 允許的 center-x 範圍:home ± (range% × 螢幕寬)/2,夾進 [minX+margin+w/2, maxX−margin−w/2]。

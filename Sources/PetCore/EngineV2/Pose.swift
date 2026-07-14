@@ -44,10 +44,47 @@ public struct HoverController: Sendable {
         guard gainPerTick > 0 else { return flap }
         let brakingDistance = (fallSpeed * fallSpeed / (2 * gainPerTick) + fallSpeed) * dtC
         let margin = EngineV2.escapeSpeedCap * dtC + V2Tuning.hoverFlapMargin
-        if state.position.y - brakingDistance <= regions.hover.lowerBound + margin {
+        if state.position.y - brakingDistance <= regions.flyer.hover.lowerBound + margin {
             return flap
         }
         return nil
+    }
+}
+
+// MARK: - Flyer 飛-停-落循環(sim-time;獨立 RNG 流)
+
+/// 起飛後允許一段短暫 sustain 窗口讓鳥小幅升空,窗口過後不再 sustain →
+/// 重力帶其下降落地 → 地面休息至下次(行為圖驅動)起飛。修正「永久懸停、從不降落」。
+/// 契約:**清醒時**絕不 gate 起飛衝量(FIX-5 軟鎖;睡眠下 gate 起飛由呼叫端負責);`active=false`(睡眠/靜默)一律不 sustain
+/// (強制下降,補睡眠停表前的半空凍結洞);自身無重掛 timer 的權力。
+public struct FlyerCycleController {
+    private var rng: SeededRNG
+    private var airborneElapsed: TimeInterval = 0
+    private var sustainWindow: TimeInterval
+    private var wasGrounded = true
+
+    public init(seed: UInt64) {
+        rng = SeededRNG(seed: seed)
+        sustainWindow = Self.roll(&rng)
+    }
+
+    /// 每次起飛的 sustain 窗口(秒);決定升空幅度(小盒會先撞天花板反彈)。
+    private static func roll(_ rng: inout SeededRNG) -> TimeInterval {
+        0.30 + Double(rng.next() % 1000) / 1000.0 * 0.50   // 0.30…0.80s
+    }
+
+    /// 回傳本 tick 是否允許 sustain(呼叫 HoverController)。每 tick 恰呼叫一次(維護升空/落地狀態)。
+    public mutating func allowSustain(dt: TimeInterval, grounded: Bool, active: Bool) -> Bool {
+        if grounded {
+            if !wasGrounded { sustainWindow = Self.roll(&rng) }   // 落地 → 為下次抽新窗口
+            wasGrounded = true
+            airborneElapsed = 0
+            return false
+        }
+        wasGrounded = false
+        guard active else { return false }   // 睡眠/靜默:不 sustain → 重力下降落地
+        airborneElapsed += dt
+        return airborneElapsed < sustainWindow
     }
 }
 
@@ -126,6 +163,10 @@ public final class EngineLoop {
     private let registry: PackRegistry
     private var rng: any RandomNumberGenerator
     private let hover = HoverController()
+    /// Flyer 飛-停-落循環(獨立 RNG 流,不消耗行為圖 rng)。
+    private var flyerCycle: FlyerCycleController
+    /// Bridge 每 tick 對映:睡眠/靜默 → true;flyer 循環據此強制下降(補睡眠停表前的半空凍結洞)。
+    public var flyerResting = false
 
     public weak var presenter: PosePresenting?
 
@@ -162,6 +203,8 @@ public final class EngineLoop {
         registry.register(pack)
         graph = BehaviorGraph(table: pack.behavior)
         rng = SeededRNG(seed: seed)
+        // 獨立 RNG 流:飛-停-落循環自成一串,不位移行為圖的動作選擇序列(兩者決定性各自保持)。
+        flyerCycle = FlyerCycleController(seed: seed ^ 0xF117_E5F1_0000_0001)
         motion = MotionController(profile: pack.locomotion, position: position, regions: regions)
     }
 
@@ -226,16 +269,20 @@ public final class EngineLoop {
             } else {
                 switch pack.locomotion {
                 case .flyer:
+                    // 飛-停-落循環:每 tick 更新並回報本 tick 是否允許 sustain
+                    //(起飛後短窗口內才 sustain;窗口過後 / 睡眠時不 sustain → 重力下降落地 → 休息)。
+                    let active = !flyerResting
+                    let allowSustain = flyerCycle.allowSustain(
+                        dt: dt, grounded: motion.state.grounded, active: active)
                     if motion.state.grounded {
-                        // FIX-5:地面起飛 —— 行為抽中 flyFlap 而仍接地時,施加凍結 +220
-                        // 一次性起飛衝量;升空即清除 grounded(不會連發),空中交回懸停控制。
-                        // 沒有這條,著地(grounded=true)後 HoverController 恆回 nil、
-                        // air 條件邊全遭遮罩 → 鳥著地一次即永久軟鎖。
-                        if currentAction == .flyFlap {
+                        // FIX-5:地面起飛 —— 行為抽中 flyFlap 而仍接地時,施加凍結 +220 一次性起飛衝量。
+                        // 「**清醒時**絕不 gate」(沒有這條鳥著地一次即永久軟鎖);但睡眠/靜默(active=false)
+                        // 下不起飛 → 鳥待在地面,不會在深閒置停表瞬間被凍在半空(清醒即恢復,無軟鎖)。
+                        if currentAction == .flyFlap, active {
                             motion.applyImpulse(CGVector(dx: 0, dy: EngineV2.flapImpulse))
                         }
-                    } else if let flap = hover.flapImpulse(state: motion.state, regions: regions,
-                                                           dt: dt) {
+                    } else if allowSustain,
+                              let flap = hover.flapImpulse(state: motion.state, regions: regions, dt: dt) {
                         motion.applyImpulse(flap)
                     }
                 case .swimmer:
@@ -262,29 +309,28 @@ public final class EngineLoop {
         // 4. 物理積分(凍結律)。
         let events = motion.tick(dt: dt, regions: regions)
 
-        // 5. 雙車道仲裁(全域優先表):拖曳=活躍的 userInteraction 車道,搶佔 graph flavor
-        //    顯示槽;佇列互動已在階段 1 直接接管 currentAction,顯示走 graph 路徑即可。
-        let lanes: Set<GlobalPriority> = dragging ? [.userInteraction, .graphFlavor] : [.graphFlavor]
-        let displayAction: PetActionID
-        if GlobalPriority.winner(lanes) == .userInteraction {
-            // 拖曳態:drag 槽缺幀時沿 fallback(如魚類以 float 頂替)。
-            displayAction = registry.resolve(.drag, in: pack)
-        } else {
-            displayAction = registry.resolve(currentAction, in: pack)
-        }
+        // 5+6. 顯示槽仲裁 + 單一寫入者 commit(每 tick 恰一次)。抽為 commitPresentedPose 共用 ——
+        //       driver 深閒置停表前 snap 落地後亦呼叫它,面板才會實際移到地面(commit 才 setFrameOrigin)。
+        commitPresentedPose()
+        return events
+    }
 
-        // 6. 單一寫入者 commit(每 tick 恰一次)。
+    /// 以當前狀態(motion.presentedPosition + 目前顯示動作/anchor/mirror)組 pose 並經 presenter 落地
+    /// (單一寫入者)。tick 尾與 driver 停表前 snap 後共用;只更新 sim 而不呼叫此法,面板會停在原位。
+    public func commitPresentedPose() {
+        let lanes: Set<GlobalPriority> = dragging ? [.userInteraction, .graphFlavor] : [.graphFlavor]
+        let displayAction: PetActionID = (GlobalPriority.winner(lanes) == .userInteraction)
+            ? registry.resolve(.drag, in: pack)                 // 拖曳態:drag 槽缺幀時沿 fallback
+            : registry.resolve(currentAction, in: pack)
         let frames = pack.frames[displayAction] ?? []
         let frameIndex = frames.isEmpty ? 0
             : Int(actionElapsed / Self.frameDuration) % frames.count
-        let pose = ComposedPose(
+        presenter?.commit(ComposedPose(
             position: motion.presentedPosition,
             action: displayAction,
             frameIndex: frameIndex,
             anchorOffset: pack.anchorOffsets[displayAction] ?? .zero,
-            mirrored: motion.state.velocity.dx < 0 && pack.mirrorSafe.contains(displayAction))
-        presenter?.commit(pose)
-        return events
+            mirrored: motion.state.velocity.dx < 0 && pack.mirrorSafe.contains(displayAction)))
     }
 
     // MARK: 私有
