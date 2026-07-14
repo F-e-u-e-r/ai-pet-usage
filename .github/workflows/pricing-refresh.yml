@@ -14,6 +14,16 @@
 # 已知殘餘限制:GITHUB_TOKEN 開的 PR 不會再觸發 pricing-validate.yml / swift-tests
 # (GitHub 防遞迴設計)。故本 job 內建 validate 作為機械閘門;owner 合併前仍會看 diff。
 # 若日後要在 auto-PR 上再跑 Swift Codable 端對端測試,需改用 PAT 觸發。
+#
+# 【前置 repo 設定 — 一次性;缺這個,最後的 gh pr create 會失敗】
+#   首個排程 run(#1)即因此紅字:
+#     "GitHub Actions is not permitted to create or approve pull requests (createPullRequest)"
+#   啟用路徑:Settings → Actions → General → Workflow permissions →
+#     勾選 "Allow GitHub Actions to create and approve pull requests"
+#   等同 API:PUT /repos/{owner}/{repo}/actions/permissions/workflow
+#     欄位 can_approve_pull_request_reviews=true(GET 應回 true)
+#   注意:此開關為 repo 全域 —— 任何取得 pull-requests: write 的 workflow 皆可
+#   建立「與核准」PR。solo alpha 可接受;若日後轉多人 repo 請重新評估。
 name: pricing-refresh
 
 on:
@@ -71,7 +81,18 @@ jobs:
           if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
             echo "PR already open for $BRANCH; branch updated in place."
           else
-            gh pr create --base main --head "$BRANCH" \
+            # PR 建立失敗維持致命(exit 原始 rc);僅在既有 stderr 之外「加註」診斷,
+            # 不吞錯、不改 exit code —— 見檔頭「前置 repo 設定」。
+            if gh pr create --base main --head "$BRANCH" \
               --title "chore(pricing): auto price refresh ${DATE}" \
-              --body $'Automated regeneration of `model-prices-generated.json` from the OpenRouter public API.\n\nRuns in GitHub Actions where egress is unrestricted (the retired cloud routine could not reach openrouter.ai — CONNECT 403). Schema + drift gates passed in-job. Merge after reviewing the diff.'
+              --body $'Automated regeneration of `model-prices-generated.json` from the OpenRouter public API.\n\nRuns in GitHub Actions where egress is unrestricted (the retired cloud routine could not reach openrouter.ai — CONNECT 403). Schema + drift gates passed in-job. Merge after reviewing the diff.'; then
+              :
+            else
+              rc=$?
+              echo "::error::gh pr create 失敗(rc=${rc})。若訊息提到無法 create/approve PRs,請啟用:"
+              echo "  Settings → Actions → General → Workflow permissions →"
+              echo "  'Allow GitHub Actions to create and approve pull requests'"
+              echo "  (API: PUT /repos/{owner}/{repo}/actions/permissions/workflow  can_approve_pull_request_reviews=true)"
+              exit "${rc}"
+            fi
           fi
