@@ -1,0 +1,27 @@
+name: 🔒 Privacy or security concern (public, non-sensitive only)
+description: A privacy/security QUESTION or an observation that is safe to discuss in public.
+labels: ["area/privacy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **If this is an actual vulnerability or a suspected data leak, do NOT file a public issue.**
+        Report it privately via a
+        [security advisory](https://github.com/F-e-u-e-r/ai-pet-usage/security/advisories/new)
+        (see SECURITY.md). Use this template only for public, non-sensitive privacy/security *questions*.
+        Never paste prompts, message bodies, tokens, or full local paths.
+  - type: textarea
+    id: concern
+    attributes:
+      label: Your question or observation
+    validations:
+      required: true
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Confirm
+      options:
+        - label: This is a public, non-sensitive question — not an active vulnerability or a data leak.
+          required: true
+        - label: It contains no prompts, message bodies, tokens, or full local paths.
+          required: true

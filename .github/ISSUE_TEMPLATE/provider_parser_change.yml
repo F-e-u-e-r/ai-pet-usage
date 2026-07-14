@@ -1,0 +1,73 @@
+name: 🔌 Provider parser / numbers changed
+description: A provider's local log format changed, or its 5h / weekly / token / cost numbers look wrong.
+labels: ["bug", "needs-redacted-fixture"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Local CLI log formats can change without notice — this is the app's biggest accuracy risk.
+        To fix it we usually need a **small redacted fixture** (a few log lines with the shape, not the
+        content). **Never paste raw logs, prompts, message bodies, tokens, or full paths.**
+
+        Two things worth knowing before you file:
+        - **Grok** exposes no usage limits locally, so the app shows **no** 5-hour / weekly % for Grok
+          **by design** — that is not a bug and is not the same as `0%`.
+        - **Antigravity** has no usage adapter yet (it's a pricing namespace only). For an Antigravity
+          *price* issue use the 💲 **Pricing correction** template instead.
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - Claude Code
+        - Codex
+        - Grok (Grok Code)
+        - Other / not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What looks wrong
+      options:
+        - 5-hour percentage
+        - Weekly percentage
+        - Token count
+        - Cost estimate
+        - Reset countdown
+        - Provider not detected at all
+        - Parser error / crash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the number should be (and how you know)
+      description: e.g. "the CLI's own status shows 92% weekly, the app shows 1%".
+    validations:
+      required: true
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Redacted fixture (strongly encouraged)
+      description: |
+        A few log lines with the **shape**, not the content. Keep JSON keys / structure and the single
+        field that looks wrong; replace everything else with **synthetic** values:
+
+        - message text → `"…"`; ids / paths / project names → `redacted`
+        - shift or fake the timestamps (real ones reveal when you were working)
+        - you may keep the one numeric field that is wrong, so we can reproduce it
+
+        Good (Codex-style) example — hand-built, no real data:
+
+        `{"type":"token_count","timestamp":"2020-01-01T00:00:00Z","info":{"total_token_usage":{"input_tokens":12345,"cached_input_tokens":0,"output_tokens":678}},"rate_limits":{"primary":{"used_percent":92.0,"window_minutes":10080}}}`
+
+        If you can't fully redact it, **leave this blank** — we'll ask for exactly the field we need.
+      render: text
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Privacy check
+      options:
+        - label: My fixture contains only synthetic / redacted values — no prompts, assistant messages, tokens or keys, or full local paths.
+          required: true

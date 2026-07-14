@@ -1,0 +1,56 @@
+name: 🐛 Bug report
+description: Something in the app or CLI behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Please do not paste prompts, assistant messages, tool payloads, full
+        local paths, or auth files.** The app never reads those, and neither should a bug report.
+        For provider *numbers* being wrong, prefer the "Provider parser / numbers changed" template.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: About panel / release tag (e.g. alpha-v0.1.6), or the commit if built from source.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 14.5 (Apple Silicon)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Full (pet + panel)
+        - Monitor only (low RAM)
+    validations:
+      required: false
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Privacy check
+      options:
+        - label: This report contains no prompts, assistant messages, tokens, or full local file paths.
+          required: true
