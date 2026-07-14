@@ -68,7 +68,7 @@ struct MenuBarPanel: View {
             }
         }
         .padding(6)
-        .frame(width: 320)
+        .frame(width: 340)   // 略加寬:固定欄(name 彈性 + 5h/wk/reset 50/50/64)在 340 留餘裕,worst-case 不截
     }
 }
 
@@ -125,23 +125,27 @@ private struct ProviderStatusRow: View {
     var body: some View {
         let brand = ProviderBrands.brand(for: state.providerId,
                                          displayName: model.providerName(state.providerId))
-        HStack(spacing: 6) {
+        // 固定欄寬 HStack:name 彈性佔剩餘寬(左、truncate),5h/wk/reset 各自固定寬右對齊 →
+        // 每列相同固定寬 ⇒ 跨列對齊成表格,且 reset 有專屬寬度不被鄰欄擠掉(取代原 Spacer 大空隙 +
+        // reset 截字)。用固定寬而非 Grid:布局決定性、可純推理驗證(AFK 無法實測時較穩);
+        // macOS 無使用者可調 Dynamic Type,固定密度可接受,minimumScaleFactor 為溢位保險。
+        HStack(spacing: 8) {
             ProviderDot(brand: brand, size: 8)
-            // A2:面板用中等短名(Claude/Codex/Grok),右側 reset 倒數才放得下;
-            // 全名保留在 .help 與輔助功能。
-            Text(brand.shortName)
+            Text(brand.shortName)   // A2:面板用中短名(Claude/Codex/Grok);全名在 .help / a11y。
                 .font(.callout.weight(.medium))
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            windowText("5h", state.fiveHour)
-            windowText("wk", state.weekly)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            windowText("5h", state.fiveHour).frame(width: 50, alignment: .trailing)
+            windowText("wk", state.weekly).frame(width: 50, alignment: .trailing)
             Text(resetLabel)
                 .font(.caption).monospacedDigit()
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 78, alignment: .trailing)
+                .lineLimit(1).minimumScaleFactor(0.85)
+                .frame(width: 64, alignment: .trailing)
         }
         .help("\(brand.displayName) (\(brand.code)) — official/estimated 5h & weekly usage")
-        .accessibilityLabel("\(brand.displayName): 5 hour \(state.fiveHour.idle ? "idle" : (state.fiveHour.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")), weekly \(state.weekly.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(a11yLabel(brand: brand))
     }
 
     private func windowText(_ label: String, _ window: LimitWindowState) -> some View {
@@ -158,9 +162,19 @@ private struct ProviderStatusRow: View {
     }
 
     private var resetLabel: String {
-        if let reset = state.fiveHour.resetAt { return "resets \(countdown(to: reset, now: now))" }
-        if let reset = state.weekly.resetAt { return "wk resets \(countdown(to: reset, now: now))" }
-        return ""
+        // 壓縮:5h → 純倒數;weekly → "wk " + 倒數;皆無 → "—"(完整語意在 a11y)。
+        ResetLabel.compact(fiveHourResetAt: state.fiveHour.resetAt,
+                           weeklyResetAt: state.weekly.resetAt, now: now)
+    }
+
+    /// a11y 全句(視覺壓縮,朗讀仍完整念出兩窗 + 重置)。
+    private func a11yLabel(brand: ProviderBrand) -> String {
+        func win(_ w: LimitWindowState) -> String {
+            w.idle ? "idle" : (w.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")
+        }
+        return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly)). "
+            + ResetLabel.accessibility(fiveHourResetAt: state.fiveHour.resetAt,
+                                       weeklyResetAt: state.weekly.resetAt, now: now)
     }
 }
 

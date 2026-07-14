@@ -321,6 +321,21 @@ runSuite("WanderBandTests", [
     ("testMotionClampHorizontally", wanderBand.testMotionClampHorizontally),
 ])
 
+let wanderCursorPause = WanderCursorPauseTests()
+runSuite("WanderCursorPauseTests", [
+    ("testPauseWhenCursorOverAndNotClickThrough", wanderCursorPause.testPauseWhenCursorOverAndNotClickThrough),
+    ("testNoPauseWhenClickThrough", wanderCursorPause.testNoPauseWhenClickThrough),
+    ("testNoPauseWhenCursorAway", wanderCursorPause.testNoPauseWhenCursorAway),
+])
+
+let resetLabel = ResetLabelTests()
+runSuite("ResetLabelTests", [
+    ("testCountdownForms", resetLabel.testCountdownForms),
+    ("testCompactPrecedenceAndPrefix", resetLabel.testCompactPrecedenceAndPrefix),
+    ("testCompactWorstCaseFitsBudget", resetLabel.testCompactWorstCaseFitsBudget),
+    ("testAccessibilityFullSentence", resetLabel.testAccessibilityFullSentence),
+])
+
 let engineLoopTests = EngineV2LoopTests()
 runSuite("EngineV2LoopTests", [
     ("testExactlyOneCommitPerTick", engineLoopTests.testExactlyOneCommitPerTick),

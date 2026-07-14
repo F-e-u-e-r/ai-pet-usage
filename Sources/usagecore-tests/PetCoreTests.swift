@@ -373,3 +373,63 @@ final class UsageRingModelTests: XCTestCase {
         XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 160), 160 * 1.75 + 39)
     }
 }
+
+// MARK: - Finding 1:漫遊「游標懸停暫停」純判定(讓移動中的寵物可抓)
+
+final class WanderCursorPauseTests: XCTestCase {
+    func testPauseWhenCursorOverAndNotClickThrough() {
+        XCTAssertTrue(WanderBand.shouldPauseWanderForCursor(cursorOverPanel: true, clickThrough: false),
+                      "游標在寵物上且可互動 → 暫停漫遊(視窗停住可抓)")
+    }
+    func testNoPauseWhenClickThrough() {
+        XCTAssertFalse(WanderBand.shouldPauseWanderForCursor(cursorOverPanel: true, clickThrough: true),
+                       "click-through:游標穿透、無法拖曳 → 不暫停(否則無故凍在游標下)")
+    }
+    func testNoPauseWhenCursorAway() {
+        XCTAssertFalse(WanderBand.shouldPauseWanderForCursor(cursorOverPanel: false, clickThrough: false))
+    }
+}
+
+// MARK: - Finding 2:menu 面板 reset 欄壓縮標籤(去截字 + a11y 完整)
+
+final class ResetLabelTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_000_000)
+    private func at(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(seconds) }
+
+    func testCountdownForms() {
+        XCTAssertEqual(ResetLabel.countdown(to: nil, now: now), "—")
+        XCTAssertEqual(ResetLabel.countdown(to: at(-5), now: now), "now")
+        XCTAssertEqual(ResetLabel.countdown(to: at(0), now: now), "now")
+        XCTAssertEqual(ResetLabel.countdown(to: at(59 * 60), now: now), "59m")
+        XCTAssertEqual(ResetLabel.countdown(to: at(4 * 3600 + 59 * 60), now: now), "4h 59m")
+        XCTAssertEqual(ResetLabel.countdown(to: at(48 * 3600), now: now), "48h 0m", "48h 邊界仍走時制")
+        XCTAssertEqual(ResetLabel.countdown(to: at(49 * 3600), now: now), "2d 1h", ">48h 進位日制")
+        XCTAssertEqual(ResetLabel.countdown(to: at(6 * 86400 + 3 * 3600), now: now), "6d 3h")
+    }
+
+    func testCompactPrecedenceAndPrefix() {
+        XCTAssertEqual(ResetLabel.compact(fiveHourResetAt: at(4 * 3600 + 59 * 60),
+                                          weeklyResetAt: at(6 * 86400), now: now),
+                       "4h 59m", "5h 有重置 → 純倒數,無前綴")
+        XCTAssertEqual(ResetLabel.compact(fiveHourResetAt: nil,
+                                          weeklyResetAt: at(6 * 86400 + 3 * 3600), now: now),
+                       "wk 6d 3h", "5h 無、weekly 有 → wk 前綴")
+        XCTAssertEqual(ResetLabel.compact(fiveHourResetAt: nil, weeklyResetAt: nil, now: now), "—")
+    }
+
+    func testCompactWorstCaseFitsBudget() {
+        let worst = ResetLabel.compact(fiveHourResetAt: nil,
+                                       weeklyResetAt: at(6 * 86400 + 23 * 3600), now: now)
+        XCTAssertEqual(worst, "wk 6d 23h")
+        XCTAssertTrue(worst.count <= 9, "壓縮後最壞情況 \(worst.count) 字元,應 ≤ 9(固定窄欄放得下不截)")
+    }
+
+    func testAccessibilityFullSentence() {
+        XCTAssertEqual(ResetLabel.accessibility(fiveHourResetAt: at(4 * 3600), weeklyResetAt: nil, now: now),
+                       "5-hour limit resets in 4h 0m")
+        XCTAssertEqual(ResetLabel.accessibility(fiveHourResetAt: nil, weeklyResetAt: at(6 * 86400), now: now),
+                       "weekly limit resets in 6d 0h")
+        XCTAssertEqual(ResetLabel.accessibility(fiveHourResetAt: nil, weeklyResetAt: nil, now: now),
+                       "no reset scheduled")
+    }
+}

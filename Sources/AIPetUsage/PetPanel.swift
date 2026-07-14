@@ -296,6 +296,16 @@ final class PetPanelController: NSObject, NSWindowDelegate {
             if Date() > userDragFailsafeAt { userDragActive = false } else { return }
         }
         guard let model, let panel, panel.isVisible else { return }
+        // 游標懸於寵物視窗上 → 暫停漫遊,讓移動中的視窗停住可抓(背景拖曳 isMovableByWindowBackground
+        // 需視窗靜止才建立得起來;移動中會從游標下走掉)。幾何輪詢而非 .onHover —— nonactivating panel
+        // 的 hover 遞送不可靠、且漏 exit 會永久凍結;輪詢每 90ms 自癒。AppKit 底左座標,panel.frame 與
+        // NSEvent.mouseLocation 同系;click-through 時游標本就穿透、不暫停。
+        if WanderBand.shouldPauseWanderForCursor(
+               cursorOverPanel: panel.frame.contains(NSEvent.mouseLocation),
+               clickThrough: panel.ignoresMouseEvents) {
+            model.setWanderDirection(0)
+            return
+        }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let moodOK = [.idle, .happy, .focused].contains(model.mood.mood)
         guard model.settings.appMode == .full,

@@ -58,4 +58,12 @@ public enum WanderBand {
         guard value.isFinite else { return 100 }
         return min(100, max(10, value))
     }
+
+    /// 漫遊是否應因「游標懸於寵物視窗上」而暫停 —— 讓移動中的視窗停住,使用者才抓得住
+    /// (背景拖曳 isMovableByWindowBackground 需視窗靜止才建立得起來;移動中會從游標下走掉)。
+    /// 純判定(供測試):cursorOverPanel 由呼叫端以 `panel.frame.contains(NSEvent.mouseLocation)` 供給;
+    /// click-through(ignoresMouseEvents)時游標本就穿透、無法拖曳,故不暫停(否則會無故凍在游標下)。
+    public static func shouldPauseWanderForCursor(cursorOverPanel: Bool, clickThrough: Bool) -> Bool {
+        cursorOverPanel && !clickThrough
+    }
 }
