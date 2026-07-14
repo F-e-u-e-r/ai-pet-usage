@@ -8,6 +8,17 @@ import PetCore
 @MainActor
 final class PetPanelController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
+    /// 泡泡子視窗(R6:修正「寵物上方保留區在無泡泡時仍吃點擊」的死點)。永遠
+    /// `ignoresMouseEvents = true`,以 `addChildWindow(_:ordered:.above)` 掛在 pet panel 之上 →
+    /// pet 的拖曳/漫遊/V2 30Hz `setFrameOrigin` 會自動帶著它移動(免手動同步)。保留區改由
+    /// 「這個永遠忽略滑鼠的視窗」承載,空白時點擊自然穿透到後方 app。
+    /// (跨模型合議 grok-4.5 max + gpt-5.6-sol max,2026-07-14:contentView `hitTest→nil` 不足以
+    /// 跨 app 穿透 —— Window Server 先選定視窗、之後才跑 `NSView.hitTest`;唯 whole-window 的
+    /// `NSWindow.ignoresMouseEvents` 在視窗選取期生效,故用「footprint-only pet + 永遠忽略滑鼠的
+    /// 子泡泡視窗」而非 hitTest 挖洞。)
+    private var bubblePanel: NSPanel?
+    /// 泡泡呈現狀態的單一擁有者(text/until/page);pet host 寫、bubble host 讀,兩 host 共享同一實例。
+    private let bubbleModel = PetBubbleModel()
     private weak var model: AppModel?
     private var wanderTask: Task<Void, Never>?
     /// petEngineV2 flag 開啟時的新引擎 Bridge;flag 關(預設)完全不建立。
@@ -63,11 +74,42 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         panel.ignoresMouseEvents = model?.settings.clickThrough ?? false // 首次建立就套用
         panel.delegate = self
         if let model {
-            let host = NSHostingView(rootView: PetView().environment(model))
+            let host = NSHostingView(rootView: PetView().environment(model).environment(bubbleModel))
             host.frame = NSRect(origin: .zero, size: size)
             panel.contentView = host
+            // R6:泡泡子視窗(永遠忽略滑鼠),掛在 pet 之上並貼齊;之後移動由 child window 自動跟隨。
+            let bubble = makeBubblePanel(width: size.width, model: model)
+            bubblePanel = bubble
+            panel.addChildWindow(bubble, ordered: .above)
+            bubble.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY,
+                                   width: panel.frame.width, height: Self.bubbleReserve), display: false)
         }
         return panel
+    }
+
+    /// 泡泡子視窗:透明、無邊框、永遠 `ignoresMouseEvents`(承載寵物上方保留區 → 空白處點擊穿透)。
+    private func makeBubblePanel(width: CGFloat, model: AppModel) -> NSPanel {
+        let bubble = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: Self.bubbleReserve),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        bubble.isOpaque = false
+        bubble.backgroundColor = .clear
+        bubble.hasShadow = false
+        bubble.level = .floating
+        bubble.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        bubble.ignoresMouseEvents = true   // R6:永遠穿透 —— 保留區死點的正解(非 hitTest 挖洞)
+        bubble.becomesKeyOnlyIfNeeded = true
+        let host = NSHostingView(rootView: PetBubbleView().environment(model).environment(bubbleModel))
+        host.frame = NSRect(x: 0, y: 0, width: width, height: Self.bubbleReserve)
+        bubble.contentView = host
+        return bubble
+    }
+
+    /// 讓泡泡子視窗貼在 pet panel 正上方(僅建立與 resize 時呼叫;移動由 child window 自動跟隨)。
+    private func syncBubbleGeometry() {
+        guard let panel, let bubblePanel else { return }
+        let f = panel.frame
+        bubblePanel.setFrame(NSRect(x: f.minX, y: f.maxY, width: f.width, height: Self.bubbleReserve), display: true)
+        bubblePanel.contentView?.frame = NSRect(x: 0, y: 0, width: f.width, height: Self.bubbleReserve)
     }
 
     /// 泡泡保留區(R3,雙審裁定 A:泡泡完全在環圈之上):page 0 至多 4 行 11pt mono
@@ -77,10 +119,12 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     private func panelSize() -> NSSize {
         let base = model?.settings.petSize ?? 96
-        // R2 B1/B3:面板須容納 4 環容量外徑 + 邊距;R3:再加泡泡保留區(視窗透明,向上長)。
+        // R2 B1/B3:面板須容納 4 環容量外徑 + 邊距。R6:泡泡保留區已移出本面板(改由上方的
+        // bubblePanel 承載),故 pet panel = 純寵物 footprint;底部 origin 與寬度不變 → V2 bottom-anchor
+        // 契約與位置持久化不受影響,只是不再向上多佔 92pt 死空間。
         let capD = UsageRingModel.capacityOuterDiameter(petSize: base)
         return NSSize(width: max(base * 2.6, capD + 12),
-                      height: max(base * 2.0, capD + 14) + Self.bubbleReserve)
+                      height: max(base * 2.0, capD + 14))
     }
 
     private func restoreOrigin(for size: NSSize) -> NSPoint {
@@ -102,7 +146,9 @@ final class PetPanelController: NSObject, NSWindowDelegate {
             return defaultOrigin
         }
         let clampedX = min(max(x, vf.minX), max(vf.minX, vf.maxX - size.width))
-        let clampedY = min(max(y, vf.minY), max(vf.minY, vf.maxY - size.height))
+        // R6:上方尚有 bubbleReserve 高的泡泡子視窗,夾限時納入合併外框(= 舊「含保留區」高度),
+        // 使還原位置與過去一致、且泡泡不會被推出螢幕上緣。
+        let clampedY = min(max(y, vf.minY), max(vf.minY, vf.maxY - size.height - Self.bubbleReserve))
         return NSPoint(x: clampedX, y: clampedY)
     }
 
@@ -133,6 +179,11 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         positionSaveTask?.cancel()
         positionSaveTask = nil
         panel?.delegate = nil
+        if let bubblePanel {
+            panel?.removeChildWindow(bubblePanel)
+            bubblePanel.close()
+        }
+        bubblePanel = nil
         panel?.close()
         panel = nil
     }
@@ -157,11 +208,12 @@ final class PetPanelController: NSObject, NSWindowDelegate {
             var frame = panel.frame
             frame.size = newSize
             if let vf = (panel.screen ?? NSScreen.main)?.visibleFrame {
-                frame.origin.y = min(max(frame.origin.y, vf.minY), max(vf.minY, vf.maxY - newSize.height))
+                frame.origin.y = min(max(frame.origin.y, vf.minY), max(vf.minY, vf.maxY - newSize.height - Self.bubbleReserve))
                 frame.origin.x = min(max(frame.origin.x, vf.minX), max(vf.minX, vf.maxX - newSize.width))
             }
             panel.setFrame(frame, display: true)
             panel.contentView?.frame = NSRect(origin: .zero, size: newSize)
+            syncBubbleGeometry()   // R6:pet resize/重定位後,泡泡子視窗貼齊到新的 frame 上方。
             sizeChanged = true
         }
         if wanderJustEnabled || sizeChanged {
@@ -379,16 +431,56 @@ struct PixelGlyphView: View {
     }
 }
 
+// MARK: - 泡泡(R6:獨立子視窗承載,狀態共享)
+
+/// 泡泡呈現狀態的單一擁有者。pet host(PetView)寫入(tap/mood/feed);泡泡子視窗 host
+/// (PetBubbleView)讀取渲染。兩 host 共用同一實例(由 PetPanelController 注入)。
+@MainActor
+@Observable
+final class PetBubbleModel {
+    var text: String = ""
+    var until: Date = .distantPast
+    /// 點擊翻頁(0 用量 / 1 寵物 / 2 資料);泡泡顯示中再點會翻頁。
+    var page: Int = 0
+
+    func show(_ text: String, seconds: TimeInterval) {
+        self.text = text
+        self.until = Date().addingTimeInterval(seconds)
+    }
+}
+
+/// 泡泡子視窗的內容:只渲染 PixelBubble,錨在保留區底部(貼近寵物頂端)。所在視窗永遠
+/// `ignoresMouseEvents`,故永不吃點擊 —— 空白保留區的點擊穿透到後方 app。10Hz timeline 讓
+/// 泡泡於 `until` 過後自動淡出隱藏。
+struct PetBubbleView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(PetBubbleModel.self) private var bubble
+
+    var body: some View {
+        // 不隨 quietMode 暫停:否則到期後無 tick 觸發、泡泡不會自動消失。
+        TimelineView(.animation(minimumInterval: 1.0 / 10, paused: false)) { context in
+            GeometryReader { geo in
+                if context.date < bubble.until {
+                    PixelBubble(text: bubble.text, maxWidth: geo.size.width - 12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .opacity(model.settings.petOpacity)
+    }
+}
+
 // MARK: - 寵物本體
 
 struct PetView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var bubbleUntil: Date = .distantPast
-    @State private var bubbleText: String = ""
+    /// R6:泡泡呈現狀態移到共享的 PetBubbleModel(渲染改在獨立的泡泡子視窗 host,見
+    /// PetPanelController.bubblePanel / PetBubbleView)。此處只寫入(tap/mood/feed)。
+    @Environment(PetBubbleModel.self) private var bubble
     @State private var phraseTick = 0
-    /// 點擊泡泡的分頁(0 用量 / 1 寵物 / 2 資料);泡泡顯示中再點會翻頁。
-    @State private var bubblePage = 0
     /// 動畫狀態機:one-shot 轉場 + 隨機 micro-animation(引用型別,tick 內推進)。
     @State private var animator = PixelAnimator()
 
@@ -459,34 +551,22 @@ struct PetView: View {
                 // 點到不得觸發泡泡/選單(視窗層仍會擋事件,屬透明浮窗既有代價)。
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if Date() < bubbleUntil {
-                        bubblePage = (bubblePage + 1) % 3
+                    if Date() < bubble.until {
+                        bubble.page = (bubble.page + 1) % 3
                     } else {
-                        bubblePage = 0
+                        bubble.page = 0
                     }
-                    showBubble(bubblePageText(bubblePage), seconds: 6)
+                    showBubble(bubblePageText(bubble.page), seconds: 6)
                 }
                 .help(PetInfo.tooltip)
                 .contextMenu { PetContextMenu() }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 6)
-                .overlay(alignment: .bottom) {
-                    // R4 裁定 (b):泡泡錨到**實際最外環**(容量圈帶不再撐開距離),
-                    // 尾巴下潛 7pt 越過頂弧線(尾寬僅數 px,遮擋可忽略)— 泡泡貼近寵物,
-                    // 泡泡體仍在弧線之上;無環時退回 sprite 淨空圈(baseDiameter)。
-                    if context.date < bubbleUntil {
-                        let ringCount = UsageRingModel.entries(from: model.orderedLimitStates).count
-                        let actualOuterD = ringCount > 0
-                            ? UsageRingModel.diameter(index: 0, count: ringCount, petSize: size)
-                            : UsageRingModel.baseDiameter(petSize: size)
-                        // 實外環頂(自面板底)= 6 + capD/2 + actualOuterD/2;−7 = 尾巴下潛量。
-                        let bubbleBottom = 6 + (capD + actualOuterD) / 2 - 7
-                        PixelBubble(text: bubbleText, maxWidth: geo.size.width - 12)
-                            .padding(.bottom, bubbleBottom)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                    }
-                }
+                // R6:泡泡渲染已移到獨立的泡泡子視窗(PetBubbleView),不再是本視圖的 overlay ——
+                // 單一透明視窗無法讓上方保留區的空白處點擊穿透到後方 app(Window Server 先選視窗、
+                // 再跑 NSView.hitTest,故 hitTest→nil 無效;唯 whole-window ignoresMouseEvents 有效)。
+                // 泡泡改坐落在保留區底部(貼近寵物頂端);不再壓過最外環弧線(原 R4 尾巴下潛已無法
+                // 跨視窗保留)。
             }
         }
         .opacity(settings.petOpacity)
@@ -523,8 +603,7 @@ struct PetView: View {
     }
 
     private func showBubble(_ text: String, seconds: TimeInterval) {
-        bubbleText = text
-        bubbleUntil = Date().addingTimeInterval(seconds)
+        bubble.show(text, seconds: seconds)
     }
 
     /// 點擊泡泡三頁(spec「Better Pet Click Bubble」的 tap-to-cycle 版本;
@@ -736,7 +815,8 @@ struct PetContextMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Section("Give Treat (\(model.treatsAvailable))") {
+        // 飽食度(fullness)顯示於標頭:< 30% 即進入 hungry(不漫遊),讓使用者看得出寵物為何不走。
+        Section("Give Treat (\(model.treatsAvailable)) · \(Int(model.petState.hunger))% full") {
             ForEach(FoodItem.foods(for: model.settings.resolvedSpecies)) { food in
                 Button("\(food.emoji) \(food.name)\(food.treatCost > 0 ? "  — \(food.treatCost)🎟" : "")") {
                     _ = model.feed(food)
