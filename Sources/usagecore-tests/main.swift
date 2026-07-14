@@ -225,6 +225,8 @@ let brandTests = ProviderBrandTests()
 runSuite("ProviderBrandTests", [
     ("testBadgesAlphabeticalOmitMissingAndSeverity", brandTests.testBadgesAlphabeticalOmitMissingAndSeverity),
     ("testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData", brandTests.testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData),
+    ("testCompactShowsProviderWhenOnlyWeeklyWarns", brandTests.testCompactShowsProviderWhenOnlyWeeklyWarns),
+    ("testFiveHourMissingWithWeeklyPresentShowsDash", brandTests.testFiveHourMissingWithWeeklyPresentShowsDash),
     ("testSeverityThresholdsAndCompactFilter", brandTests.testSeverityThresholdsAndCompactFilter),
     ("testAccessibilitySummaryUsesFullNames", brandTests.testAccessibilitySummaryUsesFullNames),
     ("testIdentityDotsAreStableAndDistinct", brandTests.testIdentityDotsAreStableAndDistinct),

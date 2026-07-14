@@ -78,71 +78,104 @@ public enum UsageSeverity: String, Sendable, Equatable {
     }
 }
 
-/// 選單列徽章:一家 provider 的 dot + 代號 + severity 上色的百分比。
+/// 選單列徽章:一家 provider 的 dot + 代號 + 兩個時窗(5h / weekly)各自 severity 上色的百分比。
 public struct MenuBadge: Sendable, Equatable, Identifiable {
+    /// 單一時窗的顯示值(percent 已四捨五入為整數;severity 依該窗自身閾值,獨立上色)。
+    public struct Window: Sendable, Equatable {
+        public let percent: Int
+        public let severity: UsageSeverity
+        public init(percent: Int, severity: UsageSeverity) {
+            self.percent = percent
+            self.severity = severity
+        }
+    }
+
     public let providerId: String
     public let code: String
     public let displayName: String
     public let dotColor: UInt32
     public let needsOutline: Bool
-    public let percent: Int
-    public let severity: UsageSeverity
-    /// true = 該 provider 有近期活動但當前 5h 無 session → 顯示中性「idle」而非百分比(不丟徽章)。
+    /// 5h 滾動窗;nil = 該窗無資料 / idle(顯示 "-",不併入 no-data)。
+    public let fiveHour: Window?
+    /// weekly 滾動窗;nil = 該窗無資料(顯示 "-")。
+    public let weekly: Window?
+    /// true = 該 provider 有近期活動但**兩窗皆無資料** → 顯示中性「idle」而非百分比(不丟徽章)。
     public let idle: Bool
 
     public var id: String { providerId }
 
     public init(providerId: String, code: String, displayName: String, dotColor: UInt32,
-                needsOutline: Bool, percent: Int, severity: UsageSeverity, idle: Bool = false) {
+                needsOutline: Bool, fiveHour: Window?, weekly: Window?, idle: Bool = false) {
         self.providerId = providerId
         self.code = code
         self.displayName = displayName
         self.dotColor = dotColor
         self.needsOutline = needsOutline
-        self.percent = percent
-        self.severity = severity
+        self.fiveHour = fiveHour
+        self.weekly = weekly
         self.idle = idle
+    }
+
+    /// compact 過濾用的整體 severity:兩窗取較嚴重者(排序仍依 displayName 字母序,與此無關)。
+    public var aggregateSeverity: UsageSeverity {
+        let severities = [fiveHour?.severity, weekly?.severity].compactMap { $0 }
+        if severities.contains(.danger) { return .danger }
+        if severities.contains(.warn) { return .warn }
+        return .normal
     }
 }
 
 public enum MenuBadgeBuilder {
-    /// 由 (providerId, displayName, 5h%) 建出選單列徽章。規則(spec §2/§5):
-    /// 依顯示名稱字母序穩定排序(不得依 severity 重排)、未偵測/無資料省略、
-    /// identity 色恆定、severity 只上在百分比文字。
-    public static func badges(from states: [(id: String, displayName: String?, percent: Double?, idle: Bool)],
-                              warn: Double, danger: Double,
-                              onlyWarnings: Bool = false) -> [MenuBadge] {
-        states.compactMap { st -> MenuBadge? in
+    /// 由 (providerId, displayName, 5h%, weekly%) 建出選單列徽章。規則(spec §2/§5):
+    /// 依顯示名稱字母序穩定排序(不得依 severity 重排)、identity 色恆定、
+    /// 每窗 severity 只上在該窗自己的百分比文字;compact(onlyWarnings)= **任一窗**達 warn 才顯示
+    /// (否則高 weekly 會在 compact 模式消失 —— 正是本功能要防的漏報)。
+    /// 兩窗皆無資料:idle → 顯示中性「idle」徽章(compact 省略);非 idle → 略過(未偵測/無資料)。
+    public static func badges(
+        from states: [(id: String, displayName: String?, fiveHour: Double?, weekly: Double?, idle: Bool)],
+        warn: Double, danger: Double,
+        onlyWarnings: Bool = false
+    ) -> [MenuBadge] {
+        func window(_ percent: Double?) -> MenuBadge.Window? {
+            percent.map { MenuBadge.Window(percent: Int($0.rounded()),
+                                           severity: .of(percent: $0, warn: warn, danger: danger)) }
+        }
+        return states.compactMap { st -> MenuBadge? in
             let brand = ProviderBrands.brand(for: st.id, displayName: st.displayName)
-            // idle-first:idle 恆無百分比(引擎已 fail-closed 為 nil),顯示中性「idle」徽章而非被丟掉;
-            // compact(onlyWarnings)模式只顯示警告 → idle 省略。
-            if st.idle {
-                if onlyWarnings { return nil }
+            let fiveHour = window(st.fiveHour)
+            let weekly = window(st.weekly)
+            // 兩窗皆無資料:idle 顯示中性徽章(compact 除外);否則整筆略過(無資料)。
+            if fiveHour == nil, weekly == nil {
+                guard st.idle, !onlyWarnings else { return nil }
                 return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
                                  dotColor: brand.dotColor, needsOutline: brand.needsOutline,
-                                 percent: 0, severity: .normal, idle: true)
+                                 fiveHour: nil, weekly: nil, idle: true)
             }
-            guard let p = st.percent else { return nil }
-            let severity = UsageSeverity.of(percent: p, warn: warn, danger: danger)
-            if onlyWarnings, severity == .normal { return nil }
-            return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
-                             dotColor: brand.dotColor, needsOutline: brand.needsOutline,
-                             percent: Int(p.rounded()), severity: severity)
+            let badge = MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+                                  dotColor: brand.dotColor, needsOutline: brand.needsOutline,
+                                  fiveHour: fiveHour, weekly: weekly, idle: false)
+            // compact:任一窗達 warn 才顯示。
+            if onlyWarnings, badge.aggregateSeverity == .normal { return nil }
+            return badge
         }
         .sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
     }
 
-    /// 輔助功能全句(spec §11:不得只朗讀 "CC 91 CX 53")。
-    /// 例:"Golden Retriever. Claude Code 91 percent, warning. Codex 53 percent, normal."
+    /// 輔助功能全句(spec §11:不得只朗讀 "CC 91 CX 53";兩窗需明確念「5-hour」「weekly」)。
+    /// 例:"Golden Retriever. Claude Code 5-hour 91 percent, warning, weekly 40 percent, normal."
     public static func accessibilitySummary(petName: String?, badges: [MenuBadge]) -> String {
         var parts: [String] = []
         if let petName, !petName.isEmpty { parts.append(petName) }
         if badges.isEmpty {
             parts.append("No usage data")
         } else {
-            parts.append(contentsOf: badges.map {
-                $0.idle ? "\($0.displayName) idle"
-                        : "\($0.displayName) \($0.percent) percent, \($0.severity.accessibilityWord)"
+            parts.append(contentsOf: badges.map { badge in
+                if badge.idle { return "\(badge.displayName) idle" }
+                func say(_ label: String, _ w: MenuBadge.Window?) -> String {
+                    w.map { "\(label) \($0.percent) percent, \($0.severity.accessibilityWord)" }
+                        ?? "\(label) no data"
+                }
+                return "\(badge.displayName) \(say("5-hour", badge.fiveHour)), \(say("weekly", badge.weekly))"
             })
         }
         return parts.joined(separator: ". ") + "."
