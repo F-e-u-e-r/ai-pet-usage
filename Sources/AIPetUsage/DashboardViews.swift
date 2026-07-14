@@ -23,12 +23,8 @@ func costDisplay(_ c: CostResult) -> (value: String, caption: String?) {
 func costText(_ c: CostResult) -> String { costDisplay(c).value }
 
 func countdown(to date: Date?, now: Date = Date()) -> String {
-    guard let date else { return "—" }
-    let s = date.timeIntervalSince(now)
-    if s <= 0 { return "now" }
-    let h = Int(s) / 3600, m = (Int(s) % 3600) / 60
-    if h > 48 { return "\(h / 24)d \(h % 24)h" }
-    return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+    // 邏輯移至 UsageCore.ResetLabel(可單元測試;menu 面板 compact reset 共用同一倒數)。
+    ResetLabel.countdown(to: date, now: now)
 }
 
 func timeAgo(_ date: Date?, now: Date = Date()) -> String {
