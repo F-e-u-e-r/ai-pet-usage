@@ -455,7 +455,8 @@ final class AppModel {
         let states = dashboard.limitStates.map { st in
             (id: st.providerId,
              displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
-             percent: st.fiveHour.usedPercent,
+             fiveHour: st.fiveHour.usedPercent,
+             weekly: st.weekly.usedPercent,
              idle: st.fiveHour.idle)
         }
         return MenuBadgeBuilder.badges(from: states,
@@ -497,7 +498,12 @@ final class AppModel {
 
     /// 純文字後備(NSImage 烤製失敗時);不再夾帶心情/警示 emoji(spec P0)。
     var menuBarTitle: String {
-        let parts = menuBarBadges.map { "\($0.code)\($0.percent)%" }
+        let parts = menuBarBadges.map { badge -> String in
+            if badge.idle { return "\(badge.code) idle" }
+            let a = badge.fiveHour.map { "\($0.percent)%" } ?? "-"
+            let b = badge.weekly.map { "\($0.percent)%" } ?? "-"
+            return "\(badge.code)\(a)/\(b)"
+        }
         let usage = parts.isEmpty ? (menuBarShowsPlaceholder ? "—" : "") : parts.joined(separator: " ")
         return usage.isEmpty ? menuBarPetEmoji : "\(menuBarPetEmoji) \(usage)"
     }

@@ -68,10 +68,14 @@ struct MenuBarBadgeView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(baseColor.opacity(0.55))
                     } else {
-                        Text("\(badge.percent)%")
-                            .font(.system(size: 11, weight: .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(severityColor(badge.severity) ?? baseColor)
+                        // 5h / weekly 兩窗:各自依自身 severity 上色;nil 窗顯示 "-"。
+                        HStack(spacing: 1) {
+                            windowText(badge.fiveHour)
+                            Text("/")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(baseColor.opacity(0.45))
+                            windowText(badge.weekly)
+                        }
                     }
                 }
             }
@@ -79,6 +83,22 @@ struct MenuBarBadgeView: View {
         .padding(.horizontal, 2)
         .frame(height: 18)
         .fixedSize()
+    }
+
+    /// 單窗文字:有值 → "N%"(依該窗 severity 上色);nil → "-"(淡色,代表該窗 idle/無資料)。
+    @ViewBuilder
+    private func windowText(_ w: MenuBadge.Window?) -> some View {
+        if let w {
+            Text("\(w.percent)%")
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(severityColor(w.severity) ?? baseColor)
+        } else {
+            Text("-")
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(baseColor.opacity(0.55))
+        }
     }
 }
 
