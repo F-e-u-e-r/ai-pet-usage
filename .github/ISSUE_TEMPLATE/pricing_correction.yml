@@ -1,0 +1,32 @@
+name: 💲 Pricing correction
+description: A model's price in the app is wrong or out of date.
+labels: ["area/pricing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prices live in `Sources/UsageCore/Resources/model-prices.json` (curated) and
+        `model-prices-generated.json` (regenerated offline from OpenRouter's public catalog — the app
+        never contacts OpenRouter at runtime). Costs are always **estimates**; some models are
+        deliberately left unpriced (shown as `$X+`) rather than guessed.
+  - type: input
+    id: model
+    attributes:
+      label: Model id
+      placeholder: e.g. claude-opus-4-8, gpt-5.6-sol, grok-4.5
+    validations:
+      required: true
+  - type: input
+    id: correct
+    attributes:
+      label: Correct price (input / output per 1M tokens, + cache if relevant)
+      placeholder: e.g. $5 in / $25 out, cache read 0.1×
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Authoritative source (URL)
+      description: Official pricing page / docs. Unverified single-blog prices are not enough to publish.
+    validations:
+      required: true

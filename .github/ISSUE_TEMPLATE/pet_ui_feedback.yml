@@ -1,0 +1,35 @@
+name: 🐾 Pet / UI feedback
+description: Feedback on the pet, menu-bar badge, panels, or general look & feel.
+labels: ["area/pet"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Screenshots are welcome and often the fastest way to show a UI problem — but **blur or crop
+        anything sensitive first**: project names, full paths, readable prompt/message text, and other
+        windows. The app itself only ever shows project *names*, never paths or message content.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Floating pet (movement / drag / mood / animation)
+        - Menu-bar badge
+        - Dropdown / floating panel
+        - Dashboard (Today / Limits / Projects / Trends)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: feedback
+    attributes:
+      label: What feels off (and what you'd expect)
+    validations:
+      required: true
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Privacy check
+      options:
+        - label: Any screenshot or text here has no full local paths, tokens, or readable prompt / message content.
+          required: true

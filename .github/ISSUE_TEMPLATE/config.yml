@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Privacy or security concern
+    url: https://github.com/F-e-u-e-r/ai-pet-usage/security/advisories/new
+    about: Report a suspected data leak, unexpected outbound network call, or vulnerability privately (see SECURITY.md). Do NOT paste prompts, message bodies, tokens, or full local paths.
+  - name: 📖 Data sources & privacy (what the app reads)
+    url: https://github.com/F-e-u-e-r/ai-pet-usage/blob/main/docs/DATA_SOURCES.md
+    about: How each provider's local usage is read, what is estimated vs official, and the local-first / no-upload policy.
+  # Re-add a Discussions contact link here once GitHub Discussions is enabled for the repo
+  # (Settings → General → Features). Left out for now so it doesn't 404.
