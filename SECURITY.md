@@ -3,7 +3,9 @@
 AI Pet Usage is a **local-first** macOS menu-bar app. It reads AI CLI usage logs already on your machine
 and shows quota / cost / activity. It does **not** upload usage data, has no telemetry, and requires no
 account or login. The only outbound network call is an **opt-in** check to the GitHub Releases API for
-updates. See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for exactly what is read.
+updates. See [`PRIVACY.md`](PRIVACY.md) for the privacy promise in plain language,
+[`docs/DATA_BOUNDARY.md`](docs/DATA_BOUNDARY.md) for the per-data-class boundary checklist, and
+[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for exactly what is read.
 
 ## Supported versions
 
