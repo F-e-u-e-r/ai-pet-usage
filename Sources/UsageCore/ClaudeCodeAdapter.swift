@@ -63,7 +63,7 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     }
 
     public func explainDataSources() -> String {
-        "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times) when a statusline hook saves it locally, and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never read."
+        "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times) when a statusline hook saves it locally, and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never extracted, retained, or emitted."
     }
 
     public func explainRequiredPermissions() -> String {
@@ -84,13 +84,17 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                 scanned += 1
                 let startOffset = (mark != nil && mark!.offset <= size) ? mark!.offset : 0
                 do {
+                    // 隱私邊界:以**窄 Decodable** 只解出宣告過的 metadata/usage 欄位。提示詞、assistant
+                    // 內容、tool payload 等未宣告欄位不會被 decode 成我方持有的物件(對照舊碼:
+                    // JSONSerialization 會把整行含 message.content 物化成 [String:Any])。見 docs/ADAPTER_CONTRACT.md。
+                    let decoder = JSONDecoder()
                     let newOffset = try JSONLScanner.scan(url: url, from: startOffset,
                                                           quickFilters: ["input_tokens"]) { hit in
-                        guard let obj = (try? JSONSerialization.jsonObject(with: hit.data)) as? JSONObject else {
+                        guard let line = try? decoder.decode(ClaudeAssistantLine.self, from: hit.data) else {
                             parseErrors += 1
                             return
                         }
-                        if let event = Self.parseAssistantLine(obj, sourcePath: url.path) {
+                        if let event = Self.parseAssistantLine(line, sourcePath: url.path) {
                             events.append(event)
                         }
                     }
@@ -238,26 +242,55 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         }
     }
 
-    static func parseAssistantLine(_ obj: JSONObject, sourcePath: String) -> UsageEvent? {
-        guard obj.str("type") == "assistant",
-              let message = obj.obj("message"),
-              let usage = message.obj("usage"),
-              let timestamp = obj.date("timestamp")
+    /// Claude assistant JSONL 行的**窄 Decodable**:只宣告解析所需的 metadata / usage 欄位。
+    /// `message.content`、role、tool blocks、attachments 等**未宣告**欄位不會被 decode 成
+    /// 我方持有的物件。DATA_SOURCES.md 的隱私邊界即以此為準:只解宣告過的欄位。
+    struct ClaudeAssistantLine: Decodable {
+        let type: String?
+        let timestamp: String?
+        let requestId: String?
+        let uuid: String?
+        let cwd: String?
+        let message: Message?
+
+        struct Message: Decodable {
+            let id: String?
+            let model: String?
+            let usage: Usage?
+        }
+        struct Usage: Decodable {
+            let input_tokens: Int?
+            let output_tokens: Int?
+            let cache_read_input_tokens: Int?
+            let cache_creation_input_tokens: Int?
+            let cache_creation: CacheCreation?
+        }
+        struct CacheCreation: Decodable {
+            let ephemeral_5m_input_tokens: Int?
+            let ephemeral_1h_input_tokens: Int?
+        }
+    }
+
+    static func parseAssistantLine(_ line: ClaudeAssistantLine, sourcePath: String) -> UsageEvent? {
+        guard line.type == "assistant",
+              let message = line.message,
+              let usage = message.usage,
+              let ts = line.timestamp, let timestamp = ISO8601.parse(ts)
         else { return nil }
 
-        let model = message.str("model")
+        let model = message.model
         if model == "<synthetic>" { return nil }
 
-        let input = usage.int("input_tokens") ?? 0
-        let output = usage.int("output_tokens") ?? 0
-        let cacheRead = usage.int("cache_read_input_tokens") ?? 0
+        let input = usage.input_tokens ?? 0
+        let output = usage.output_tokens ?? 0
+        let cacheRead = usage.cache_read_input_tokens ?? 0
         var write5m = 0
         var write1h = 0
-        if let creation = usage.obj("cache_creation") {
-            write5m = creation.int("ephemeral_5m_input_tokens") ?? 0
-            write1h = creation.int("ephemeral_1h_input_tokens") ?? 0
+        if let creation = usage.cache_creation {
+            write5m = creation.ephemeral_5m_input_tokens ?? 0
+            write1h = creation.ephemeral_1h_input_tokens ?? 0
         }
-        let creationTotal = usage.int("cache_creation_input_tokens") ?? 0
+        let creationTotal = usage.cache_creation_input_tokens ?? 0
         if write5m + write1h == 0, creationTotal > 0 {
             write5m = creationTotal // 無細分時視為 5m 快取(計價時標示為估計)
         }
@@ -265,13 +298,10 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                                     cacheWrite5m: write5m, cacheWrite1h: write1h)
         if tokens.total == 0 { return nil }
 
-        let messageId = message.str("id")
-        let requestId = obj.str("requestId")
-        let uuid = obj.str("uuid")
-        guard let idCore = messageId ?? uuid else { return nil }
-        let id = "cc:\(idCore):\(requestId ?? "-")"
+        guard let idCore = message.id ?? line.uuid else { return nil }
+        let id = "cc:\(idCore):\(line.requestId ?? "-")"
 
-        let cwd = obj.str("cwd")
+        let cwd = line.cwd
         let projectName = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
 
         return UsageEvent(
