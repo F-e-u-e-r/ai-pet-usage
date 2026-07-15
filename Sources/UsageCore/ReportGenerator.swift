@@ -113,7 +113,8 @@ public enum ReportGenerator {
         html += "<section><h2>Projects</h2><table><thead><tr><th>Project</th><th>Tokens</th><th>Est. cost</th><th>Agents</th><th>Top model</th><th>Last active</th><th>Share</th></tr></thead><tbody>"
         for p in data.projects {
             let last = p.lastActive.map { df.string(from: $0) } ?? "—"
-            html += "<tr><td>\(esc(p.projectName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel ?? "—"))</td><td>\(last)</td><td>\(pct(p.shareOfPeriod * 100))</td></tr>"
+            let projName = PrivacyRedaction.displayProjectName(projectName: p.projectName, projectId: p.projectId)
+            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel ?? "—"))</td><td>\(last)</td><td>\(pct(p.shareOfPeriod * 100))</td></tr>"
         }
         if data.projects.isEmpty { html += "<tr><td colspan=\"7\">No usage in this period.</td></tr>" }
         html += "</tbody></table><p class=\"note\">Project names shown; full local paths are redacted by default.</p></section>"
@@ -161,7 +162,7 @@ public enum ReportGenerator {
             html += "<p class=\"note\">No parser errors or stale-data warnings on the last refresh.</p>"
         } else {
             html += "<ul>"
-            for q in data.dataQuality { html += "<li>\(esc(q))</li>" }
+            for q in data.dataQuality { html += "<li>\(esc(PrivacyRedaction.safeDataQuality(q)))</li>" }
             html += "</ul>"
         }
         html += """
@@ -178,7 +179,7 @@ public enum ReportGenerator {
         html += """
         <footer>
         <p>🔒 This report was generated locally by AI Pet Usage. No usage data leaves this machine.
-        Prompts and message contents are never read or included.</p>
+        Prompts and message contents are never extracted, retained, or included.</p>
         </footer>
         </main>
         </body>

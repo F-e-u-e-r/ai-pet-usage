@@ -451,4 +451,34 @@ runSuite("DiagnosticReportTests", [
     ("testCLIDiagNoFilesystemMutation", diagReport.testCLIDiagNoFilesystemMutation),
 ])
 
+let privRedaction = PrivacyRedactionTests()
+runSuite("PrivacyRedactionTests", [
+    ("testDisplayProjectNameNormal", privRedaction.testDisplayProjectNameNormal),
+    ("testDisplayProjectNamePathLikeNameBasenamed", privRedaction.testDisplayProjectNamePathLikeNameBasenamed),
+    ("testDisplayProjectNameNilNameFallsToBasename", privRedaction.testDisplayProjectNameNilNameFallsToBasename),
+    ("testDisplayProjectNameEmpty", privRedaction.testDisplayProjectNameEmpty),
+    ("testDisplayProjectNameWindowsAndUNCBasenamed", privRedaction.testDisplayProjectNameWindowsAndUNCBasenamed),
+    ("testSafeDataQualitySlashFreeSecretsDropped", privRedaction.testSafeDataQualitySlashFreeSecretsDropped),
+    ("testSafeDataQualityKnownTemplateKept", privRedaction.testSafeDataQualityKnownTemplateKept),
+    ("testSafeDataQualityUnparsableInjectedTailDropped", privRedaction.testSafeDataQualityUnparsableInjectedTailDropped),
+    ("testSafeDataQualityDropsRawErrorAndPath", privRedaction.testSafeDataQualityDropsRawErrorAndPath),
+    ("testSafeDataQualityUnknownPathyStringGeneralized", privRedaction.testSafeDataQualityUnknownPathyStringGeneralized),
+    ("testSafeDataQualityCorrectedDropsAbsoluteTime", privRedaction.testSafeDataQualityCorrectedDropsAbsoluteTime),
+    ("testSafeDataQualityPercentUnavailableKeptWithoutPath", privRedaction.testSafeDataQualityPercentUnavailableKeptWithoutPath),
+])
+
+let reportRedaction = ReportRedactionTests()
+runSuite("ReportRedactionTests", [
+    ("testReportNoFullPathWhenProjectNameNil", reportRedaction.testReportNoFullPathWhenProjectNameNil),
+    ("testReportSinkDefensiveAgainstPathName", reportRedaction.testReportSinkDefensiveAgainstPathName),
+    ("testReportNoRawParserError", reportRedaction.testReportNoRawParserError),
+    ("testProjectSummaryBasenamesPathAtSource", reportRedaction.testProjectSummaryBasenamesPathAtSource),
+])
+
+let claudePrivacy = ClaudePrivacyTests()
+runSuite("ClaudePrivacyTests", [
+    ("testClaudeAdapterIgnoresMessageContent", claudePrivacy.testClaudeAdapterIgnoresMessageContent),
+    ("testClaudeAdapterUsesNarrowDecoder", claudePrivacy.testClaudeAdapterUsesNarrowDecoder),
+])
+
 finishTestRun()

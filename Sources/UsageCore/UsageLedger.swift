@@ -279,7 +279,9 @@ public final class UsageLedger {
             let topModel = modelTokens.max { $0.value < $1.value }?.key
             return ProjectSummary(
                 projectId: projectId,
-                projectName: group.last?.projectName ?? projectId,
+                // 隱私:顯示名一律 basename 化(缺名或被塞入路徑時絕不外洩完整 cwd);
+                // projectId 仍保留完整值供穩定分組。UI 與 HTML 皆消費此已淨化的 projectName。
+                projectName: PrivacyRedaction.displayProjectName(projectName: group.last?.projectName, projectId: projectId),
                 tokens: tokens,
                 cost: pricing.cost(of: group),
                 providers: Array(Set(group.map(\.providerId))).sorted(),
