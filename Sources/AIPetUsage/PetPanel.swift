@@ -227,7 +227,8 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     /// 使用者開始拖曳視窗(AppKit:willMove 由使用者拖曳觸發;程式 setFrameOrigin
     /// 只發 didMove)。同步讀旗標(R2 B4/codex:不得走 async Task,程式性移動的
-    /// isWanderMoving 包夾窗口極短,晚讀必誤判)。V2 完全不動(E3 已揭露回彈)。
+    /// isWanderMoving 包夾窗口極短,晚讀必誤判)。V2 路徑改由 beginUserDrag 暫停引擎
+    /// (見下),不再是「完全不動」。
     nonisolated func windowWillMove(_ notification: Notification) {
         MainActor.assumeIsolated {
             if EngineV2.isEnabled {
@@ -255,6 +256,13 @@ final class PetPanelController: NSObject, NSWindowDelegate {
         positionSaveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled, let self, let panel = self.panel else { return }
+            // 0.3s 無 didMove ≠ 放開滑鼠:使用者可能按著瞄準。主鍵仍按下 → 續等(短輪詢),
+            // 絕不在按鍵未放時解除 isUserDragging(grok SEV1:否則引擎會在拖曳中恢復,而
+            // windowWillMove 只在起手觸發一次、後續無法再暫停 → 後半段又被引擎搶回去)。
+            if NSEvent.pressedMouseButtons & (1 << 0) != 0 {
+                self.scheduleV2DragEnd(after: 0.1)
+                return
+            }
             self.userDragActive = false
             self.engineV2Driver?.endUserDrag()   // 落點灌回模擬位置、恢復引擎
             self.reanchorWanderHome()             // 漫遊帶隨落點重錨(V2 同步 rebuildRegions + 夾限)

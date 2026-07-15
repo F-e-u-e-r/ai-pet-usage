@@ -191,6 +191,23 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
         // 使用者拖曳中:整個 tick 全停(不跑物理、不 commit)。視窗位置由 AppKit 背景拖曳獨佔;
         // timer 續跑(cadence 不變),放手後 endUserDrag 續接。governor 不在拖曳期推進 → 不會誤停表。
         if isUserDragging { return }
+        // 游標懸於寵物上(hover / 拖曳起手)→ 暫停 commit,讓移動中的鳥停住可抓(對應 legacy 的
+        // shouldPauseWanderForCursor;grok SEV2)。若視窗已被背景拖曳移動(willMove 未觸發的情況),
+        // 先把模擬同步到視窗當前 origin → 解除暫停時不會 snap 回舊位(回彈)。click-through 不暫停。
+        if let panel, let loop,
+           WanderBand.shouldPauseWanderForCursor(
+               cursorOverPanel: panel.frame.contains(NSEvent.mouseLocation),
+               clickThrough: panel.ignoresMouseEvents) {
+            // 閾值 > 3pt:高於 commit 的 anchorOffset(flyFlap y:−1 等,呈現座標)以免懸停在拍翅
+            // 的鳥上時因 1px 錯位誤觸發一次 teleport(把動量歸零);真實拖曳位移遠大於此(grok SEV2)。
+            let simX = loop.motion.state.position.x - panel.frame.width / 2
+            if abs(panel.frame.origin.x - simX) > 3
+                || abs(panel.frame.origin.y - loop.motion.state.position.y) > 3 {
+                loop.motion.teleport(to: CGPoint(x: panel.frame.origin.x + panel.frame.width / 2,
+                                                 y: panel.frame.origin.y))
+            }
+            return
+        }
         let now = Date()
         updateGovernorPhase(at: now)
         // 深閒置停表(睡眠 5s / quiet‧dock 10s;§2.2):invalidate 後由

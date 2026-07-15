@@ -221,6 +221,7 @@ public final class MotionController: MotionControlling {
         velocity = .zero
         grounded = false
         dragging = false
+        targetVelocity = nil   // 清行為層巡航目標,落點後不立即被舊 cruise 帶走(grok SEV3)。
     }
 
     // MARK: 積分 tick
