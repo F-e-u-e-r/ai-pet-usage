@@ -100,8 +100,12 @@ public final class FeedingEngine {
         return .ok
     }
 
-    public func celebrate(until: Date) {
+    public func celebrate(until: Date, providerId: String? = nil, window: String? = nil,
+                          estimated: Bool = false) {
         state.celebrationUntil = until
+        state.celebrationProviderId = providerId
+        state.celebrationWindow = window
+        state.celebrationEstimated = estimated
         save()
     }
 

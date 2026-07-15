@@ -190,12 +190,18 @@ final class AppModel {
     private func handleTransitions(_ transitions: [LimitTransition]) {
         for transition in transitions {
             switch transition {
-            case let .reset(providerId, window):
+            case let .reset(providerId, window, estimated):
                 if settings.appMode == .full {
-                    feedingEngine.celebrate(until: Date().addingTimeInterval(120))
+                    // 歸因傳給寵物:慶祝訊息要能說出「誰的哪個窗、是否估算」(使用者實測:
+                    // 無歸因的慶祝被誤認成別家 provider 的官方重置)。
+                    feedingEngine.celebrate(until: Date().addingTimeInterval(120),
+                                            providerId: providerId, window: window, estimated: estimated)
                     petState = feedingEngine.state
                 }
-                notify(title: "Quota reset 🎉", body: "\(providerName(providerId)) \(window) window has reset.")
+                notify(title: "Quota reset 🎉",
+                       body: estimated
+                           ? "\(providerName(providerId)) \(window) block has likely reset (estimated from local activity)."
+                           : "\(providerName(providerId)) \(window) window has reset.")
             case let .crossedThreshold(providerId, window, percent, threshold):
                 notify(title: "Usage warning",
                        body: "\(providerName(providerId)) \(window) window at \(Int(min(100, percent)))% (threshold \(Int(threshold))%).")

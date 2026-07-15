@@ -361,6 +361,61 @@ final class MoodEngineTests: XCTestCase {
         let r = MoodEngine.evaluate(dashboard: dash, pet: pet(), warnThreshold: 80, now: now)
         XCTAssertEqual(r.mood, .confused)
     }
+
+    // 慶祝要署名(2026-07-16 實測:無歸因的「quota reset」被誤認成別家 provider 的官方重置)。
+    func testCelebrationAttributionOfficialAndEstimated() {
+        var p = pet()
+        p.celebrationUntil = now.addingTimeInterval(60)
+        p.celebrationProviderId = "codex"
+        p.celebrationWindow = "5h"
+        p.celebrationEstimated = false
+        var r = MoodEngine.evaluate(dashboard: dashboard(five: 30), pet: p, warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .celebration)
+        XCTAssertEqual(r.reason, "CX 5-hour window just reset — celebrating.")
+        XCTAssertEqual(r.shortReason, "CX 5h reset!")
+
+        // 估算邊界:絕不讀起來像官方重置
+        p.celebrationProviderId = "claude-code"
+        p.celebrationEstimated = true
+        r = MoodEngine.evaluate(dashboard: dashboard(five: 30), pet: p, warnThreshold: 80, now: now)
+        XCTAssertEqual(r.reason, "CC 5-hour block likely reset (estimated) — celebrating.")
+        XCTAssertEqual(r.shortReason, "CC 5h ~reset")
+        XCTAssertFalse(r.reason.contains("window just reset"),
+                       "估算邊界不得讀起來像官方重置:\(r.reason)")
+
+        p.celebrationWindow = "weekly"
+        p.celebrationEstimated = false
+        r = MoodEngine.evaluate(dashboard: dashboard(five: 30), pet: p, warnThreshold: 80, now: now)
+        XCTAssertEqual(r.reason, "CC weekly window just reset — celebrating.")
+        XCTAssertEqual(r.shortReason, "CC wk reset!")
+    }
+
+    func testCelebrationWithoutAttributionFallsBackGeneric() {
+        var p = pet()
+        p.celebrationUntil = now.addingTimeInterval(60)
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 30), pet: p, warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .celebration)
+        XCTAssertEqual(r.reason, "A quota just reset — celebrating.")
+        XCTAssertEqual(r.shortReason, "quota reset!")
+    }
+
+    /// 舊版 pet-state.json(無歸因欄位)必須照常解碼(新欄位皆 optional → decodeIfPresent)。
+    func testPetStateBackwardCompatibleDecodeWithoutCelebrationFields() throws {
+        var p = pet(hunger: 42)
+        p.celebrationUntil = now.addingTimeInterval(60)
+        let data = try JSONEncoder().encode(p)
+        var obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        // 模擬舊檔:移除三個新欄位
+        obj.removeValue(forKey: "celebrationProviderId")
+        obj.removeValue(forKey: "celebrationWindow")
+        obj.removeValue(forKey: "celebrationEstimated")
+        let legacy = try JSONSerialization.data(withJSONObject: obj)
+        let decoded = try JSONDecoder().decode(PetStateData.self, from: legacy)
+        XCTAssertEqual(decoded.hunger, 42)
+        XCTAssertNil(decoded.celebrationProviderId)
+        XCTAssertNil(decoded.celebrationWindow)
+        XCTAssertNil(decoded.celebrationEstimated)
+    }
 }
 
 // MARK: - Coordinator 整合冒煙測試(fixtures → refresh → dashboard → 匯出)

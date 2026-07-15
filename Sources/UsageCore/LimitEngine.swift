@@ -286,7 +286,7 @@ public final class LimitEngine {
             // nil-reset 來源沒有窗口邊界可比對,維持既有行為:>20 點驟降即視為翻轉。
             guard observedAt > current.observedAt else { return current }
             if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled {
-                transitions.append(.reset(providerId: providerId, window: windowName))
+                transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
             }
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
                                    observedAt: observedAt, windowMinutes: reading.windowMinutes,
@@ -313,7 +313,7 @@ public final class LimitEngine {
         let incumbentProvablyLive = current.resetsAt.map { $0 > observedAt } ?? false
         if !incumbentProvablyLive {
             if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled {
-                transitions.append(.reset(providerId: providerId, window: windowName))
+                transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
             }
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
                                    observedAt: observedAt, windowMinutes: reading.windowMinutes,
@@ -340,7 +340,7 @@ public final class LimitEngine {
             if p.count >= 2 {
                 // 已確認換窗。expiryHandled 表示 sweepExpiredWindows 已為此窗發過重置,不重複。
                 if current.percent >= 30, p.percent < current.percent - 20, !current.expiryHandled {
-                    transitions.append(.reset(providerId: providerId, window: windowName))
+                    transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
                 }
                 return PersistedWindow(percent: p.percent, resetsAt: p.resetsAt,
                                        observedAt: p.observedAt, windowMinutes: p.windowMinutes,
@@ -391,7 +391,8 @@ public final class LimitEngine {
                       resetsAt < now, !w.expiryHandled else { continue }
                 if w.percent >= 30 {
                     transitions.append(.reset(providerId: providerId,
-                                              window: keyPath == \PersistedProvider.primary ? "5h" : "weekly"))
+                                              window: keyPath == \PersistedProvider.primary ? "5h" : "weekly",
+                                              estimated: false))
                 }
                 w.expiryHandled = true
                 if keyPath == \PersistedProvider.primary { provider.primary = w } else { provider.secondary = w }
@@ -409,13 +410,22 @@ public final class LimitEngine {
     // MARK: - Claude 估算窗口的重置偵測
 
     /// 估算型(帳本推導)5h 區塊結束時觸發重置轉變。
-    public func noteEstimatedBlock(providerId: String, blockEnd: Date?, blockTokens: Int, now: Date = Date()) -> [LimitTransition] {
+    ///
+    /// `lastEventAt`:該 provider 帳本最新事件時間(顯示端仲裁同款證據)。官方 5h 窗口仍在
+    /// 治理(`hasUsableWindow`,與顯示端**同一條規則**)時,估算邊界**不得**發 reset ——
+    /// 否則 dashboard 說「官方 36%、18:20 重置」而寵物在 18:00 慶祝估算邊界,自相矛盾且
+    /// 讓估算裝成官方事實(2026-07-16 使用者實測回報:提前 20 分鐘假慶祝)。
+    /// 被壓下時仍標記 `estimatedResetHandled`:官方稍後過期也不得補發這個已成陳舊消息的邊界。
+    public func noteEstimatedBlock(providerId: String, blockEnd: Date?, blockTokens: Int,
+                                   lastEventAt: Date? = nil, now: Date = Date()) -> [LimitTransition] {
         var provider = store[providerId] ?? PersistedProvider()
         var transitions: [LimitTransition] = []
         var changed = false
         if let storedEnd = provider.estimatedBlockEnd, now > storedEnd,
            (provider.estimatedBlockTokens ?? 0) > 0, provider.estimatedResetHandled != true {
-            transitions.append(.reset(providerId: providerId, window: "5h"))
+            if !hasUsableWindow(provider.primary, now: now, lastEventAt: lastEventAt) {
+                transitions.append(.reset(providerId: providerId, window: "5h", estimated: true))
+            }
             provider.estimatedResetHandled = true
             changed = true
         }

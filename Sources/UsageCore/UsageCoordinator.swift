@@ -314,6 +314,7 @@ public actor UsageCoordinator {
             transitions += limits.noteEstimatedBlock(providerId: "claude-code",
                                                      blockEnd: block?.end,
                                                      blockTokens: block?.tokens ?? 0,
+                                                     lastEventAt: ledger.newestEvent(providerId: "claude-code")?.timestamp,
                                                      now: now)
         }
 

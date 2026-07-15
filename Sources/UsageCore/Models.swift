@@ -248,7 +248,9 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
 
 /// 限額引擎在單次刷新中偵測到的重要轉變(供寵物/通知使用)。
 public enum LimitTransition: Sendable, Hashable {
-    case reset(providerId: String, window: String)
+    /// `estimated`:此重置是帳本推導的估算邊界(noteEstimatedBlock),非 provider 讀數;
+    /// 下游呈現(通知/寵物慶祝)必須標示,估算絕不得讀起來像官方事實。
+    case reset(providerId: String, window: String, estimated: Bool)
     case crossedThreshold(providerId: String, window: String, percent: Double, threshold: Double)
     case exhausted(providerId: String, window: String)
 }

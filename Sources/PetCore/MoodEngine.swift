@@ -117,8 +117,27 @@ public enum MoodEngine {
                           reason: "Eating now.", shortReason: "eating now")
         }
         if let until = pet.celebrationUntil, until > now {
+            // 慶祝要署名(哪家 provider 的哪個窗)+ 標示估算邊界:無歸因的「quota reset」會被
+            // 誤認成別家 provider(使用者實測:Codex/估算事件被讀成 Claude);估算絕不裝官方。
+            let reason: String
+            let short: String
+            if let pid = pet.celebrationProviderId, let win = pet.celebrationWindow {
+                let code = shortProviderCode(pid)
+                let winFull = win == "5h" ? "5-hour" : win
+                let winShort = win == "weekly" ? "wk" : win
+                if pet.celebrationEstimated == true {
+                    reason = "\(code) \(winFull) block likely reset (estimated) — celebrating."
+                    short = "\(code) \(winShort) ~reset"
+                } else {
+                    reason = "\(code) \(winFull) window just reset — celebrating."
+                    short = "\(code) \(winShort) reset!"
+                }
+            } else {
+                reason = "A quota just reset — celebrating."
+                short = "quota reset!"
+            }
             return Result(mood: .celebration, animationSpeed: 1.6, summary: "Quota reset! " + summary,
-                          reason: "A quota just reset — celebrating.", shortReason: "quota reset!")
+                          reason: reason, shortReason: short)
         }
         if anyExhausted {
             // 取「最嚴重窗百分比最高」的耗盡 provider(平手以 providerId 穩定排序);原因帶窗+值+provenance,

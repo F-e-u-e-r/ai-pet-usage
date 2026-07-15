@@ -102,6 +102,8 @@ runSuite("LimitEngineTests", [
     ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
     ("testClaudeIdleFiveHourShowsIdleNotFakePercent", limits.testClaudeIdleFiveHourShowsIdleNotFakePercent),
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
+    ("testEstimatedResetSuppressedWhenOfficialWindowGoverns", limits.testEstimatedResetSuppressedWhenOfficialWindowGoverns),
+    ("testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning", limits.testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning),
     // 同窗官方下修(二筆確認;DATA_SOURCES policy 通道 (c))
     ("testSameWindowSingleLowerReadingStaysPinned", limits.testSameWindowSingleLowerReadingStaysPinned),
     ("testSameWindowDecreaseAdoptsAfterTwoNewerReadings", limits.testSameWindowDecreaseAdoptsAfterTwoNewerReadings),
@@ -180,6 +182,9 @@ runSuite("MoodEngineTests", [
     ("testEveryMoodHasNonEmptyReason", moodTests.testEveryMoodHasNonEmptyReason),
     ("testTiredWeeklyReasonCarriesProvenance", moodTests.testTiredWeeklyReasonCarriesProvenance),
     ("testWarningTriggerPicksHighestProvider", moodTests.testWarningTriggerPicksHighestProvider),
+    ("testCelebrationAttributionOfficialAndEstimated", moodTests.testCelebrationAttributionOfficialAndEstimated),
+    ("testCelebrationWithoutAttributionFallsBackGeneric", moodTests.testCelebrationWithoutAttributionFallsBackGeneric),
+    ("testPetStateBackwardCompatibleDecodeWithoutCelebrationFields", moodTests.testPetStateBackwardCompatibleDecodeWithoutCelebrationFields),
 ])
 
 let integration = CoordinatorIntegrationTests()
