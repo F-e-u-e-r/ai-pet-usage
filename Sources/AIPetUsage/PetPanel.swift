@@ -610,7 +610,7 @@ struct PetView: View {
                     }
                     showBubble(bubblePageText(bubble.page), seconds: 6)
                 }
-                .help(PetInfo.tooltip)
+                .help("\(PetInfo.tooltip)\n\nNow: \(model.mood.mood.rawValue) — \(model.mood.reason)")
                 .contextMenu { PetContextMenu() }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 6)
@@ -673,9 +673,11 @@ struct PetView: View {
             }
             return lines.isEmpty ? "no usage data yet" : lines.joined(separator: "\n")
         case 1:
-            // R2 B3:縮短最寬行(codex 實算 64pt 面板下 "treats N · burn X/h" 溢出)。
+            // 「pet」頁:一行**精簡**原因(item 8;心情名冗餘於 sprite/badge,略去)+ Lv/full/treats/burn。
+            // 完整 prose 在 Dashboard 卡;泡塊極窄故用 shortReason(誠實:estimated 帶 `~…% est` 標記)。
             let pet = model.petState
-            return "Lv.\(pet.level) · fullness \(Int(pet.hunger))%\n"
+            return "\(model.mood.shortReason)\n"
+                + "Lv.\(pet.level) · full \(Int(pet.hunger))%\n"
                 + "\(model.treatsAvailable) treats · \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
         default:
             let refreshed = timeAgo(model.dashboard.lastRefreshAt)

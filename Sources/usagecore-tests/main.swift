@@ -166,6 +166,20 @@ runSuite("MoodEngineTests", [
     ("testTransientStatesBeatEverything", moodTests.testTransientStatesBeatEverything),
     ("testBurnRateDrivesAnimationSpeed", moodTests.testBurnRateDrivesAnimationSpeed),
     ("testNoDataMakesConfused", moodTests.testNoDataMakesConfused),
+    ("testWarningReasonIsProviderReportedWithValues", moodTests.testWarningReasonIsProviderReportedWithValues),
+    ("testWarningReasonEstimatedNotShownAsOfficial", moodTests.testWarningReasonEstimatedNotShownAsOfficial),
+    ("testSleepingReasonIncludesIdleMinutes", moodTests.testSleepingReasonIncludesIdleMinutes),
+    ("testHungryReasonUsesFullness", moodTests.testHungryReasonUsesFullness),
+    ("testExhaustedReasonHasWindowValueProvenance", moodTests.testExhaustedReasonHasWindowValueProvenance),
+    ("testExhaustedEstimatedNotShownAsOfficial", moodTests.testExhaustedEstimatedNotShownAsOfficial),
+    ("testExhaustedRanksRawDoubleNotRounded", moodTests.testExhaustedRanksRawDoubleNotRounded),
+    ("testShortReasonEstimatedIsMarked", moodTests.testShortReasonEstimatedIsMarked),
+    ("testShortReasonProviderReportedIsBare", moodTests.testShortReasonProviderReportedIsBare),
+    ("testNoProvidersReasonDistinctFromSleeping", moodTests.testNoProvidersReasonDistinctFromSleeping),
+    ("testErrorReasonSeparateFromStale", moodTests.testErrorReasonSeparateFromStale),
+    ("testEveryMoodHasNonEmptyReason", moodTests.testEveryMoodHasNonEmptyReason),
+    ("testTiredWeeklyReasonCarriesProvenance", moodTests.testTiredWeeklyReasonCarriesProvenance),
+    ("testWarningTriggerPicksHighestProvider", moodTests.testWarningTriggerPicksHighestProvider),
 ])
 
 let integration = CoordinatorIntegrationTests()

@@ -1059,7 +1059,7 @@ public enum PetInfo {
     public static let tooltip = """
     The pet mirrors your real AI usage — it is not a health or productivity tracker.
     • focused / idle / sleeping follow recent activity in your local logs
-    • warning / exhausted mirror official 5h & weekly limit pressure
+    • warning / exhausted follow 5h & weekly limit pressure (provider-reported or estimated, as labelled)
     • Lv & XP grow from real work (capped daily; no reward for burning tokens)
     • fullness is a care mechanic only — feed with treats earned by active work time
     """

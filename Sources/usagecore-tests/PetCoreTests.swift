@@ -136,6 +136,199 @@ final class MoodEngineTests: XCTestCase {
         XCTAssertEqual(r.mood, .idle)
     }
 
+    // 同 helper 但把 5h 窗設為 estimated(其餘 .high)。
+    private func dashboardEstimatedFive(_ five: Double) -> DashboardState {
+        let limit = ProviderLimitState(
+            providerId: "codex",
+            fiveHour: LimitWindowState(usedPercent: five, windowMinutes: 300, confidence: .estimated),
+            weekly: LimitWindowState(usedPercent: 20, windowMinutes: 10080, confidence: .high),
+            burnRateTokensPerHour: 0, lastEventAt: now.addingTimeInterval(-300), warning: .ok)
+        let snap = UsageSnapshot(providerId: "codex", displayName: "Codex", status: .healthy, sourceDescription: "t")
+        return DashboardState(generatedAt: now, snapshots: [snap], limitStates: [limit],
+                              todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                              burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [],
+                              topProjects: [], models: [], dataQuality: [], lastRefreshAt: now)
+    }
+
+    // MARK: - reason(item 8:為何是這個心情)
+
+    func testWarningReasonIsProviderReportedWithValues() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 85), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.reason.contains("provider-reported"), r.reason)
+        XCTAssertTrue(r.reason.contains("85%"), r.reason)
+        XCTAssertTrue(r.reason.contains("warn at 80%"), r.reason)
+        XCTAssertTrue(r.reason.contains("5-hour"), r.reason)
+    }
+
+    // provenance:estimated 的百分比絕不呈現得像 provider-reported(cross-model SEV1)。
+    func testWarningReasonEstimatedNotShownAsOfficial() {
+        let r = MoodEngine.evaluate(dashboard: dashboardEstimatedFive(85), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.reason.contains("estimated"), r.reason)
+        XCTAssertFalse(r.reason.contains("provider-reported"), "an estimated % must not read as provider-reported: \(r.reason)")
+    }
+
+    func testSleepingReasonIncludesIdleMinutes() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 30, lastEventMinutesAgo: 60),
+                                    pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .sleeping)
+        XCTAssertTrue(r.reason.contains("60"), r.reason)
+        XCTAssertTrue(r.reason.lowercased().contains("idle"), r.reason)
+    }
+
+    func testHungryReasonUsesFullness() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 30), pet: pet(hunger: 20), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .hungry)
+        XCTAssertTrue(r.reason.contains("Fullness 20%"), r.reason)
+    }
+
+    func testExhaustedReasonHasWindowValueProvenance() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 100, warning: .exhausted),
+                                    pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .exhausted)
+        XCTAssertTrue(r.reason.contains("provider-reported"), r.reason)
+        XCTAssertTrue(r.reason.contains("100%"), r.reason)
+        XCTAssertTrue(r.reason.contains("limit reached"), r.reason)
+        XCTAssertTrue(r.reason.contains("5-hour"), r.reason)
+    }
+
+    // codex SEV1:exhausted 也可能來自 estimated budget → 絕不呈現得像官方事實。
+    func testExhaustedEstimatedNotShownAsOfficial() {
+        let limit = ProviderLimitState(
+            providerId: "claude-code",
+            fiveHour: LimitWindowState(usedPercent: 100, windowMinutes: 300, confidence: .estimated),
+            weekly: LimitWindowState(usedPercent: 20, windowMinutes: 10080, confidence: .high),
+            burnRateTokensPerHour: 0, lastEventAt: now.addingTimeInterval(-300), warning: .exhausted)
+        let snap = UsageSnapshot(providerId: "claude-code", displayName: "Claude Code", status: .healthy, sourceDescription: "t")
+        let dash = DashboardState(generatedAt: now, snapshots: [snap], limitStates: [limit],
+                                  todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                                  burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [],
+                                  topProjects: [], models: [], dataQuality: [], lastRefreshAt: now)
+        let r = MoodEngine.evaluate(dashboard: dash, pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .exhausted)
+        XCTAssertTrue(r.reason.contains("estimated"), r.reason)
+        XCTAssertFalse(r.reason.contains("provider-reported"), "estimated exhaustion must not read as official: \(r.reason)")
+    }
+
+    // codex SEV1(round-2):排名須用原始 Double。claude-code 99.6% 與 codex 100.0% 四捨五入後皆 100;
+    // 若以 Int 排名會平手 → providerId「claude-code」誤勝;以原始值排名則 codex(100.0)勝出。
+    func testExhaustedRanksRawDoubleNotRounded() {
+        func lim(_ pid: String, _ five: Double) -> ProviderLimitState {
+            ProviderLimitState(providerId: pid,
+                fiveHour: LimitWindowState(usedPercent: five, windowMinutes: 300, confidence: .high),
+                weekly: LimitWindowState(usedPercent: 10, windowMinutes: 10080, confidence: .high),
+                burnRateTokensPerHour: 0, lastEventAt: now.addingTimeInterval(-300), warning: .exhausted)
+        }
+        let snaps = [UsageSnapshot(providerId: "claude-code", displayName: "Claude Code", status: .healthy, sourceDescription: "t"),
+                     UsageSnapshot(providerId: "codex", displayName: "Codex", status: .healthy, sourceDescription: "t")]
+        let dash = DashboardState(generatedAt: now, snapshots: snaps,
+                                  limitStates: [lim("claude-code", 99.6), lim("codex", 100.0)],
+                                  todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                                  burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [],
+                                  topProjects: [], models: [], dataQuality: [], lastRefreshAt: now)
+        let r = MoodEngine.evaluate(dashboard: dash, pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .exhausted)
+        XCTAssertTrue(r.reason.hasPrefix("CX"), "raw ranking must name codex (100.0), not claude-code (99.6): \(r.reason)")
+        XCTAssertTrue(r.reason.contains("+1 more"), r.reason)
+    }
+
+    func testNoProvidersReasonDistinctFromSleeping() {
+        let empty = DashboardState(generatedAt: now, snapshots: [], limitStates: [],
+                                   todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                                   burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [],
+                                   topProjects: [], models: [], dataQuality: [], lastRefreshAt: now)
+        let r = MoodEngine.evaluate(dashboard: empty, pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .confused, "empty snapshots → confused, not sleeping")
+        XCTAssertEqual(r.reason, "No providers detected yet.")
+    }
+
+    func testErrorReasonSeparateFromStale() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 30, status: .error), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .confused)
+        XCTAssertTrue(r.reason.lowercased().contains("couldn't be read") || r.reason.lowercased().contains("read"), r.reason)
+        XCTAssertFalse(r.reason.lowercased().contains("stale"), "an error is not the same as stale: \(r.reason)")
+    }
+
+    func testEveryMoodHasNonEmptyReason() {
+        func check(_ d: DashboardState, _ p: PetStateData, _ label: String) {
+            let r = MoodEngine.evaluate(dashboard: d, pet: p, warnThreshold: 80, now: now)
+            XCTAssertFalse(r.reason.isEmpty, "\(label) → \(r.mood) has empty reason")
+            XCTAssertFalse(r.shortReason.isEmpty, "\(label) → \(r.mood) has empty shortReason")
+        }
+        var eatingPet = pet(); eatingPet.eatingUntil = now.addingTimeInterval(60)
+        var celebPet = pet(); celebPet.celebrationUntil = now.addingTimeInterval(60)
+        var happyPet = pet(); happyPet.happyUntil = now.addingTimeInterval(60)
+        check(dashboard(five: 30), eatingPet, "eating")
+        check(dashboard(five: 30), celebPet, "celebration")
+        check(dashboard(five: 100, warning: .exhausted), pet(), "exhausted")
+        check(dashboard(five: 85), pet(), "warning")
+        check(dashboard(five: 30, weekly: 85), pet(), "tired")
+        check(dashboard(five: 30, status: .stale), pet(), "confused-stale")
+        check(dashboard(five: 30, status: .error), pet(), "confused-error")
+        check(dashboard(five: 30, lastEventMinutesAgo: 60), pet(), "sleeping")
+        check(dashboard(five: 30), pet(hunger: 20), "hungry")
+        check(dashboard(five: 30, lastEventMinutesAgo: 5), happyPet, "happy")
+        check(dashboard(five: 30, lastEventMinutesAgo: 5), pet(), "focused")
+        check(dashboard(five: 30, lastEventMinutesAgo: 20), pet(), "idle")
+    }
+
+    // 泡泡 shortReason 誠實守則:estimated 的百分比一律帶 `~`+`est` 標記(絕不裸露官方外觀)。
+    func testShortReasonEstimatedIsMarked() {
+        let r = MoodEngine.evaluate(dashboard: dashboardEstimatedFive(85), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.shortReason.contains("est"), r.shortReason)
+        XCTAssertTrue(r.shortReason.contains("~"), r.shortReason)
+        XCTAssertTrue(r.shortReason.contains("85%"), r.shortReason)
+    }
+
+    // provider-reported 是官方真值,short 可裸露 %(且**不得**被標成 estimated)。
+    func testShortReasonProviderReportedIsBare() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 85), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.shortReason.contains("85%"), r.shortReason)
+        XCTAssertFalse(r.shortReason.contains("est"), "official value must not be tagged estimated: \(r.shortReason)")
+        XCTAssertFalse(r.shortReason.contains("~"), r.shortReason)
+    }
+
+    func testTiredWeeklyReasonCarriesProvenance() {
+        let limit = ProviderLimitState(
+            providerId: "claude-code",
+            fiveHour: LimitWindowState(usedPercent: 10, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(usedPercent: 88, windowMinutes: 10080, confidence: .estimated),
+            burnRateTokensPerHour: 0, lastEventAt: now.addingTimeInterval(-300), warning: .ok)
+        let snap = UsageSnapshot(providerId: "claude-code", displayName: "Claude Code", status: .healthy, sourceDescription: "t")
+        let dash = DashboardState(generatedAt: now, snapshots: [snap], limitStates: [limit],
+                                  todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                                  burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [],
+                                  topProjects: [], models: [], dataQuality: [], lastRefreshAt: now)
+        let r = MoodEngine.evaluate(dashboard: dash, pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .tired)
+        XCTAssertTrue(r.reason.contains("weekly"), r.reason)
+        XCTAssertTrue(r.reason.contains("estimated"), r.reason)
+        XCTAssertTrue(r.reason.contains("88%"), r.reason)
+    }
+
+    func testWarningTriggerPicksHighestProvider() {
+        func lim(_ pid: String, _ five: Double) -> ProviderLimitState {
+            ProviderLimitState(providerId: pid,
+                fiveHour: LimitWindowState(usedPercent: five, windowMinutes: 300, confidence: .high),
+                weekly: LimitWindowState(usedPercent: 10, windowMinutes: 10080, confidence: .high),
+                burnRateTokensPerHour: 0, lastEventAt: now.addingTimeInterval(-300), warning: .ok)
+        }
+        let snaps = [UsageSnapshot(providerId: "codex", displayName: "Codex", status: .healthy, sourceDescription: "t"),
+                     UsageSnapshot(providerId: "claude-code", displayName: "Claude Code", status: .healthy, sourceDescription: "t")]
+        let dash = DashboardState(generatedAt: now, snapshots: snaps,
+                                  limitStates: [lim("codex", 82), lim("claude-code", 90)],
+                                  todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                                  burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [],
+                                  topProjects: [], models: [], dataQuality: [], lastRefreshAt: now)
+        let r = MoodEngine.evaluate(dashboard: dash, pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.reason.contains("90%"), "names the highest (90%), not 82%: \(r.reason)")
+        XCTAssertFalse(r.reason.contains("82%"), r.reason)
+    }
+
     func testTransientStatesBeatEverything() {
         var p = pet()
         p.eatingUntil = now.addingTimeInterval(3)
