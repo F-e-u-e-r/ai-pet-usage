@@ -503,6 +503,7 @@ runSuite("ReportRedactionTests", [
     ("testUnparsableCountIsPositional", reportRedaction.testUnparsableCountIsPositional),
     ("testDisplayModelIdAndSafeLabel", reportRedaction.testDisplayModelIdAndSafeLabel),
     ("testAbsolutePathScrubCatchesSchemeAndEmbeddedForms", reportRedaction.testAbsolutePathScrubCatchesSchemeAndEmbeddedForms),
+    ("testAbsolutePathScrubTildeUserAndFileHost", reportRedaction.testAbsolutePathScrubTildeUserAndFileHost),
     ("testProjectSummaryBasenamesPathAtSource", reportRedaction.testProjectSummaryBasenamesPathAtSource),
 ])
 

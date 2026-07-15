@@ -233,6 +233,22 @@ final class ReportRedactionTests: XCTestCase {
                        "openrouter/anthropic/claude-x")
     }
 
+    // grok SEV2 round-3:`~alice/…`(r3 收緊時回歸)與 `file://localhost/...`(主機形)也要攔。
+    func testAbsolutePathScrubTildeUserAndFileHost() throws {
+        XCTAssertEqual(PrivacyRedaction.safeLabel("~alice/SecretClient/prices.json"),
+                       "custom (path redacted)")
+        XCTAssertEqual(PrivacyRedaction.displayModelId("~alice/SecretClient/model.bin"), "model.bin")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("file://localhost/Users/alice/SecretClient/prices.json"),
+                       "custom (path redacted)")
+        XCTAssertEqual(PrivacyRedaction.displayModelId("file://localhost/Users/alice/SecretClient/model.bin"),
+                       "model.bin")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("FILE://X/Users/alice/s.txt"),
+                       "custom (path redacted)", "scheme 大小寫不影響")
+        // ~5 仍不誤中(數字不是使用者名);孤立 ~ 無路徑主體也不誤中
+        XCTAssertEqual(PrivacyRedaction.safeLabel("approx ~5 min"), "approx ~5 min")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("tilde ~ alone"), "tilde ~ alone")
+    }
+
     func testProjectSummaryBasenamesPathAtSource() throws {
         let ledger = UsageLedger(fileURL: nil)
         let ts = Date(timeIntervalSince1970: 1_700_000_100)

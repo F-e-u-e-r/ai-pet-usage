@@ -96,17 +96,19 @@ public enum PrivacyRedaction {
         return Int(match[d])
     }
 
-    /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok SEV2 round-2:token 前綴判定漏掉
-    /// `file:///Users/…` 與 `x=/Users/…` 這類嵌入形)。步驟:
-    /// 1. 剝掉 URL scheme(`file://` 等)→ scheme 後的絕對路徑同樣受測;
-    /// 2. 掃描「分隔字元(或字串開頭)後緊接路徑起始」:`/x`、`~/`、`C:\`、`\\`(UNC)。
-    /// 合法的 `vendor/model`、`anthropic.com/pricing`、`https://example.com/docs`(descheme 後
-    /// `example.com/docs` 的斜線前是字母)都不會誤中;`~5 min` 的孤立 `~` 不算(須 `~/`)。
+    /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok SEV2 round-2/3 迭代)。步驟:
+    /// 1. **非 file** 的 URL(https 等)整串移除 —— 網址不是本機路徑,留著路徑段會誤中(`/docs`);
+    /// 2. `file:` URL 剝掉 scheme+authority(含 `file://localhost/...` 主機形)→ 路徑主體受測;
+    /// 3. 掃描「分隔字元(或字串開頭)後緊接路徑起始」:`/x`、`~/`、`~user/`(grok round-3:
+    ///    `~alice/...` 是正常絕對路徑形,r3 曾回歸漏掉)、`C:\`、`\\`(UNC)。
+    /// 不誤中:`vendor/model`、`anthropic.com/pricing`、`https://example.com/docs`、`~5 min`。
     static func containsAbsolutePath(_ s: String) -> Bool {
-        let deschemed = s.replacingOccurrences(of: #"[A-Za-z][A-Za-z0-9+.\-]*://"#,
-                                               with: " ", options: .regularExpression)
-        return deschemed.range(of: #"(^|[\s=:'"`(<\[{])(/[^\s/]|~[/\\]|[A-Za-z]:[/\\]|\\\\)"#,
-                               options: .regularExpression) != nil
+        var t = s.replacingOccurrences(of: #"(?i)\b(?!file:)[a-z][a-z0-9+.\-]*://\S*"#,
+                                       with: " ", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?i)\bfile://[^/\s]*"#,
+                                   with: " ", options: .regularExpression)
+        return t.range(of: #"(^|[\s=:'"`(<\[{])(/[^\s/]|~[/\\]|~[A-Za-z_][A-Za-z0-9_.\-]*[/\\]|[A-Za-z]:[/\\]|\\\\)"#,
+                       options: .regularExpression) != nil
     }
 
     /// 模型 ID 的 sink 端防護:合法 ID(`claude-fable-5`、`vendor/model` 相對形)原樣;
