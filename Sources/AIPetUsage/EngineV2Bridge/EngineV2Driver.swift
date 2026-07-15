@@ -38,6 +38,9 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
     private var screenObserver: NSObjectProtocol?
     /// 相位觀察是否已註冊(withObservationTracking 為一次性,觸發後須重掛)。
     private var phaseWatchArmed = false
+    /// 使用者拖曳中:tick 全停(不跑物理、不 commit),讓 isMovableByWindowBackground 背景拖曳
+    /// 獨佔視窗位置;放手後 endUserDrag 把落點灌回模擬,避免 30Hz commit 把視窗 snap 回舊位(回彈)。
+    private var isUserDragging = false
 
     init(panel: NSPanel, model: AppModel?, controller: PetPanelController? = nil) {
         self.panel = panel
@@ -185,6 +188,9 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
     }
 
     private func tick() {
+        // 使用者拖曳中:整個 tick 全停(不跑物理、不 commit)。視窗位置由 AppKit 背景拖曳獨佔;
+        // timer 續跑(cadence 不變),放手後 endUserDrag 續接。governor 不在拖曳期推進 → 不會誤停表。
+        if isUserDragging { return }
         let now = Date()
         updateGovernorPhase(at: now)
         // 深閒置停表(睡眠 5s / quiet‧dock 10s;§2.2):invalidate 後由
@@ -278,6 +284,27 @@ final class EngineV2Driver: NSObject, @preconcurrency PosePresenting {
     func wanderBandDidChange() {
         guard EngineV2.isEnabled else { return }
         rebuildRegions()
+    }
+
+    // MARK: - 使用者拖曳(由 PetPanelController 的視窗移動 delegate 驅動)
+
+    /// 拖曳開始:暫停引擎(tick 全停)→ commit 不再與背景拖曳搶視窗位置。
+    /// governor 設為 active,避免拖曳期間(tick 停)累積閒置而放手後立刻停表。
+    func beginUserDrag() {
+        isUserDragging = true
+        governor.setPhase(.active, at: Date())
+    }
+
+    /// 拖曳結束:把視窗當前 origin(使用者落點)灌回模擬位置(底部中心錨),恢復引擎。
+    /// lastTickAt 清空 → 下一 tick 以預設 dt 起步,不因暫停期累積出暴衝 dt。落點的帶重錨/
+    /// 夾限由控制器隨後的 reanchorWanderHome()(→ wanderBandDidChange → rebuildRegions)完成。
+    func endUserDrag() {
+        isUserDragging = false
+        lastTickAt = nil
+        governor.setPhase(.active, at: Date())
+        guard let panel, let loop else { return }
+        let o = panel.frame.origin
+        loop.motion.teleport(to: CGPoint(x: o.x + panel.frame.width / 2, y: o.y))
     }
 
     // MARK: - PosePresenting(單一寫入者:每 tick 恰一次 origin 寫入)
