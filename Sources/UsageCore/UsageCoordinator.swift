@@ -297,7 +297,8 @@ public actor UsageCoordinator {
                 let (result, newState) = try adapter.refreshUsage(state: state)
                 scanStates[adapter.providerId] = newState
                 inserted += ledger.append(result.events)
-                transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: fullReindex)
+                transitions += limits.ingest(readings: result.rateLimits, settings: settings,
+                                             fullReindex: fullReindex, now: now)
                 parseErrorCounts[adapter.providerId] = result.parseErrors
                 refreshErrors[adapter.providerId] = nil
             } catch {
@@ -314,8 +315,11 @@ public actor UsageCoordinator {
             transitions += limits.noteEstimatedBlock(providerId: "claude-code",
                                                      blockEnd: block?.end,
                                                      blockTokens: block?.tokens ?? 0,
+                                                     lastEventAt: ledger.newestEvent(providerId: "claude-code")?.timestamp,
                                                      now: now)
         }
+        // 官方與估算同窗撞 reset → 留官方(估算不得蓋掉官方歸因)。
+        transitions = LimitEngine.preferOfficialResets(transitions)
 
         try? AtomicJSON.write(scanStates, to: scanStateURL)
         lastRefreshAt = now

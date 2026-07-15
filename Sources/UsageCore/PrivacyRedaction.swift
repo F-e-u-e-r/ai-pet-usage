@@ -37,14 +37,18 @@ public enum PrivacyRedaction {
             return msg
         }
 
+        // 「refresh error」必須**最先**判:其 err 段是任意原文,可能內嵌其他樣板關鍵詞。
+        // 例:`codex: refresh error — unparsable line at /Users/alice/client-88421/log` 若先判
+        // unparsable,firstInt 會把路徑裡的 88421 當 count 回顯(路徑衍生識別碼外洩,codex SEV1)。
+        if lower.contains("refresh error") { return prefixed("refresh error") }
         if lower.contains("unparsable line") {
             // fail-closed:**絕不** return raw(否則被塞入 "unparsable line SECRET /Users/…" 會原樣洩漏)。
-            // 只結構化取出開頭整數 count,重建固定文字,其餘一律丟棄。
-            let count = firstInt(raw)
+            // count **位置化**擷取:只認「unparsable line」緊前的整數(app 樣板的固定位置),
+            // 不掃全字串(任意處的數字可能來自被嵌入的路徑/錯誤文字)。
+            let count = countBeforeUnparsable(raw)
             return prefixed(count.map { "\($0) unparsable line(s) skipped on last scan" }
                 ?? "unparsable line(s) skipped on last scan")
         }
-        if lower.contains("refresh error") { return prefixed("refresh error") }
         if lower.contains("history kept") { return prefixed("history kept (provider unavailable during reindex)") }
         if lower.contains("percent unavailable") {
             return prefixed("usage percent unavailable (install the statusline hook or set a token budget)")
@@ -76,9 +80,49 @@ public enum PrivacyRedaction {
         return parts.last.map(String.init) ?? ""
     }
 
-    /// 取字串中第一段連續數字(供重建 count 用);無則 nil。
+    /// 取字串中第一段連續數字;無則 nil。
     static func firstInt(_ s: String) -> Int? {
         guard let range = s.range(of: "[0-9]+", options: .regularExpression) else { return nil }
         return Int(s[range])
+    }
+
+    /// 「unparsable line」**緊前**的整數(app 樣板 `N unparsable line(s)` 的固定位置);
+    /// 其他位置的數字(如被嵌入路徑裡的)一律不取。
+    static func countBeforeUnparsable(_ s: String) -> Int? {
+        guard let r = s.range(of: #"[0-9]+\s+unparsable line"#,
+                              options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let match = s[r]
+        guard let d = match.range(of: "[0-9]+", options: .regularExpression) else { return nil }
+        return Int(match[d])
+    }
+
+    /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok SEV2 round-2/3 迭代)。步驟:
+    /// 1. **非 file** 的 URL(https 等)整串移除 —— 網址不是本機路徑,留著路徑段會誤中(`/docs`);
+    /// 2. `file:` URL 剝掉 scheme+authority(含 `file://localhost/...` 主機形)→ 路徑主體受測;
+    /// 3. 掃描「分隔字元(或字串開頭)後緊接路徑起始」:`/x`、`~/`、`~user/`(grok round-3:
+    ///    `~alice/...` 是正常絕對路徑形,r3 曾回歸漏掉)、`C:\`、`\\`(UNC)。
+    /// 不誤中:`vendor/model`、`anthropic.com/pricing`、`https://example.com/docs`、`~5 min`。
+    static func containsAbsolutePath(_ s: String) -> Bool {
+        var t = s.replacingOccurrences(of: #"(?i)\b(?!file:)[a-z][a-z0-9+.\-]*://\S*"#,
+                                       with: " ", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?i)\bfile://[^/\s]*"#,
+                                   with: " ", options: .regularExpression)
+        return t.range(of: #"(^|[\s=:'"`(<\[{])(/[^\s/]|~[/\\]|~[A-Za-z_][A-Za-z0-9_.\-]*[/\\]|[A-Za-z]:[/\\]|\\\\)"#,
+                       options: .regularExpression) != nil
+    }
+
+    /// 模型 ID 的 sink 端防護:合法 ID(`claude-fable-5`、`vendor/model` 相對形)原樣;
+    /// 內嵌**絕對路徑形狀**的 ID(損壞/惡意日誌、覆寫檔筆誤、`file://` URL)→ basename。
+    public static func displayModelId(_ s: String) -> String {
+        guard containsAbsolutePath(s) else { return s }
+        let base = lastPathSegment(s)
+        return base.isEmpty ? "(redacted path)" : base
+    }
+
+    /// 描述性標籤(定價來源、effectiveFrom 等,含使用者覆寫檔的任意字串)的 sink 端防護:
+    /// 內嵌絕對路徑(含 `file://` 形)→ 整串收斂為固定字樣(fail-closed;標籤只具參考性,
+    /// 不值得為了保留部分字面而冒路徑外洩險)。合法內建標籤(`anthropic.com/pricing …`)不受影響。
+    public static func safeLabel(_ s: String, fallback: String = "custom (path redacted)") -> String {
+        containsAbsolutePath(s) ? fallback : s
     }
 }

@@ -1051,6 +1051,15 @@ public enum PetSpeech {
         case .idle, .focused, .tired, .sleeping: return nil
         }
     }
+
+    /// 自動泡泡的實際台詞。celebration 一律改用 `shortReason`(帶「誰的哪個窗、是否估算」;
+    /// 罐頭 "quota reset!" 無歸因,正是 2026-07-16 誤導事故的表面 —— codex SEV1 round-2);
+    /// 其餘心情照舊輪播罐頭台詞。
+    public static func autoPhrase(for mood: PetMood, shortReason: String, tick: Int) -> String? {
+        if mood == .celebration, !shortReason.isEmpty { return shortReason }
+        guard let list = phrases(for: mood), !list.isEmpty else { return nil }
+        return list[tick % list.count]
+    }
 }
 
 // MARK: - 寵物機制說明(tooltip 共用文案)

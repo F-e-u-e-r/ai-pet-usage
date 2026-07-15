@@ -102,6 +102,11 @@ public struct PetStateData: Codable, Sendable {
     public var eatingFoodId: String?
     public var happyUntil: Date?
     public var celebrationUntil: Date?
+    /// 慶祝的歸因(哪家 provider 的哪個窗、是否估算邊界)。可為 nil(舊檔/無歸因)→
+    /// MoodEngine 回退通用文案。使用者實測回報:無歸因的「quota reset」會被誤認成別家 provider。
+    public var celebrationProviderId: String?
+    public var celebrationWindow: String?
+    public var celebrationEstimated: Bool?
     /// 當日狀態(dayKey 變更時歸零)
     public var dayKey: String
     public var treatsSpentToday: Int

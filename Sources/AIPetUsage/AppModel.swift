@@ -160,17 +160,7 @@ final class AppModel {
 
             handleTransitions(outcome.transitions)
 
-            if settings.appMode == .full {
-                let engine = feedingEngine
-                engine.tick(activeMinutesToday: activeMinutesToday, tokensToday: dashboard.todayTotals.total)
-                if dashboard.limitStates.contains(where: { $0.warning == .warning || $0.warning == .exhausted }) {
-                    engine.noteWarningSeen()
-                }
-                petState = engine.state
-                treatsAvailable = engine.treatsAvailable(activeMinutesToday: activeMinutesToday)
-                mood = MoodEngine.evaluate(dashboard: dashboard, pet: petState,
-                                           warnThreshold: settings.core.warnThresholdPercent)
-            }
+            syncPetAfterDashboard()
 
             // 任何範圍(含 custom)都要跟著刷新,否則專案表會停留在舊資料。
             await reloadProjectPage()
@@ -183,19 +173,45 @@ final class AppModel {
         defer { reindexing = false }
         let outcome = await coordinator.refresh(fullReindex: true)
         dashboard = outcome.dashboard
+        activeMinutesToday = await coordinator.activeMinutesToday()
+        // 重建後同步寵物側,否則 Pet 卡/a11y/匯出的 mood(含 reason 裡的百分比)沿用
+        // 重建前的舊值直到下次排程刷新(codex SEV2 round-2)。轉變(transitions)刻意
+        // 不處理:重建是重放,不該觸發慶祝/通知。
+        syncPetAfterDashboard()
         await reloadProjectPage()
         await reloadTrends()
+    }
+
+    /// dashboard 更新後同步寵物側(tick / warning / treats / mood)。monitor-only 無寵物 → no-op。
+    private func syncPetAfterDashboard() {
+        guard settings.appMode == .full else { return }
+        let engine = feedingEngine
+        engine.tick(activeMinutesToday: activeMinutesToday, tokensToday: dashboard.todayTotals.total)
+        if dashboard.limitStates.contains(where: { $0.warning == .warning || $0.warning == .exhausted }) {
+            engine.noteWarningSeen()
+        }
+        petState = engine.state
+        treatsAvailable = engine.treatsAvailable(activeMinutesToday: activeMinutesToday)
+        mood = MoodEngine.evaluate(dashboard: dashboard, pet: petState,
+                                   warnThreshold: settings.core.warnThresholdPercent)
     }
 
     private func handleTransitions(_ transitions: [LimitTransition]) {
         for transition in transitions {
             switch transition {
-            case let .reset(providerId, window):
+            case let .reset(providerId, window, estimated):
                 if settings.appMode == .full {
-                    feedingEngine.celebrate(until: Date().addingTimeInterval(120))
+                    // 歸因傳給寵物:慶祝訊息要能說出「誰的哪個窗、是否估算」(使用者實測:
+                    // 無歸因的慶祝被誤認成別家 provider 的官方重置)。
+                    feedingEngine.celebrate(until: Date().addingTimeInterval(120),
+                                            providerId: providerId, window: window, estimated: estimated)
                     petState = feedingEngine.state
                 }
-                notify(title: "Quota reset 🎉", body: "\(providerName(providerId)) \(window) window has reset.")
+                // 標題是通知最顯眼的表面 —— 估算邊界連標題都不得是無修飾的事實句(codex SEV1 round-2)。
+                notify(title: estimated ? "Quota likely reset 🎉" : "Quota reset 🎉",
+                       body: estimated
+                           ? "\(providerName(providerId)) \(window) block has likely reset (estimated from local activity)."
+                           : "\(providerName(providerId)) \(window) window has reset.")
             case let .crossedThreshold(providerId, window, percent, threshold):
                 notify(title: "Usage warning",
                        body: "\(providerName(providerId)) \(window) window at \(Int(min(100, percent)))% (threshold \(Int(threshold))%).")

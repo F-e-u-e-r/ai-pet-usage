@@ -57,10 +57,20 @@ public enum MoodEngine {
         }
 
         // 每家 provider 各自的 5h 百分比都列出(使用者要求同時看到 Claude 與 Codex)。
+        // summary 會進匯出報告(petSummary)—— 百分比必須帶信度標記,估算/陳舊值不得
+        // 裸露成官方數字(codex SEV1 round-2;標記樣式與 bubbleQuota 同一套)。
         let providerParts = limits.map { st -> String in
             let code = shortProviderCode(st.providerId)
             if st.fiveHour.idle { return "\(code) idle" }
-            if let p = st.fiveHour.usedPercent { return "\(code) \(Int(p))%" }
+            if let p = st.fiveHour.usedPercent {
+                let pct = Int(p)
+                switch st.fiveHour.confidence {
+                case .high: return "\(code) \(pct)%"
+                case .estimated: return "\(code) ~\(pct)% est"
+                case .stale: return "\(code) \(pct)% stale"
+                case .unknown: return "\(code) \(pct)%?"
+                }
+            }
             return "\(code) —"
         }
         let head = providerParts.isEmpty ? "no providers" : providerParts.joined(separator: " · ")
@@ -117,8 +127,29 @@ public enum MoodEngine {
                           reason: "Eating now.", shortReason: "eating now")
         }
         if let until = pet.celebrationUntil, until > now {
-            return Result(mood: .celebration, animationSpeed: 1.6, summary: "Quota reset! " + summary,
-                          reason: "A quota just reset — celebrating.", shortReason: "quota reset!")
+            // 慶祝要署名(哪家 provider 的哪個窗)+ 標示估算邊界:無歸因的「quota reset」會被
+            // 誤認成別家 provider(使用者實測:Codex/估算事件被讀成 Claude);估算絕不裝官方。
+            let reason: String
+            let short: String
+            if let pid = pet.celebrationProviderId, let win = pet.celebrationWindow {
+                let code = shortProviderCode(pid)
+                let winFull = win == "5h" ? "5-hour" : win
+                let winShort = win == "weekly" ? "wk" : win
+                if pet.celebrationEstimated == true {
+                    reason = "\(code) \(winFull) block likely reset (estimated) — celebrating."
+                    short = "\(code) \(winShort) ~reset"
+                } else {
+                    reason = "\(code) \(winFull) window just reset — celebrating."
+                    short = "\(code) \(winShort) reset!"
+                }
+            } else {
+                reason = "A quota just reset — celebrating."
+                short = "quota reset!"
+            }
+            // 估算邊界的慶祝前綴也不得讀起來像官方事實(summary 會進匯出報告)。
+            let prefix = pet.celebrationEstimated == true ? "Quota likely reset (est)! " : "Quota reset! "
+            return Result(mood: .celebration, animationSpeed: 1.6, summary: prefix + summary,
+                          reason: reason, shortReason: short)
         }
         if anyExhausted {
             // 取「最嚴重窗百分比最高」的耗盡 provider(平手以 providerId 穩定排序);原因帶窗+值+provenance,

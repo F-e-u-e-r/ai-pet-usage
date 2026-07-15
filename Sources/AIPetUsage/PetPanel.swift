@@ -623,10 +623,13 @@ struct PetView: View {
         }
         .opacity(settings.petOpacity)
         .onChange(of: model.mood.mood) { _, newMood in
-            guard settings.petSpeechEnabled,
-                  let phrases = PetSpeech.phrases(for: newMood), !phrases.isEmpty else { return }
+            // celebration 的自動泡泡走 shortReason(署名歸因),其餘輪播罐頭台詞(PetSpeech.autoPhrase)。
+            guard settings.petSpeechEnabled else { return }
             phraseTick += 1
-            showBubble(phrases[phraseTick % phrases.count], seconds: 3.5)
+            guard let phrase = PetSpeech.autoPhrase(for: newMood,
+                                                    shortReason: model.mood.shortReason,
+                                                    tick: phraseTick) else { return }
+            showBubble(phrase, seconds: 3.5)
         }
         .onChange(of: model.feedNotice?.at) { _, _ in
             if let notice = model.feedNotice {

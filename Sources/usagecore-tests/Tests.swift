@@ -814,7 +814,7 @@ final class LimitEngineTests: XCTestCase {
         _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
         // 現任窗口已過期 → 預期中的翻轉,第一筆讀數即接管並發出重置(原有行為)。
         let transitions = engine.ingest(readings: [windowReading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertTrue(transitions.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(transitions.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T14:10:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 5)
@@ -825,13 +825,13 @@ final class LimitEngineTests: XCTestCase {
         _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
         // 現任窗口仍存活卻宣稱換窗 = 抖動的唯一形態 → 第一筆只成為候選。
         let first = engine.ingest(readings: [windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertFalse(first.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertFalse(first.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let mid = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                     settings: settings, now: date("2026-01-15T13:00:30Z"))
         XCTAssertEqual(mid.fiveHour.usedPercent, 80, "未確認前現任窗口不動")
         // 第二筆同窗讀數確認接管,重置轉變只發一次。
         let second = engine.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertTrue(second.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(second.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T13:05:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 6)
@@ -858,7 +858,7 @@ final class LimitEngineTests: XCTestCase {
         for (percent, at, resets) in sequence {
             transitions += engine.ingest(readings: [weeklyReading(percent, at: at, resetsAt: resets)], settings: settings)
         }
-        XCTAssertFalse(transitions.contains(.reset(providerId: "codex", window: "weekly")))
+        XCTAssertFalse(transitions.contains(.reset(providerId: "codex", window: "weekly", estimated: false)))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-08T22:00:00Z"))
         XCTAssertEqual(state.weekly.usedPercent, 80)
@@ -877,7 +877,7 @@ final class LimitEngineTests: XCTestCase {
         // FSEvents 高頻批次下每批可能只有一筆新讀數:確認必須跨引擎實例/重啟累計。
         let e2 = LimitEngine(stateURL: stateURL)
         let transitions = e2.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertTrue(transitions.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(transitions.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state = e2.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                   settings: settings, now: date("2026-01-15T13:05:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 6)
@@ -889,7 +889,7 @@ final class LimitEngineTests: XCTestCase {
         let flap = windowReading(5, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")
         _ = engine.ingest(readings: [flap], settings: settings)
         let replay = engine.ingest(readings: [flap], settings: settings)
-        XCTAssertFalse(replay.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertFalse(replay.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T13:30:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 80, "同一筆讀數重放不得完成換窗確認")
@@ -923,10 +923,10 @@ final class LimitEngineTests: XCTestCase {
         let engine = LimitEngine(stateURL: nil)
         _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
         let sweep = engine.sweepExpiredWindows(now: date("2026-01-15T14:01:00Z"))
-        XCTAssertTrue(sweep.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(sweep.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         // sweep 已為過期發過重置 → 之後的接管不得重複通知。
         let adopt = engine.ingest(readings: [windowReading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertFalse(adopt.contains(.reset(providerId: "codex", window: "5h")), "sweep 已發過重置,接管不得重複通知")
+        XCTAssertFalse(adopt.contains(.reset(providerId: "codex", window: "5h", estimated: false)), "sweep 已發過重置,接管不得重複通知")
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T14:10:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 5)
@@ -939,7 +939,7 @@ final class LimitEngineTests: XCTestCase {
         // 現任窗的「舊」重放(觀測時間倒退)不是現任存活的證據,不得作廢候選。
         _ = engine.ingest(readings: [windowReading(79, at: "2026-01-15T09:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
         let confirm = engine.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T13:05:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 6)
@@ -952,7 +952,7 @@ final class LimitEngineTests: XCTestCase {
         _ = engine.ingest(readings: [weeklyReading(1, at: "2026-01-08T21:24:00Z", resetsAt: "2026-01-15T05:01:00Z")], settings: settings) // 佔位的假窗
         var transitions = engine.ingest(readings: [weeklyReading(92, at: "2026-01-09T16:46:00Z", resetsAt: "2026-01-14T03:51:00Z")], settings: settings)
         transitions += engine.ingest(readings: [weeklyReading(93, at: "2026-01-09T16:47:00Z", resetsAt: "2026-01-14T03:51:00Z")], settings: settings)
-        XCTAssertFalse(transitions.contains(.reset(providerId: "codex", window: "weekly")), "1%→93% 是奪回不是重置,不得誤發通知")
+        XCTAssertFalse(transitions.contains(.reset(providerId: "codex", window: "weekly", estimated: false)), "1%→93% 是奪回不是重置,不得誤發通知")
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-09T17:00:00Z"))
         XCTAssertEqual(state.weekly.usedPercent, 93, "resets_at 較早的真實窗必須能奪回被抖動佔位的槽位")
@@ -965,7 +965,7 @@ final class LimitEngineTests: XCTestCase {
         _ = engine.ingest(readings: [windowReading(10, at: "2026-01-15T13:00:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
         // 候選窗內亂序的較低樣本:接管值取單調最大,與同窗防護一致。
         let confirm = engine.ingest(readings: [windowReading(5, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T13:05:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 10, "接管值不得被候選窗內較低的亂序樣本拉低")
@@ -979,7 +979,7 @@ final class LimitEngineTests: XCTestCase {
         // 不得作廢候選(稀疏來源否則永遠湊不滿兩筆)。
         _ = engine.ingest(readings: [windowReading(79, at: "2026-01-15T12:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
         let confirm = engine.ingest(readings: [windowReading(6, at: "2026-01-15T13:01:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")), "候選不得被亂序的較舊現任讀數打斷")
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h", estimated: false)), "候選不得被亂序的較舊現任讀數打斷")
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T13:05:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 6)
@@ -998,7 +998,7 @@ final class LimitEngineTests: XCTestCase {
             secondary: nil
         )
         let transitions = engine.ingest(readings: [fresh], settings: settings)
-        XCTAssertTrue(transitions.contains(.reset(providerId: "claude-code", window: "5h")))
+        XCTAssertTrue(transitions.contains(.reset(providerId: "claude-code", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T11:05:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 12)
@@ -1011,7 +1011,7 @@ final class LimitEngineTests: XCTestCase {
         _ = engine.ingest(readings: [windowReading(0, at: "2026-01-15T10:30:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings) // 抖動 → 候選
         _ = engine.ingest(readings: [windowReading(81, at: "2026-01-15T10:31:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings) // 現任存活 → 候選作廢
         let after = engine.ingest(readings: [windowReading(1, at: "2026-01-15T10:32:00Z", resetsAt: "2026-01-15T19:00:00Z")], settings: settings)
-        XCTAssertFalse(after.contains(.reset(providerId: "codex", window: "5h")), "候選已被現任讀數作廢,新讀數需重新累計")
+        XCTAssertFalse(after.contains(.reset(providerId: "codex", window: "5h", estimated: false)), "候選已被現任讀數作廢,新讀數需重新累計")
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T10:35:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 81)
@@ -1027,7 +1027,7 @@ final class LimitEngineTests: XCTestCase {
                                        settings: settings, now: date("2026-01-15T12:15:00Z"))
         XCTAssertEqual(state1.fiveHour.usedPercent, 80, "候選未確認前,存活的現任窗口不動")
         let confirm = engine.ingest(readings: [windowReading(6, at: "2026-01-15T12:20:00Z", resetsAt: "2026-01-15T21:00:00Z")], settings: settings)
-        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(confirm.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let state2 = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
                                        settings: settings, now: date("2026-01-15T12:25:00Z"))
         XCTAssertEqual(state2.fiveHour.usedPercent, 6)
@@ -1053,7 +1053,7 @@ final class LimitEngineTests: XCTestCase {
         _ = engine.ingest(readings: [nilResetReading(45, at: "2026-01-15T10:00:00Z")], settings: settings)
         _ = engine.ingest(readings: [nilResetReading(92, at: "2026-01-15T10:30:00Z")], settings: settings)
         let transitions = engine.ingest(readings: [nilResetReading(8, at: "2026-01-15T15:05:00Z")], settings: settings)
-        XCTAssertTrue(transitions.contains(.reset(providerId: "claude-code", window: "5h")))
+        XCTAssertTrue(transitions.contains(.reset(providerId: "claude-code", window: "5h", estimated: false)))
         let state = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
                                       settings: settings, now: date("2026-01-15T15:10:00Z"))
         XCTAssertEqual(state.fiveHour.usedPercent, 8)
@@ -1111,12 +1111,14 @@ final class LimitEngineTests: XCTestCase {
     func testExpiredWindowShowsRecoveredAndSweepEmitsReset() {
         let engine = LimitEngine(stateURL: nil)
         _ = engine.ingest(readings: [reading(90, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
-        // 窗口過期後:顯示 0%(estimated),掃描發出一次 reset
-        let now = date("2026-01-15T14:30:00Z")
+        // 窗口過期後:顯示 0%(estimated),掃描發出一次 reset。
+        // 時點取邊界後 10 分(≤ resetRecency 15 分);過期太久的靜默行為見
+        // testSweepDoesNotCelebrateStaleExpiry。
+        let now = date("2026-01-15T14:10:00Z")
         let t1 = engine.sweepExpiredWindows(now: now)
-        XCTAssertTrue(t1.contains(.reset(providerId: "codex", window: "5h")))
+        XCTAssertTrue(t1.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let t2 = engine.sweepExpiredWindows(now: now)
-        XCTAssertTrue(t2.filter { if case .reset(_, "5h") = $0 { return true }; return false }.isEmpty,
+        XCTAssertTrue(t2.filter { if case .reset(_, "5h", _) = $0 { return true }; return false }.isEmpty,
                       "同一次過期只觸發一次 reset")
 
         let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
@@ -1385,7 +1387,129 @@ final class LimitEngineTests: XCTestCase {
                                       blockTokens: 800, now: date("2026-01-15T11:00:00Z"))
         let t = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: nil, blockTokens: 0,
                                           now: date("2026-01-15T15:10:00Z"))
-        XCTAssertTrue(t.contains(.reset(providerId: "claude-code", window: "5h")))
+        XCTAssertTrue(t.contains(.reset(providerId: "claude-code", window: "5h", estimated: true)))
+    }
+
+    /// 官方 5h 窗口仍在治理(hasUsableWindow,與顯示端同一條規則)→ 估算邊界不得發 reset。
+    /// 2026-07-16 實測回報:官方 resets 18:20、估算區塊 18:00 結束 → 寵物提前 20 分鐘假慶祝。
+    func testEstimatedResetSuppressedWhenOfficialWindowGoverns() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [RateLimitReading(
+            providerId: "claude-code", observedAt: date("2026-01-15T12:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 36, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T14:20:00Z")),
+            secondary: nil)], settings: settings)
+        _ = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                      blockTokens: 500_000, now: date("2026-01-15T13:00:00Z"))
+        // 14:02:估算邊界已過,但官方窗口(resets 14:20)仍存活 → 不得發 reset
+        let t = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                          blockTokens: 500_000,
+                                          lastEventAt: date("2026-01-15T13:59:00Z"),
+                                          now: date("2026-01-15T14:02:00Z"))
+        XCTAssertTrue(t.isEmpty, "官方治理時估算邊界不得發 reset(寵物不得跟 dashboard 自相矛盾)")
+        // 被壓下的邊界已標記 handled:官方之後過期也不得補發這則陳舊消息
+        let late = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                             blockTokens: 500_000, now: date("2026-01-15T15:00:00Z"))
+        XCTAssertTrue(late.isEmpty, "已壓下的估算邊界不得於官方過期後補發")
+    }
+
+    /// 官方 hook 停更(過期 + 帳本活動反證)→ 估算恢復治理,「下一個」邊界照發並標示 estimated。
+    func testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [RateLimitReading(
+            providerId: "claude-code", observedAt: date("2026-01-15T12:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 36, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T14:20:00Z")),
+            secondary: nil)], settings: settings)
+        _ = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                      blockTokens: 500_000, now: date("2026-01-15T13:00:00Z"))
+        // 邊界 14:02 被官方壓下;同呼叫換到新區塊(blockEnd 變更 → handled 重新武裝)
+        _ = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T20:00:00Z"),
+                                      blockTokens: 300_000,
+                                      lastEventAt: date("2026-01-15T13:59:00Z"),
+                                      now: date("2026-01-15T14:02:00Z"))
+        // 20:05:官方已過期且帳本在 reset 後有新活動(19:00)領先官方觀測 >60s → hook 停更,
+        // 估算治理 → 新邊界照發,estimated: true(通知/寵物按估算措辭呈現)
+        let t = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T20:00:00Z"),
+                                          blockTokens: 300_000,
+                                          lastEventAt: date("2026-01-15T19:00:00Z"),
+                                          now: date("2026-01-15T20:05:00Z"))
+        XCTAssertTrue(t.contains(.reset(providerId: "claude-code", window: "5h", estimated: true)))
+    }
+
+    /// codex SEV1 round-2(F1):app 睡過邊界後,官方過期+活動反證使官方「當下」不治理,
+    /// 但 18:00 估算邊界已是陳舊消息 → 新鮮度閘擋下,不得與官方 sweep reset 撞成雙通知。
+    func testEstimatedResetStaleBoundaryDoesNotFireAfterSleep() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [RateLimitReading(
+            providerId: "claude-code", observedAt: date("2026-01-15T12:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 36, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T14:20:00Z")),
+            secondary: nil)], settings: settings)
+        _ = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                      blockTokens: 500_000, now: date("2026-01-15T13:00:00Z"))
+        // 14:00–14:26 之間 app 無刷新;14:26 首刷:官方已過期且帳本 14:25 有活動(反證)
+        // → hasUsableWindow=false,但邊界已過 26 分 —— 仍不得發(15 分新鮮度閘)。
+        let t = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                          blockTokens: 500_000,
+                                          lastEventAt: date("2026-01-15T14:25:00Z"),
+                                          now: date("2026-01-15T14:26:00Z"))
+        XCTAssertTrue(t.isEmpty, "睡過的估算邊界是陳舊消息,不得補發")
+    }
+
+    /// codex SEV1 round-2(F2):官方排程 reset 也有同一道新鮮度閘 —— app 關閉跨過邊界,
+    /// 重啟首刷不得說「剛剛重置」(一天前的 reset)。
+    func testSweepDoesNotCelebrateStaleExpiry() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z",
+                                                   resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 邊界 14:00,29 小時後首次 sweep → 靜默(expiryHandled 照設,不重複)
+        let sweep = engine.sweepExpiredWindows(now: date("2026-01-16T19:00:00Z"))
+        XCTAssertTrue(sweep.isEmpty, "過期太久的 reset 不得慶祝/通知")
+        let again = engine.sweepExpiredWindows(now: date("2026-01-16T19:05:00Z"))
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    /// 新鮮邊界(≤15 分)照常慶祝 —— 新鮮度閘不得誤殺正常情境。
+    func testSweepStillCelebratesFreshExpiry() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z",
+                                                   resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        let sweep = engine.sweepExpiredWindows(now: date("2026-01-15T14:05:00Z"))
+        XCTAssertTrue(sweep.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
+    }
+
+    /// grok/codex SEV1 round-3:app 關閉期間 provider 已寫入新窗讀數,重開後 ingest(fold)
+    /// 先於 sweep 採納新窗 —— 翻轉「證據」(observedAt)距真實 now 太久 → 只默默採納,
+    /// 不得補發兩小時前的「剛剛重置」。
+    func testFoldRolloverProcessedLateAdoptsSilently() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 新窗讀數 14:05 寫入磁碟;app 16:00 才重開掃到(now 顯式傳入)
+        let late = engine.ingest(readings: [windowReading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")],
+                                 settings: settings, now: date("2026-01-15T16:00:00Z"))
+        XCTAssertTrue(late.filter { if case .reset = $0 { return true }; return false }.isEmpty,
+                      "兩小時前的翻轉是陳舊消息,不得慶祝/通知")
+        // 狀態仍須採納新窗(只是不出聲)
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T16:00:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 5, "採納不受新鮮度閘影響")
+    }
+
+    /// 同 provider+window 官方與估算同刷撞 reset → 留官方(估算不得蓋掉官方歸因)。
+    func testPreferOfficialResetsDropsEstimatedDuplicate() {
+        let mixed: [LimitTransition] = [
+            .reset(providerId: "claude-code", window: "5h", estimated: false),
+            .reset(providerId: "claude-code", window: "5h", estimated: true),
+            .reset(providerId: "codex", window: "weekly", estimated: false),
+            .reset(providerId: "grok-code", window: "5h", estimated: true),
+        ]
+        let out = LimitEngine.preferOfficialResets(mixed)
+        XCTAssertEqual(out.count, 3)
+        XCTAssertFalse(out.contains(.reset(providerId: "claude-code", window: "5h", estimated: true)),
+                       "官方在場時估算重複必須被丟棄")
+        XCTAssertTrue(out.contains(.reset(providerId: "grok-code", window: "5h", estimated: true)),
+                      "無官方對應的估算 reset 保留")
     }
 
     // MARK: 同窗官方下修(二筆確認;政策 = DATA_SOURCES「Limit calculation policy」通道 (c))

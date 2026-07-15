@@ -102,6 +102,13 @@ runSuite("LimitEngineTests", [
     ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
     ("testClaudeIdleFiveHourShowsIdleNotFakePercent", limits.testClaudeIdleFiveHourShowsIdleNotFakePercent),
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
+    ("testEstimatedResetSuppressedWhenOfficialWindowGoverns", limits.testEstimatedResetSuppressedWhenOfficialWindowGoverns),
+    ("testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning", limits.testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning),
+    ("testEstimatedResetStaleBoundaryDoesNotFireAfterSleep", limits.testEstimatedResetStaleBoundaryDoesNotFireAfterSleep),
+    ("testSweepDoesNotCelebrateStaleExpiry", limits.testSweepDoesNotCelebrateStaleExpiry),
+    ("testSweepStillCelebratesFreshExpiry", limits.testSweepStillCelebratesFreshExpiry),
+    ("testFoldRolloverProcessedLateAdoptsSilently", limits.testFoldRolloverProcessedLateAdoptsSilently),
+    ("testPreferOfficialResetsDropsEstimatedDuplicate", limits.testPreferOfficialResetsDropsEstimatedDuplicate),
     // 同窗官方下修(二筆確認;DATA_SOURCES policy 通道 (c))
     ("testSameWindowSingleLowerReadingStaysPinned", limits.testSameWindowSingleLowerReadingStaysPinned),
     ("testSameWindowDecreaseAdoptsAfterTwoNewerReadings", limits.testSameWindowDecreaseAdoptsAfterTwoNewerReadings),
@@ -180,6 +187,11 @@ runSuite("MoodEngineTests", [
     ("testEveryMoodHasNonEmptyReason", moodTests.testEveryMoodHasNonEmptyReason),
     ("testTiredWeeklyReasonCarriesProvenance", moodTests.testTiredWeeklyReasonCarriesProvenance),
     ("testWarningTriggerPicksHighestProvider", moodTests.testWarningTriggerPicksHighestProvider),
+    ("testCelebrationAttributionOfficialAndEstimated", moodTests.testCelebrationAttributionOfficialAndEstimated),
+    ("testCelebrationWithoutAttributionFallsBackGeneric", moodTests.testCelebrationWithoutAttributionFallsBackGeneric),
+    ("testPetStateBackwardCompatibleDecodeWithoutCelebrationFields", moodTests.testPetStateBackwardCompatibleDecodeWithoutCelebrationFields),
+    ("testSummaryMarksEstimatedPercentAndCelebrationPrefix", moodTests.testSummaryMarksEstimatedPercentAndCelebrationPrefix),
+    ("testAutoPhraseCelebrationUsesShortReason", moodTests.testAutoPhraseCelebrationUsesShortReason),
 ])
 
 let integration = CoordinatorIntegrationTests()
@@ -486,6 +498,12 @@ runSuite("ReportRedactionTests", [
     ("testReportNoFullPathWhenProjectNameNil", reportRedaction.testReportNoFullPathWhenProjectNameNil),
     ("testReportSinkDefensiveAgainstPathName", reportRedaction.testReportSinkDefensiveAgainstPathName),
     ("testReportNoRawParserError", reportRedaction.testReportNoRawParserError),
+    ("testReportScrubsPathShapedModelIdAndPricingSource", reportRedaction.testReportScrubsPathShapedModelIdAndPricingSource),
+    ("testRefreshErrorEmbeddingUnparsableNotMisclassified", reportRedaction.testRefreshErrorEmbeddingUnparsableNotMisclassified),
+    ("testUnparsableCountIsPositional", reportRedaction.testUnparsableCountIsPositional),
+    ("testDisplayModelIdAndSafeLabel", reportRedaction.testDisplayModelIdAndSafeLabel),
+    ("testAbsolutePathScrubCatchesSchemeAndEmbeddedForms", reportRedaction.testAbsolutePathScrubCatchesSchemeAndEmbeddedForms),
+    ("testAbsolutePathScrubTildeUserAndFileHost", reportRedaction.testAbsolutePathScrubTildeUserAndFileHost),
     ("testProjectSummaryBasenamesPathAtSource", reportRedaction.testProjectSummaryBasenamesPathAtSource),
 ])
 

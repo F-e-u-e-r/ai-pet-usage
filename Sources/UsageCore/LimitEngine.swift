@@ -157,9 +157,18 @@ public final class LimitEngine {
     // MARK: - 讀值折疊
 
     /// 併入新的 rate-limit 讀值,回傳觸發的轉變(重置/跨閾值/耗盡)。
-    public func ingest(readings: [RateLimitReading], settings: CoreSettings, fullReindex: Bool = false) -> [LimitTransition] {
+    ///
+    /// `now`:重置「慶祝/通知」新鮮度閘(resetRecency)所比對的當下時刻。**正式呼叫端
+    /// (UsageCoordinator)一律傳真實 now**;nil(測試/重放便利)= 以本批最新讀數的
+    /// observedAt+1s 視為當下 —— 即「讀數被即時處理」的語義,fold 邏輯本身照常受測。
+    /// app 關閉跨過翻轉、重開後才掃到的舊翻轉證據(observedAt 距 now 太遠)只默默採納
+    /// 新窗,不得再說「剛剛重置」(grok SEV1 round-2:ingest 先於 sweep,重開時新讀數
+    /// 已在磁碟上 → fold 是補發陳舊慶祝的主要路徑,不是罕見邊角)。
+    public func ingest(readings: [RateLimitReading], settings: CoreSettings, fullReindex: Bool = false,
+                       now: Date? = nil) -> [LimitTransition] {
         var transitions: [LimitTransition] = []
         let sorted = readings.sorted { $0.observedAt < $1.observedAt }
+        let effectiveNow = now ?? sorted.last.map { $0.observedAt.addingTimeInterval(1) } ?? Date()
         for reading in sorted {
             var provider = store[reading.providerId] ?? PersistedProvider()
             if let plan = reading.planType { provider.planType = plan }
@@ -173,14 +182,16 @@ public final class LimitEngine {
                 } else {
                     provider.primary = fold(window: provider.primary, reading: w, observedAt: reading.observedAt,
                                             providerId: reading.providerId, windowName: "5h",
-                                            settings: settings, fullReindex: fullReindex, transitions: &transitions)
+                                            settings: settings, fullReindex: fullReindex, now: effectiveNow,
+                                            transitions: &transitions)
                     if reading.providerId == "codex" { provider.codexFiveHourAbsentSince = nil }
                 }
             }
             if let w = reading.secondary {
                 provider.secondary = fold(window: provider.secondary, reading: w, observedAt: reading.observedAt,
                                           providerId: reading.providerId, windowName: "weekly",
-                                          settings: settings, fullReindex: fullReindex, transitions: &transitions)
+                                          settings: settings, fullReindex: fullReindex, now: effectiveNow,
+                                          transitions: &transitions)
             }
             // Codex 的每筆 rate_limits 是完整快照:若回報了「週」窗卻沒有「5h」窗,代表 5h 此刻不存在
             // (如 Codex 暫撤 5h)→ 清掉 5h 槽(tombstone)並記錄消失時點,而非沿用舊值 ghost —— 連
@@ -201,7 +212,9 @@ public final class LimitEngine {
 
     private func fold(window stored: PersistedWindow?, reading: RateLimitWindowReading, observedAt: Date,
                       providerId: String, windowName: String, settings: CoreSettings,
-                      fullReindex: Bool, transitions: inout [LimitTransition]) -> PersistedWindow {
+                      fullReindex: Bool, now: Date, transitions: inout [LimitTransition]) -> PersistedWindow {
+        // 翻轉證據(本讀數)距當下太久 → 狀態照常採納,但不得發「剛剛重置」的慶祝/通知。
+        let rolloverIsFresh = now.timeIntervalSince(observedAt) <= Self.resetRecency
         guard var current = stored else {
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
                                    observedAt: observedAt, windowMinutes: reading.windowMinutes,
@@ -285,8 +298,9 @@ public final class LimitEngine {
         if looksLikeNilRollover {
             // nil-reset 來源沒有窗口邊界可比對,維持既有行為:>20 點驟降即視為翻轉。
             guard observedAt > current.observedAt else { return current }
-            if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled {
-                transitions.append(.reset(providerId: providerId, window: windowName))
+            if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled,
+               rolloverIsFresh {
+                transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
             }
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
                                    observedAt: observedAt, windowMinutes: reading.windowMinutes,
@@ -312,8 +326,9 @@ public final class LimitEngine {
         // 即可換回,不會如舊制永久卡死。
         let incumbentProvablyLive = current.resetsAt.map { $0 > observedAt } ?? false
         if !incumbentProvablyLive {
-            if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled {
-                transitions.append(.reset(providerId: providerId, window: windowName))
+            if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled,
+               rolloverIsFresh {
+                transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
             }
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
                                    observedAt: observedAt, windowMinutes: reading.windowMinutes,
@@ -339,8 +354,9 @@ public final class LimitEngine {
             if reading.windowMinutes > 0 { p.windowMinutes = reading.windowMinutes }
             if p.count >= 2 {
                 // 已確認換窗。expiryHandled 表示 sweepExpiredWindows 已為此窗發過重置,不重複。
-                if current.percent >= 30, p.percent < current.percent - 20, !current.expiryHandled {
-                    transitions.append(.reset(providerId: providerId, window: windowName))
+                if current.percent >= 30, p.percent < current.percent - 20, !current.expiryHandled,
+                   rolloverIsFresh {
+                    transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
                 }
                 return PersistedWindow(percent: p.percent, resetsAt: p.resetsAt,
                                        observedAt: p.observedAt, windowMinutes: p.windowMinutes,
@@ -381,6 +397,11 @@ public final class LimitEngine {
     }
 
     /// 掃描已過期的窗口(resets_at 已過),觸發一次性的重置轉變。
+    /// 重置「慶祝/通知」的新鮮度門檻:邊界已過超過此時長 → 靜默處理(狀態照常摺疊,
+    /// 只是不發 transition)。寵物與通知的措辭是「剛剛重置」;app 睡過/關閉跨過邊界後,
+    /// 首次刷新補發的是陳舊消息,一天前的 reset 不該說 "just reset"(codex SEV1 round-2)。
+    static let resetRecency: TimeInterval = 15 * 60
+
     public func sweepExpiredWindows(now: Date = Date()) -> [LimitTransition] {
         var transitions: [LimitTransition] = []
         var changed = false
@@ -389,9 +410,11 @@ public final class LimitEngine {
             for keyPath in [\PersistedProvider.primary, \PersistedProvider.secondary] {
                 guard var w = provider[keyPath: keyPath], let resetsAt = w.resetsAt,
                       resetsAt < now, !w.expiryHandled else { continue }
-                if w.percent >= 30 {
+                // 新鮮度閘:過期太久的 reset 只靜默標記(expiryHandled 照設,不重複檢查),不慶祝。
+                if w.percent >= 30, now.timeIntervalSince(resetsAt) <= Self.resetRecency {
                     transitions.append(.reset(providerId: providerId,
-                                              window: keyPath == \PersistedProvider.primary ? "5h" : "weekly"))
+                                              window: keyPath == \PersistedProvider.primary ? "5h" : "weekly",
+                                              estimated: false))
                 }
                 w.expiryHandled = true
                 if keyPath == \PersistedProvider.primary { provider.primary = w } else { provider.secondary = w }
@@ -408,14 +431,44 @@ public final class LimitEngine {
 
     // MARK: - Claude 估算窗口的重置偵測
 
+    /// 同一 provider+window 在同一次刷新同時出現官方(estimated:false)與估算(estimated:true)
+    /// 的 reset → 丟棄估算那筆:兩者是同一事實的兩種證據,官方勝;寵物/通知的歸因不得被
+    /// 估算蓋掉官方(慶祝採 last-wins,估算在 coordinator 流程中後到)。
+    public static func preferOfficialResets(_ transitions: [LimitTransition]) -> [LimitTransition] {
+        let official = Set(transitions.compactMap { t -> String? in
+            if case let .reset(pid, win, false) = t { return "\(pid)|\(win)" }
+            return nil
+        })
+        guard !official.isEmpty else { return transitions }
+        return transitions.filter { t in
+            if case let .reset(pid, win, true) = t, official.contains("\(pid)|\(win)") { return false }
+            return true
+        }
+    }
+
     /// 估算型(帳本推導)5h 區塊結束時觸發重置轉變。
-    public func noteEstimatedBlock(providerId: String, blockEnd: Date?, blockTokens: Int, now: Date = Date()) -> [LimitTransition] {
+    ///
+    /// `lastEventAt`:該 provider 帳本最新事件時間(顯示端仲裁同款證據)。官方 5h 窗口仍在
+    /// 治理(`hasUsableWindow`,與顯示端**同一條規則**)時,估算邊界**不得**發 reset ——
+    /// 否則 dashboard 說「官方 36%、18:20 重置」而寵物在 18:00 慶祝估算邊界,自相矛盾且
+    /// 讓估算裝成官方事實(2026-07-16 使用者實測回報:提前 20 分鐘假慶祝)。
+    /// 被壓下時仍標記 `estimatedResetHandled`:官方稍後過期也不得補發這個已成陳舊消息的邊界。
+    public func noteEstimatedBlock(providerId: String, blockEnd: Date?, blockTokens: Int,
+                                   lastEventAt: Date? = nil, now: Date = Date()) -> [LimitTransition] {
         var provider = store[providerId] ?? PersistedProvider()
         var transitions: [LimitTransition] = []
         var changed = false
         if let storedEnd = provider.estimatedBlockEnd, now > storedEnd,
            (provider.estimatedBlockTokens ?? 0) > 0, provider.estimatedResetHandled != true {
-            transitions.append(.reset(providerId: providerId, window: "5h"))
+            // 兩道閘(缺一不發):
+            // 1. 新鮮度:邊界已過 > resetRecency = 陳舊消息(app 睡過邊界;官方治理期壓下後
+            //    官方才過期 —— 都不得補發,codex SEV1 round-2:18:00 邊界在 18:26 補發,
+            //    與官方 18:20 的 sweep reset 撞成雙通知且估算歸因蓋掉官方)。
+            // 2. 官方不治理:hasUsableWindow(與顯示端同一條規則)為真時估算邊界不得發聲。
+            if now.timeIntervalSince(storedEnd) <= Self.resetRecency,
+               !hasUsableWindow(provider.primary, now: now, lastEventAt: lastEventAt) {
+                transitions.append(.reset(providerId: providerId, window: "5h", estimated: true))
+            }
             provider.estimatedResetHandled = true
             changed = true
         }
