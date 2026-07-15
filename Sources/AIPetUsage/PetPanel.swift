@@ -610,7 +610,7 @@ struct PetView: View {
                     }
                     showBubble(bubblePageText(bubble.page), seconds: 6)
                 }
-                .help(PetInfo.tooltip)
+                .help("\(PetInfo.tooltip)\n\nNow: \(model.mood.mood.rawValue) — \(model.mood.reason)")
                 .contextMenu { PetContextMenu() }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 6)

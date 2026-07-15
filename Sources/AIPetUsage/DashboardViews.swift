@@ -120,6 +120,7 @@ struct StatTile<Extra: View>: View {
             extra
             if let caption {
                 Text(caption).font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
+                    .lineLimit(2).truncationMode(.tail)
             }
         }
         // A3:在等高列(HStack + fixedSize)中填滿列高 → 同列卡片一致;
@@ -476,8 +477,8 @@ struct TodayView: View {
                     if model.settings.appMode == .full {
                         StatTile(title: "Pet",
                                  value: "\(model.speciesDisplayName) · \(model.mood.mood.rawValue)",
-                                 caption: "Lv.\(model.petState.level) · fullness \(Int(model.petState.hunger))%")
-                            .help(PetInfo.tooltip)
+                                 caption: model.mood.reason)
+                            .help("\(PetInfo.tooltip)\n\nLv.\(model.petState.level) · fullness \(Int(model.petState.hunger))%")
                     }
                 }
 

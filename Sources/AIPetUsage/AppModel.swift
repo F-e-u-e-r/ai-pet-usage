@@ -28,7 +28,7 @@ final class AppModel {
     private(set) var dashboard: DashboardState = .empty
     private(set) var settings: AppSettings
     private(set) var petState: PetStateData
-    private(set) var mood = MoodEngine.Result(mood: .idle, animationSpeed: 1, summary: "starting…")
+    private(set) var mood = MoodEngine.Result(mood: .idle, animationSpeed: 1, summary: "starting…", reason: "Starting up…")
     private(set) var treatsAvailable = 0
     private(set) var refreshing = false
     private(set) var reindexing = false
@@ -303,7 +303,11 @@ final class AppModel {
     private func applyModeSideEffects() {
         switch settings.appMode {
         case .full:
-            _ = feedingEngine // 載回持久化的寵物狀態
+            _ = feedingEngine // 載回持久化的寵物狀態(getter 副作用設 petState)
+            // 立即以現有 dashboard + 載回的 petState 重算 mood —— 否則 tooltip/caption/a11y/export
+            // 會顯示切回 full 之前的陳舊心情(含陳舊 provenance)直到下次刷新(codex SEV2)。
+            mood = MoodEngine.evaluate(dashboard: dashboard, pet: petState,
+                                       warnThreshold: settings.core.warnThresholdPercent)
             if petPanel == nil { petPanel = PetPanelController(model: self) }
             petPanel?.apply(settings: settings)
             if settings.petVisible { petPanel?.show() }
@@ -400,7 +404,7 @@ final class AppModel {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let summary = settings.appMode == .full
-            ? "\(settings.resolvedSpecies.displayName) mood: \(mood.mood.rawValue) · level \(petState.level) · \(mood.summary)"
+            ? "\(settings.resolvedSpecies.displayName) mood: \(mood.mood.rawValue) · level \(petState.level) · \(mood.reason) · \(mood.summary)"
             : nil
         Task {
             do {
@@ -491,9 +495,12 @@ final class AppModel {
 
     /// 輔助功能全句(spec §11):全名 + severity,不得只給短代號。
     var menuBarAccessibilityLabel: String {
-        MenuBadgeBuilder.accessibilitySummary(
+        let base = MenuBadgeBuilder.accessibilitySummary(
             petName: settings.appMode == .full ? settings.resolvedSpecies.displayName : "AI Pet Usage",
             badges: menuBarBadges)
+        // 心情原因只在全模式附上(monitor-only 不建立寵物、mood 不更新)。
+        guard settings.appMode == .full else { return base }
+        return "\(base) Pet mood: \(mood.mood.rawValue) — \(mood.reason)"
     }
 
     /// 純文字後備(NSImage 烤製失敗時);不再夾帶心情/警示 emoji(spec P0)。
