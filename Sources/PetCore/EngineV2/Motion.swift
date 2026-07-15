@@ -213,6 +213,17 @@ public final class MotionController: MotionControlling {
         dragging = false
     }
 
+    /// 使用者把寵物拖放到新（底部中心錨）位置——V2 背景拖曳的落點同步用。位置直接設定、
+    /// 動量歸零、視為離地(由後續 tick 依區域重新落地/續飛;避免半空維持舊 grounded 造成
+    /// 錯誤的行為轉移)。與 `beginDrag`/`dragMoved` 的連續拖曳工作階段互斥使用。
+    public func teleport(to p: CGPoint) {
+        position = p
+        velocity = .zero
+        grounded = false
+        dragging = false
+        targetVelocity = nil   // 清行為層巡航目標,落點後不立即被舊 cruise 帶走(grok SEV3)。
+    }
+
     // MARK: 積分 tick
 
     public func tick(dt rawDT: TimeInterval, regions: RegionMap) -> [MotionEvent] {

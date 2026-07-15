@@ -227,19 +227,61 @@ final class PetPanelController: NSObject, NSWindowDelegate {
 
     /// 使用者開始拖曳視窗(AppKit:willMove 由使用者拖曳觸發;程式 setFrameOrigin
     /// 只發 didMove)。同步讀旗標(R2 B4/codex:不得走 async Task,程式性移動的
-    /// isWanderMoving 包夾窗口極短,晚讀必誤判)。V2 完全不動(E3 已揭露回彈)。
+    /// isWanderMoving 包夾窗口極短,晚讀必誤判)。V2 路徑改由 beginUserDrag 暫停引擎
+    /// (見下),不再是「完全不動」。
     nonisolated func windowWillMove(_ notification: Notification) {
         MainActor.assumeIsolated {
-            guard !isWanderMoving, !EngineV2.isEnabled else { return }
+            if EngineV2.isEnabled {
+                // V2:willMove 必為使用者拖曳(程式 setFrameOrigin 只發 didMove,不發 willMove)。
+                // 暫停引擎(tick 全停)→ 30Hz commit 不再與 isMovableByWindowBackground 背景拖曳搶
+                // 視窗位置;放手後把落點灌回模擬(免回彈)。3s 失效保護:按住不拖(無後續 didMove)
+                // 也會自動收尾,不致永久凍結。
+                userDragActive = true
+                engineV2Driver?.beginUserDrag()
+                scheduleV2DragEnd(after: 3.0)
+                return
+            }
+            guard !isWanderMoving else { return }
             userDragActive = true
             userDragFailsafeAt = Date().addingTimeInterval(3)
             model?.setWanderDirection(0)
         }
     }
 
+    /// V2 拖曳收尾的統一排程(取消上一個、重排):按住不拖用 3s 失效保護,拖曳中每個 didMove
+    /// 重排為 0.3s——靜止 0.3s 視為放手 → 落點灌回模擬 + 帶重錨 + 持久化。沿用 positionSaveTask
+    /// (destroy() 已會 flush/清它)。
+    private func scheduleV2DragEnd(after seconds: Double) {
+        positionSaveTask?.cancel()
+        positionSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled, let self, let panel = self.panel else { return }
+            // 0.3s 無 didMove ≠ 放開滑鼠:使用者可能按著瞄準。主鍵仍按下 → 續等(短輪詢),
+            // 絕不在按鍵未放時解除 isUserDragging(grok SEV1:否則引擎會在拖曳中恢復,而
+            // windowWillMove 只在起手觸發一次、後續無法再暫停 → 後半段又被引擎搶回去)。
+            if NSEvent.pressedMouseButtons & (1 << 0) != 0 {
+                self.scheduleV2DragEnd(after: 0.1)
+                return
+            }
+            self.userDragActive = false
+            self.engineV2Driver?.endUserDrag()   // 落點灌回模擬位置、恢復引擎
+            self.reanchorWanderHome()             // 漫遊帶隨落點重錨(V2 同步 rebuildRegions + 夾限)
+            self.model?.savePetPosition(panel.frame.origin)
+            self.positionSaveTask = nil
+        }
+    }
+
     nonisolated func windowDidMove(_ notification: Notification) {
         Task { @MainActor in
-            guard let panel = self.panel, !self.isWanderMoving else { return }
+            guard let panel = self.panel else { return }
+            if EngineV2.isEnabled {
+                // V2:引擎自身的 30Hz 移動在拖曳期已被 isUserDragging 全停 → 拖曳態下的每個
+                // didMove 都是使用者背景拖曳。每次移動重排收尾(靜止 0.3s 才落定)。
+                guard self.userDragActive else { return }
+                self.scheduleV2DragEnd(after: 0.3)
+                return
+            }
+            guard !self.isWanderMoving else { return }
             // 拖曳持續中:順延 failsafe(每個使用者 move 事件都證明拖曳還活著)。
             if self.userDragActive {
                 self.userDragFailsafeAt = Date().addingTimeInterval(3)

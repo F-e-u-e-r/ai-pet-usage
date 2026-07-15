@@ -1642,4 +1642,28 @@ final class FlyerEnvelopeCycleTests: XCTestCase {
                        "commit 後呈現位置在地面(面板才會移到地面,不凍半空)")
         XCTAssertTrue(loop.motion.state.grounded)
     }
+
+    /// teleport(V2 使用者拖放的落點同步):位置直接設定、動量歸零、視為離地(dragging 清除)。
+    func testTeleportPlacesAndClearsMomentum() {
+        let regions = RegionMap(visibleFrame: CGRect(x: 0, y: 100, width: 800, height: 600))
+        let m = MotionController(profile: .flyer, position: CGPoint(x: 400, y: 480), regions: regions)
+        m.applyImpulse(CGVector(dx: 50, dy: 200))   // 帶速度
+        m.teleport(to: CGPoint(x: 123, y: 456))
+        XCTAssertEqual(m.state.position.x, 123, "落點 x")
+        XCTAssertEqual(m.state.position.y, 456, "落點 y")
+        XCTAssertEqual(m.state.velocity.dx, 0, "動量歸零 dx")
+        XCTAssertEqual(m.state.velocity.dy, 0, "動量歸零 dy")
+        XCTAssertFalse(m.state.grounded, "視為離地(由後續 tick 依區域重新落地/續飛)")
+    }
+
+    /// teleport 後續跑物理:自落點續跑,不彈回拖曳前的舊位(回彈就是原本的 bug)。
+    func testTeleportThenTickContinuesFromDropPoint() {
+        let regions = unboundedRegions()
+        let m = makeFlyer(at: CGPoint(x: 700, y: 500), regions: regions)
+        m.teleport(to: CGPoint(x: 100, y: 300))
+        _ = m.tick(dt: 1.0 / 30, regions: regions)
+        XCTAssertEqual(m.presentedPosition.x, 100, "x 自落點續跑,不回舊位 700")
+        XCTAssertTrue(m.presentedPosition.y < 300 && m.presentedPosition.y > 288,
+                      "y 在落點附近(重力微降),非彈回 500:\(m.presentedPosition.y)")
+    }
 }

@@ -420,6 +420,8 @@ runSuite("FlyerEnvelopeCycleTests", [
     ("testCycleDeterministicSameSeed", flyerEnvelopeCycle.testCycleDeterministicSameSeed),
     ("testSnapToGroundForcesLanding", flyerEnvelopeCycle.testSnapToGroundForcesLanding),
     ("testSnapThenCommitPresentsGroundedPose", flyerEnvelopeCycle.testSnapThenCommitPresentsGroundedPose),
+    ("testTeleportPlacesAndClearsMomentum", flyerEnvelopeCycle.testTeleportPlacesAndClearsMomentum),
+    ("testTeleportThenTickContinuesFromDropPoint", flyerEnvelopeCycle.testTeleportThenTickContinuesFromDropPoint),
 ])
 
 let redaction = RedactionTests()
