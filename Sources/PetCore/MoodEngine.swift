@@ -188,8 +188,11 @@ public enum MoodEngine {
                           reason: "Recently fed.", shortReason: "just fed")
         }
         if idleMinutes <= 10 {
+            // 泡泡不外露「<10m」門檻(讀起來像挑剔「才做不到 10 分」);focused 本質是二元的
+            // 「最近有活動」→ 顯示存在而非時長。完整 prose(Dashboard)保留 recency 敘述。
+            // 兩模型一致:不用 activeMinutesToday(今日累計 ≠ focused 的最近性,且套 "for N" 會謊稱連續)。
             return Result(mood: .focused, animationSpeed: speed, summary: summary,
-                          reason: "Active in the last 10 minutes.", shortReason: "active <10m")
+                          reason: "Active in the last 10 minutes.", shortReason: "active now")
         }
         return Result(mood: .idle, animationSpeed: min(speed, 1.2), summary: summary,
                       reason: "Calm — nothing needs attention.", shortReason: "all calm")
