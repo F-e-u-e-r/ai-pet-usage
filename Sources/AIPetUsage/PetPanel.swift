@@ -673,9 +673,11 @@ struct PetView: View {
             }
             return lines.isEmpty ? "no usage data yet" : lines.joined(separator: "\n")
         case 1:
-            // R2 B3:縮短最寬行(codex 實算 64pt 面板下 "treats N · burn X/h" 溢出)。
+            // 「pet」頁領頭放心情 + 原因(item 8:為何是這個心情;PixelBubble 會自動換行);
+            // 其後保留 Lv/fullness/treats/burn。
             let pet = model.petState
-            return "Lv.\(pet.level) · fullness \(Int(pet.hunger))%\n"
+            return "\(model.mood.mood.rawValue): \(model.mood.reason)\n"
+                + "Lv.\(pet.level) · fullness \(Int(pet.hunger))%\n"
                 + "\(model.treatsAvailable) treats · \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
         default:
             let refreshed = timeAgo(model.dashboard.lastRefreshAt)
