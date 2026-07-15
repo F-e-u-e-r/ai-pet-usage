@@ -57,10 +57,20 @@ public enum MoodEngine {
         }
 
         // 每家 provider 各自的 5h 百分比都列出(使用者要求同時看到 Claude 與 Codex)。
+        // summary 會進匯出報告(petSummary)—— 百分比必須帶信度標記,估算/陳舊值不得
+        // 裸露成官方數字(codex SEV1 round-2;標記樣式與 bubbleQuota 同一套)。
         let providerParts = limits.map { st -> String in
             let code = shortProviderCode(st.providerId)
             if st.fiveHour.idle { return "\(code) idle" }
-            if let p = st.fiveHour.usedPercent { return "\(code) \(Int(p))%" }
+            if let p = st.fiveHour.usedPercent {
+                let pct = Int(p)
+                switch st.fiveHour.confidence {
+                case .high: return "\(code) \(pct)%"
+                case .estimated: return "\(code) ~\(pct)% est"
+                case .stale: return "\(code) \(pct)% stale"
+                case .unknown: return "\(code) \(pct)%?"
+                }
+            }
             return "\(code) —"
         }
         let head = providerParts.isEmpty ? "no providers" : providerParts.joined(separator: " · ")
@@ -136,7 +146,9 @@ public enum MoodEngine {
                 reason = "A quota just reset — celebrating."
                 short = "quota reset!"
             }
-            return Result(mood: .celebration, animationSpeed: 1.6, summary: "Quota reset! " + summary,
+            // 估算邊界的慶祝前綴也不得讀起來像官方事實(summary 會進匯出報告)。
+            let prefix = pet.celebrationEstimated == true ? "Quota likely reset (est)! " : "Quota reset! "
+            return Result(mood: .celebration, animationSpeed: 1.6, summary: prefix + summary,
                           reason: reason, shortReason: short)
         }
         if anyExhausted {

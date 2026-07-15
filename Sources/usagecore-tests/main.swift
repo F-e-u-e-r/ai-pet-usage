@@ -104,6 +104,10 @@ runSuite("LimitEngineTests", [
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
     ("testEstimatedResetSuppressedWhenOfficialWindowGoverns", limits.testEstimatedResetSuppressedWhenOfficialWindowGoverns),
     ("testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning", limits.testEstimatedResetFiresForNextBoundaryWhenOfficialStopsGoverning),
+    ("testEstimatedResetStaleBoundaryDoesNotFireAfterSleep", limits.testEstimatedResetStaleBoundaryDoesNotFireAfterSleep),
+    ("testSweepDoesNotCelebrateStaleExpiry", limits.testSweepDoesNotCelebrateStaleExpiry),
+    ("testSweepStillCelebratesFreshExpiry", limits.testSweepStillCelebratesFreshExpiry),
+    ("testPreferOfficialResetsDropsEstimatedDuplicate", limits.testPreferOfficialResetsDropsEstimatedDuplicate),
     // 同窗官方下修(二筆確認;DATA_SOURCES policy 通道 (c))
     ("testSameWindowSingleLowerReadingStaysPinned", limits.testSameWindowSingleLowerReadingStaysPinned),
     ("testSameWindowDecreaseAdoptsAfterTwoNewerReadings", limits.testSameWindowDecreaseAdoptsAfterTwoNewerReadings),
@@ -185,6 +189,8 @@ runSuite("MoodEngineTests", [
     ("testCelebrationAttributionOfficialAndEstimated", moodTests.testCelebrationAttributionOfficialAndEstimated),
     ("testCelebrationWithoutAttributionFallsBackGeneric", moodTests.testCelebrationWithoutAttributionFallsBackGeneric),
     ("testPetStateBackwardCompatibleDecodeWithoutCelebrationFields", moodTests.testPetStateBackwardCompatibleDecodeWithoutCelebrationFields),
+    ("testSummaryMarksEstimatedPercentAndCelebrationPrefix", moodTests.testSummaryMarksEstimatedPercentAndCelebrationPrefix),
+    ("testAutoPhraseCelebrationUsesShortReason", moodTests.testAutoPhraseCelebrationUsesShortReason),
 ])
 
 let integration = CoordinatorIntegrationTests()
@@ -491,6 +497,10 @@ runSuite("ReportRedactionTests", [
     ("testReportNoFullPathWhenProjectNameNil", reportRedaction.testReportNoFullPathWhenProjectNameNil),
     ("testReportSinkDefensiveAgainstPathName", reportRedaction.testReportSinkDefensiveAgainstPathName),
     ("testReportNoRawParserError", reportRedaction.testReportNoRawParserError),
+    ("testReportScrubsPathShapedModelIdAndPricingSource", reportRedaction.testReportScrubsPathShapedModelIdAndPricingSource),
+    ("testRefreshErrorEmbeddingUnparsableNotMisclassified", reportRedaction.testRefreshErrorEmbeddingUnparsableNotMisclassified),
+    ("testUnparsableCountIsPositional", reportRedaction.testUnparsableCountIsPositional),
+    ("testDisplayModelIdAndSafeLabel", reportRedaction.testDisplayModelIdAndSafeLabel),
     ("testProjectSummaryBasenamesPathAtSource", reportRedaction.testProjectSummaryBasenamesPathAtSource),
 ])
 

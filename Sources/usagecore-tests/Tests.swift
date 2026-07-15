@@ -1111,8 +1111,10 @@ final class LimitEngineTests: XCTestCase {
     func testExpiredWindowShowsRecoveredAndSweepEmitsReset() {
         let engine = LimitEngine(stateURL: nil)
         _ = engine.ingest(readings: [reading(90, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
-        // 窗口過期後:顯示 0%(estimated),掃描發出一次 reset
-        let now = date("2026-01-15T14:30:00Z")
+        // 窗口過期後:顯示 0%(estimated),掃描發出一次 reset。
+        // 時點取邊界後 10 分(≤ resetRecency 15 分);過期太久的靜默行為見
+        // testSweepDoesNotCelebrateStaleExpiry。
+        let now = date("2026-01-15T14:10:00Z")
         let t1 = engine.sweepExpiredWindows(now: now)
         XCTAssertTrue(t1.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
         let t2 = engine.sweepExpiredWindows(now: now)
@@ -1433,6 +1435,64 @@ final class LimitEngineTests: XCTestCase {
                                           lastEventAt: date("2026-01-15T19:00:00Z"),
                                           now: date("2026-01-15T20:05:00Z"))
         XCTAssertTrue(t.contains(.reset(providerId: "claude-code", window: "5h", estimated: true)))
+    }
+
+    /// codex SEV1 round-2(F1):app 睡過邊界後,官方過期+活動反證使官方「當下」不治理,
+    /// 但 18:00 估算邊界已是陳舊消息 → 新鮮度閘擋下,不得與官方 sweep reset 撞成雙通知。
+    func testEstimatedResetStaleBoundaryDoesNotFireAfterSleep() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [RateLimitReading(
+            providerId: "claude-code", observedAt: date("2026-01-15T12:00:00Z"),
+            primary: RateLimitWindowReading(usedPercent: 36, windowMinutes: 300,
+                                            resetsAt: date("2026-01-15T14:20:00Z")),
+            secondary: nil)], settings: settings)
+        _ = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                      blockTokens: 500_000, now: date("2026-01-15T13:00:00Z"))
+        // 14:00–14:26 之間 app 無刷新;14:26 首刷:官方已過期且帳本 14:25 有活動(反證)
+        // → hasUsableWindow=false,但邊界已過 26 分 —— 仍不得發(15 分新鮮度閘)。
+        let t = engine.noteEstimatedBlock(providerId: "claude-code", blockEnd: date("2026-01-15T14:00:00Z"),
+                                          blockTokens: 500_000,
+                                          lastEventAt: date("2026-01-15T14:25:00Z"),
+                                          now: date("2026-01-15T14:26:00Z"))
+        XCTAssertTrue(t.isEmpty, "睡過的估算邊界是陳舊消息,不得補發")
+    }
+
+    /// codex SEV1 round-2(F2):官方排程 reset 也有同一道新鮮度閘 —— app 關閉跨過邊界,
+    /// 重啟首刷不得說「剛剛重置」(一天前的 reset)。
+    func testSweepDoesNotCelebrateStaleExpiry() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z",
+                                                   resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 邊界 14:00,29 小時後首次 sweep → 靜默(expiryHandled 照設,不重複)
+        let sweep = engine.sweepExpiredWindows(now: date("2026-01-16T19:00:00Z"))
+        XCTAssertTrue(sweep.isEmpty, "過期太久的 reset 不得慶祝/通知")
+        let again = engine.sweepExpiredWindows(now: date("2026-01-16T19:05:00Z"))
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    /// 新鮮邊界(≤15 分)照常慶祝 —— 新鮮度閘不得誤殺正常情境。
+    func testSweepStillCelebratesFreshExpiry() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z",
+                                                   resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        let sweep = engine.sweepExpiredWindows(now: date("2026-01-15T14:05:00Z"))
+        XCTAssertTrue(sweep.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
+    }
+
+    /// 同 provider+window 官方與估算同刷撞 reset → 留官方(估算不得蓋掉官方歸因)。
+    func testPreferOfficialResetsDropsEstimatedDuplicate() {
+        let mixed: [LimitTransition] = [
+            .reset(providerId: "claude-code", window: "5h", estimated: false),
+            .reset(providerId: "claude-code", window: "5h", estimated: true),
+            .reset(providerId: "codex", window: "weekly", estimated: false),
+            .reset(providerId: "grok-code", window: "5h", estimated: true),
+        ]
+        let out = LimitEngine.preferOfficialResets(mixed)
+        XCTAssertEqual(out.count, 3)
+        XCTAssertFalse(out.contains(.reset(providerId: "claude-code", window: "5h", estimated: true)),
+                       "官方在場時估算重複必須被丟棄")
+        XCTAssertTrue(out.contains(.reset(providerId: "grok-code", window: "5h", estimated: true)),
+                      "無官方對應的估算 reset 保留")
     }
 
     // MARK: 同窗官方下修(二筆確認;政策 = DATA_SOURCES「Limit calculation policy」通道 (c))

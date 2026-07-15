@@ -35,9 +35,10 @@ declares only those fields — message content is not among them.
   These never leave your Mac, but they mean **sharing the raw folder is not as safe as sharing an export.**
 - **What you choose to export is redacted at the point of export.** An HTML report **actively redacts**
   project names to a basename and emits **closed-vocabulary** data-quality notes, and never includes prompts
-  or message content. Its remaining fields — token counts, model IDs, limit percentages, and pricing-source
-  labels — are shown as-is (HTML-escaped); these are provider/curated values that don't carry local paths in
-  normal use, though only the project-name and data-quality fields are *path-scrubbed*. The `aipet diag`
+  or message content. Its remaining text fields — model IDs and pricing-source labels — are provider/curated
+  values shown after a defensive absolute-path scrub (a path-shaped model ID is reduced to its basename; a
+  pricing label containing an absolute path collapses to a fixed placeholder); token counts and limit
+  percentages are numbers. The `aipet diag`
   diagnostic goes
   further: it is **closed-vocabulary** (status codes, counts, bucketed ages) with **no project names,
   prompts, or real local paths** — its source labels are fixed canonical names like `~/.codex/sessions`,

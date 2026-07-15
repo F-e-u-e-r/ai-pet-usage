@@ -317,6 +317,8 @@ public actor UsageCoordinator {
                                                      lastEventAt: ledger.newestEvent(providerId: "claude-code")?.timestamp,
                                                      now: now)
         }
+        // 官方與估算同窗撞 reset → 留官方(估算不得蓋掉官方歸因)。
+        transitions = LimitEngine.preferOfficialResets(transitions)
 
         try? AtomicJSON.write(scanStates, to: scanStateURL)
         lastRefreshAt = now

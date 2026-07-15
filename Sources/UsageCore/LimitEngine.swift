@@ -381,6 +381,11 @@ public final class LimitEngine {
     }
 
     /// 掃描已過期的窗口(resets_at 已過),觸發一次性的重置轉變。
+    /// 重置「慶祝/通知」的新鮮度門檻:邊界已過超過此時長 → 靜默處理(狀態照常摺疊,
+    /// 只是不發 transition)。寵物與通知的措辭是「剛剛重置」;app 睡過/關閉跨過邊界後,
+    /// 首次刷新補發的是陳舊消息,一天前的 reset 不該說 "just reset"(codex SEV1 round-2)。
+    static let resetRecency: TimeInterval = 15 * 60
+
     public func sweepExpiredWindows(now: Date = Date()) -> [LimitTransition] {
         var transitions: [LimitTransition] = []
         var changed = false
@@ -389,7 +394,8 @@ public final class LimitEngine {
             for keyPath in [\PersistedProvider.primary, \PersistedProvider.secondary] {
                 guard var w = provider[keyPath: keyPath], let resetsAt = w.resetsAt,
                       resetsAt < now, !w.expiryHandled else { continue }
-                if w.percent >= 30 {
+                // 新鮮度閘:過期太久的 reset 只靜默標記(expiryHandled 照設,不重複檢查),不慶祝。
+                if w.percent >= 30, now.timeIntervalSince(resetsAt) <= Self.resetRecency {
                     transitions.append(.reset(providerId: providerId,
                                               window: keyPath == \PersistedProvider.primary ? "5h" : "weekly",
                                               estimated: false))
@@ -409,6 +415,21 @@ public final class LimitEngine {
 
     // MARK: - Claude 估算窗口的重置偵測
 
+    /// 同一 provider+window 在同一次刷新同時出現官方(estimated:false)與估算(estimated:true)
+    /// 的 reset → 丟棄估算那筆:兩者是同一事實的兩種證據,官方勝;寵物/通知的歸因不得被
+    /// 估算蓋掉官方(慶祝採 last-wins,估算在 coordinator 流程中後到)。
+    public static func preferOfficialResets(_ transitions: [LimitTransition]) -> [LimitTransition] {
+        let official = Set(transitions.compactMap { t -> String? in
+            if case let .reset(pid, win, false) = t { return "\(pid)|\(win)" }
+            return nil
+        })
+        guard !official.isEmpty else { return transitions }
+        return transitions.filter { t in
+            if case let .reset(pid, win, true) = t, official.contains("\(pid)|\(win)") { return false }
+            return true
+        }
+    }
+
     /// 估算型(帳本推導)5h 區塊結束時觸發重置轉變。
     ///
     /// `lastEventAt`:該 provider 帳本最新事件時間(顯示端仲裁同款證據)。官方 5h 窗口仍在
@@ -423,7 +444,13 @@ public final class LimitEngine {
         var changed = false
         if let storedEnd = provider.estimatedBlockEnd, now > storedEnd,
            (provider.estimatedBlockTokens ?? 0) > 0, provider.estimatedResetHandled != true {
-            if !hasUsableWindow(provider.primary, now: now, lastEventAt: lastEventAt) {
+            // 兩道閘(缺一不發):
+            // 1. 新鮮度:邊界已過 > resetRecency = 陳舊消息(app 睡過邊界;官方治理期壓下後
+            //    官方才過期 —— 都不得補發,codex SEV1 round-2:18:00 邊界在 18:26 補發,
+            //    與官方 18:20 的 sweep reset 撞成雙通知且估算歸因蓋掉官方)。
+            // 2. 官方不治理:hasUsableWindow(與顯示端同一條規則)為真時估算邊界不得發聲。
+            if now.timeIntervalSince(storedEnd) <= Self.resetRecency,
+               !hasUsableWindow(provider.primary, now: now, lastEventAt: lastEventAt) {
                 transitions.append(.reset(providerId: providerId, window: "5h", estimated: true))
             }
             provider.estimatedResetHandled = true

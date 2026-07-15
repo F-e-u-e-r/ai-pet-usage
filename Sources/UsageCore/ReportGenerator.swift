@@ -114,7 +114,8 @@ public enum ReportGenerator {
         for p in data.projects {
             let last = p.lastActive.map { df.string(from: $0) } ?? "—"
             let projName = PrivacyRedaction.displayProjectName(projectName: p.projectName, projectId: p.projectId)
-            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel ?? "—"))</td><td>\(last)</td><td>\(pct(p.shareOfPeriod * 100))</td></tr>"
+            // topModel 同樣過 sink 防護:絕對路徑形狀的模型 ID(損壞日誌/覆寫檔)不外洩(codex SEV1)。
+            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel.map(PrivacyRedaction.displayModelId) ?? "—"))</td><td>\(last)</td><td>\(pct(p.shareOfPeriod * 100))</td></tr>"
         }
         if data.projects.isEmpty { html += "<tr><td colspan=\"7\">No usage in this period.</td></tr>" }
         html += "</tbody></table><p class=\"note\">Project names shown; full local paths are redacted by default.</p></section>"
@@ -142,11 +143,15 @@ public enum ReportGenerator {
             let price = data.pricingRows.first {
                 $0.providerId == m.providerId && ($0.modelId == m.modelId || ($0.modelId.hasSuffix("*") && m.modelId.hasPrefix(String($0.modelId.dropLast()))))
             }
+            // sink 防護(codex SEV1):模型 ID 走 displayModelId(絕對路徑形 → basename;合法
+            // `vendor/model` 相對形不受影響);source / effectiveFrom 是使用者覆寫檔可攜任意字串
+            // 的描述性標籤 → safeLabel(任一 token 是絕對路徑形 → 整串收斂為固定字樣)。
+            let modelCell = "\(esc(m.providerId))/\(esc(PrivacyRedaction.displayModelId(m.modelId)))"
             if let price {
                 let override = price.userOverride ? " (user override)" : ""
-                html += "<tr><td>\(esc(m.providerId))/\(esc(m.modelId))</td><td>\(fmtTokens(m.tokens.total))</td><td>\(fmtCost(m.cost))</td><td>\(money(price.inputPerMillion))</td><td>\(money(price.outputPerMillion))</td><td>\(price.cacheReadPerMillion.map(money) ?? "—")</td><td>\(esc(price.source))\(override)</td><td>\(esc(price.effectiveFrom))</td></tr>"
+                html += "<tr><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>\(fmtCost(m.cost))</td><td>\(money(price.inputPerMillion))</td><td>\(money(price.outputPerMillion))</td><td>\(price.cacheReadPerMillion.map(money) ?? "—")</td><td>\(esc(PrivacyRedaction.safeLabel(price.source)))\(override)</td><td>\(esc(PrivacyRedaction.safeLabel(price.effectiveFrom)))</td></tr>"
             } else {
-                html += "<tr class=\"unknown\"><td>\(esc(m.providerId))/\(esc(m.modelId))</td><td>\(fmtTokens(m.tokens.total))</td><td>unknown model — excluded from cost</td><td colspan=\"5\">No pricing entry. Add a user override to include this model in cost totals.</td></tr>"
+                html += "<tr class=\"unknown\"><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>unknown model — excluded from cost</td><td colspan=\"5\">No pricing entry. Add a user override to include this model in cost totals.</td></tr>"
             }
         }
         html += "</tbody></table>"

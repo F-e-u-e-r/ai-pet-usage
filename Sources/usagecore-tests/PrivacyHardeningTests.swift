@@ -10,7 +10,8 @@ private func privTempDir() -> URL {
     return dir
 }
 
-private func makeReport(projects: [ProjectSummary], dataQuality: [String]) -> String {
+private func makeReport(projects: [ProjectSummary], dataQuality: [String],
+                        models: [ModelUsageSummary] = [], pricingRows: [ModelPrice] = []) -> String {
     let data = ReportData(
         title: "Privacy Test Report",
         period: DateInterval(start: Date(timeIntervalSince1970: 1_700_000_000),
@@ -22,9 +23,9 @@ private func makeReport(projects: [ProjectSummary], dataQuality: [String]) -> St
         byProvider: [],
         limitStates: [],
         projects: projects,
-        models: [],
+        models: models,
         buckets: [],
-        pricingRows: [],
+        pricingRows: pricingRows,
         unknownModels: [],
         dataQuality: dataQuality,
         petSummary: nil
@@ -149,8 +150,67 @@ final class ReportRedactionTests: XCTestCase {
         XCTAssertFalse(html.contains(".claude"))
         XCTAssertFalse(html.contains("couldn't be read"))
     }
+
+    // codex SEV1 round-2(F4):覆寫檔的 source/effectiveFrom 與損壞日誌的 modelId/topModel
+    // 可能帶絕對路徑 → 報告 sink 防護(basename / 固定字樣),合法值原樣。
+    func testReportScrubsPathShapedModelIdAndPricingSource() throws {
+        var proj = project(id: "/tmp/p", name: "demo")
+        proj.topModel = "/Users/alice/SecretClient/model.bin"
+        let models = [ModelUsageSummary(providerId: "codex", modelId: "/Users/alice/SecretClient/model.bin",
+                                        tokens: TokenBreakdown(input: 100), cost: .zero),
+                      ModelUsageSummary(providerId: "codex", modelId: "anthropic/claude-x",
+                                        tokens: TokenBreakdown(input: 50), cost: .zero)]
+        let prices = [ModelPrice(providerId: "codex", modelId: "/Users/alice/SecretClient/model.bin",
+                                 displayName: "x", inputPerMillion: 1, outputPerMillion: 2,
+                                 effectiveFrom: "from /Users/alice/SecretClient/prices.txt",
+                                 source: "/Users/alice/SecretClient/prices.txt", userOverride: true),
+                      ModelPrice(providerId: "codex", modelId: "anthropic/claude-x",
+                                 displayName: "y", inputPerMillion: 1, outputPerMillion: 2,
+                                 effectiveFrom: "2026-01-01",
+                                 source: "anthropic.com/pricing built-in snapshot")]
+        let html = makeReport(projects: [proj], dataQuality: [], models: models, pricingRows: prices)
+        XCTAssertFalse(html.contains("/Users/"), "絕對路徑不得出現在報告")
+        XCTAssertFalse(html.contains("SecretClient"))
+        XCTAssertTrue(html.contains("model.bin"), "basename 保留模型身分")
+        XCTAssertTrue(html.contains("custom (path redacted)"))
+        XCTAssertTrue(html.contains("anthropic/claude-x"), "vendor/model 相對形不得誤傷")
+        XCTAssertTrue(html.contains("anthropic.com/pricing built-in snapshot"), "合法標籤原樣")
+    }
     // grok S2-3:來源端(UsageLedger.projectSummaries)缺 projectName 時,顯示名 basename 化,
     // 而非把完整 cwd 當顯示名 → UI 與 HTML 皆消費此淨化值。
+    // codex SEV1 round-2(F5):refresh error 的 err 段是任意原文,可能內嵌其他樣板關鍵詞;
+    // 「refresh error」必須最先判,且 unparsable count 只認緊鄰位置,不掃全字串。
+    func testRefreshErrorEmbeddingUnparsableNotMisclassified() throws {
+        let out = PrivacyRedaction.safeDataQuality(
+            "codex: refresh error — unparsable line at /Users/alice/client-88421/log")
+        XCTAssertEqual(out, "codex: refresh error")
+        XCTAssertFalse(out.contains("88421"), "路徑衍生數字不得回顯")
+        XCTAssertFalse(out.contains("/Users"))
+    }
+
+    func testUnparsableCountIsPositional() throws {
+        XCTAssertEqual(PrivacyRedaction.safeDataQuality("codex: 12 unparsable line(s) skipped on last scan"),
+                       "codex: 12 unparsable line(s) skipped on last scan")
+        // 數字不在「unparsable line」緊前(如被嵌入的尾巴)→ 不得撿來當 count
+        let out = PrivacyRedaction.safeDataQuality("codex: unparsable line junk 999 /Users/x")
+        XCTAssertEqual(out, "codex: unparsable line(s) skipped on last scan")
+        XCTAssertFalse(out.contains("999"))
+    }
+
+    // codex SEV1 round-2(F4):模型 ID / 定價標籤的絕對路徑防護(合法相對形不受影響)。
+    func testDisplayModelIdAndSafeLabel() throws {
+        XCTAssertEqual(PrivacyRedaction.displayModelId("claude-fable-5"), "claude-fable-5")
+        XCTAssertEqual(PrivacyRedaction.displayModelId("anthropic/claude-x"), "anthropic/claude-x",
+                       "vendor/model 相對形是合法 ID,不得誤傷")
+        XCTAssertEqual(PrivacyRedaction.displayModelId("/Users/alice/SecretClient/model.bin"), "model.bin")
+        XCTAssertEqual(PrivacyRedaction.displayModelId("C:\\Users\\alice\\m.bin"), "m.bin")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("anthropic.com/pricing built-in snapshot"),
+                       "anthropic.com/pricing built-in snapshot", "合法內建標籤不受影響")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("from /Users/alice/SecretClient/prices.txt"),
+                       "custom (path redacted)")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("~/notes/prices.md"), "custom (path redacted)")
+    }
+
     func testProjectSummaryBasenamesPathAtSource() throws {
         let ledger = UsageLedger(fileURL: nil)
         let ts = Date(timeIntervalSince1970: 1_700_000_100)
