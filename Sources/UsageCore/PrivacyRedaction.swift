@@ -96,28 +96,31 @@ public enum PrivacyRedaction {
         return Int(match[d])
     }
 
-    /// 「絕對路徑形狀」判定:`/`、`~`、UNC(`\\`)開頭,或磁碟機前綴(`C:\` / `C:` 結尾)。
-    /// 與 `looksLikePath` 不同:**不**把相對的 `vendor/model`(如 `anthropic/claude-x`)或
-    /// `anthropic.com/pricing` 這類合法含斜線標籤當成路徑。
-    static func looksLikeAbsolutePath(_ s: String) -> Bool {
-        s.hasPrefix("/") || s.hasPrefix("~") || s.hasPrefix("\\\\")
-            || s.range(of: #"^[A-Za-z]:([/\\]|$)"#, options: .regularExpression) != nil
+    /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok SEV2 round-2:token 前綴判定漏掉
+    /// `file:///Users/…` 與 `x=/Users/…` 這類嵌入形)。步驟:
+    /// 1. 剝掉 URL scheme(`file://` 等)→ scheme 後的絕對路徑同樣受測;
+    /// 2. 掃描「分隔字元(或字串開頭)後緊接路徑起始」:`/x`、`~/`、`C:\`、`\\`(UNC)。
+    /// 合法的 `vendor/model`、`anthropic.com/pricing`、`https://example.com/docs`(descheme 後
+    /// `example.com/docs` 的斜線前是字母)都不會誤中;`~5 min` 的孤立 `~` 不算(須 `~/`)。
+    static func containsAbsolutePath(_ s: String) -> Bool {
+        let deschemed = s.replacingOccurrences(of: #"[A-Za-z][A-Za-z0-9+.\-]*://"#,
+                                               with: " ", options: .regularExpression)
+        return deschemed.range(of: #"(^|[\s=:'"`(<\[{])(/[^\s/]|~[/\\]|[A-Za-z]:[/\\]|\\\\)"#,
+                               options: .regularExpression) != nil
     }
 
     /// 模型 ID 的 sink 端防護:合法 ID(`claude-fable-5`、`vendor/model` 相對形)原樣;
-    /// **絕對路徑形狀**的 ID(損壞/惡意日誌、或使用者覆寫檔筆誤)→ basename,不外洩完整路徑。
+    /// 內嵌**絕對路徑形狀**的 ID(損壞/惡意日誌、覆寫檔筆誤、`file://` URL)→ basename。
     public static func displayModelId(_ s: String) -> String {
-        guard looksLikeAbsolutePath(s.trimmingCharacters(in: .whitespaces)) else { return s }
+        guard containsAbsolutePath(s) else { return s }
         let base = lastPathSegment(s)
         return base.isEmpty ? "(redacted path)" : base
     }
 
     /// 描述性標籤(定價來源、effectiveFrom 等,含使用者覆寫檔的任意字串)的 sink 端防護:
-    /// 任一 whitespace token 是絕對路徑形狀 → 整串收斂為固定字樣(fail-closed;標籤只具參考性,
+    /// 內嵌絕對路徑(含 `file://` 形)→ 整串收斂為固定字樣(fail-closed;標籤只具參考性,
     /// 不值得為了保留部分字面而冒路徑外洩險)。合法內建標籤(`anthropic.com/pricing …`)不受影響。
     public static func safeLabel(_ s: String, fallback: String = "custom (path redacted)") -> String {
-        let tokens = s.split(whereSeparator: { $0 == " " || $0 == "\t" })
-        if tokens.contains(where: { looksLikeAbsolutePath(String($0)) }) { return fallback }
-        return s
+        containsAbsolutePath(s) ? fallback : s
     }
 }

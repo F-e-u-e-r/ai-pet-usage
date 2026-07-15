@@ -207,7 +207,8 @@ final class AppModel {
                                             providerId: providerId, window: window, estimated: estimated)
                     petState = feedingEngine.state
                 }
-                notify(title: "Quota reset 🎉",
+                // 標題是通知最顯眼的表面 —— 估算邊界連標題都不得是無修飾的事實句(codex SEV1 round-2)。
+                notify(title: estimated ? "Quota likely reset 🎉" : "Quota reset 🎉",
                        body: estimated
                            ? "\(providerName(providerId)) \(window) block has likely reset (estimated from local activity)."
                            : "\(providerName(providerId)) \(window) window has reset.")

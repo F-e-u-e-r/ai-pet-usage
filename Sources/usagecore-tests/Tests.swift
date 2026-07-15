@@ -1479,6 +1479,23 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertTrue(sweep.contains(.reset(providerId: "codex", window: "5h", estimated: false)))
     }
 
+    /// grok/codex SEV1 round-3:app 關閉期間 provider 已寫入新窗讀數,重開後 ingest(fold)
+    /// 先於 sweep 採納新窗 —— 翻轉「證據」(observedAt)距真實 now 太久 → 只默默採納,
+    /// 不得補發兩小時前的「剛剛重置」。
+    func testFoldRolloverProcessedLateAdoptsSilently() {
+        let engine = LimitEngine(stateURL: nil)
+        _ = engine.ingest(readings: [windowReading(80, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+        // 新窗讀數 14:05 寫入磁碟;app 16:00 才重開掃到(now 顯式傳入)
+        let late = engine.ingest(readings: [windowReading(5, at: "2026-01-15T14:05:00Z", resetsAt: "2026-01-15T19:00:00Z")],
+                                 settings: settings, now: date("2026-01-15T16:00:00Z"))
+        XCTAssertTrue(late.filter { if case .reset = $0 { return true }; return false }.isEmpty,
+                      "兩小時前的翻轉是陳舊消息,不得慶祝/通知")
+        // 狀態仍須採納新窗(只是不出聲)
+        let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                      settings: settings, now: date("2026-01-15T16:00:00Z"))
+        XCTAssertEqual(state.fiveHour.usedPercent, 5, "採納不受新鮮度閘影響")
+    }
+
     /// 同 provider+window 官方與估算同刷撞 reset → 留官方(估算不得蓋掉官方歸因)。
     func testPreferOfficialResetsDropsEstimatedDuplicate() {
         let mixed: [LimitTransition] = [

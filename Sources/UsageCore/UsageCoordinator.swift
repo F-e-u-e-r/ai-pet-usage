@@ -297,7 +297,8 @@ public actor UsageCoordinator {
                 let (result, newState) = try adapter.refreshUsage(state: state)
                 scanStates[adapter.providerId] = newState
                 inserted += ledger.append(result.events)
-                transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: fullReindex)
+                transitions += limits.ingest(readings: result.rateLimits, settings: settings,
+                                             fullReindex: fullReindex, now: now)
                 parseErrorCounts[adapter.providerId] = result.parseErrors
                 refreshErrors[adapter.providerId] = nil
             } catch {

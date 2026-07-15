@@ -107,6 +107,7 @@ runSuite("LimitEngineTests", [
     ("testEstimatedResetStaleBoundaryDoesNotFireAfterSleep", limits.testEstimatedResetStaleBoundaryDoesNotFireAfterSleep),
     ("testSweepDoesNotCelebrateStaleExpiry", limits.testSweepDoesNotCelebrateStaleExpiry),
     ("testSweepStillCelebratesFreshExpiry", limits.testSweepStillCelebratesFreshExpiry),
+    ("testFoldRolloverProcessedLateAdoptsSilently", limits.testFoldRolloverProcessedLateAdoptsSilently),
     ("testPreferOfficialResetsDropsEstimatedDuplicate", limits.testPreferOfficialResetsDropsEstimatedDuplicate),
     // 同窗官方下修(二筆確認;DATA_SOURCES policy 通道 (c))
     ("testSameWindowSingleLowerReadingStaysPinned", limits.testSameWindowSingleLowerReadingStaysPinned),
@@ -501,6 +502,7 @@ runSuite("ReportRedactionTests", [
     ("testRefreshErrorEmbeddingUnparsableNotMisclassified", reportRedaction.testRefreshErrorEmbeddingUnparsableNotMisclassified),
     ("testUnparsableCountIsPositional", reportRedaction.testUnparsableCountIsPositional),
     ("testDisplayModelIdAndSafeLabel", reportRedaction.testDisplayModelIdAndSafeLabel),
+    ("testAbsolutePathScrubCatchesSchemeAndEmbeddedForms", reportRedaction.testAbsolutePathScrubCatchesSchemeAndEmbeddedForms),
     ("testProjectSummaryBasenamesPathAtSource", reportRedaction.testProjectSummaryBasenamesPathAtSource),
 ])
 

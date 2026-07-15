@@ -211,6 +211,28 @@ final class ReportRedactionTests: XCTestCase {
         XCTAssertEqual(PrivacyRedaction.safeLabel("~/notes/prices.md"), "custom (path redacted)")
     }
 
+    // grok SEV2 / codex SEV1 round-3:`file://` scheme 與「嵌入式」絕對路徑也要攔
+    //(token 前綴判定漏掉 `file:///Users/…`、`local (/Users/…)`、`x=/Users/…`)。
+    func testAbsolutePathScrubCatchesSchemeAndEmbeddedForms() throws {
+        XCTAssertEqual(PrivacyRedaction.displayModelId("file:///Users/alice/SecretClient/model.bin"),
+                       "model.bin")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("file:///Users/alice/SecretClient/prices.json"),
+                       "custom (path redacted)")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("local (/Users/alice/SecretClient/prices.json)"),
+                       "custom (path redacted)")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("src=/Users/alice/SecretClient/p.txt"),
+                       "custom (path redacted)")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("see C:\\clients\\secret\\p.txt"),
+                       "custom (path redacted)")
+        // 不得誤傷:web URL、孤立 ~(約數)、相對 vendor/model
+        XCTAssertEqual(PrivacyRedaction.safeLabel("https://example.com/docs pricing page"),
+                       "https://example.com/docs pricing page")
+        XCTAssertEqual(PrivacyRedaction.safeLabel("approx ~5 min snapshot"),
+                       "approx ~5 min snapshot")
+        XCTAssertEqual(PrivacyRedaction.displayModelId("openrouter/anthropic/claude-x"),
+                       "openrouter/anthropic/claude-x")
+    }
+
     func testProjectSummaryBasenamesPathAtSource() throws {
         let ledger = UsageLedger(fileURL: nil)
         let ts = Date(timeIntervalSince1970: 1_700_000_100)
