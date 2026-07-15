@@ -121,8 +121,9 @@ version) live in macOS **UserDefaults**; the optional scheduled export writes a 
 Data & Privacy has **Full Reindex**, which *rebuilds* the ledger from your logs — it is not an erase). To
 delete app data manually: **quit the app**, then remove `~/Library/Application Support/AIPetUsage/`.
 Caveats:
-- Deleting the folder also removes `settings.json`, so **all settings return to defaults** — including
+- Deleting the folder also removes `settings.json`, so the app's own settings return to defaults — including
   provider enable/disable, so any provider you had turned off becomes **default-enabled** again.
+  (Update-check preferences live in macOS UserDefaults, **not** this folder, and are unaffected.)
 - It does **not** delete your provider logs (`~/.claude`, `~/.codex`, `~/.grok`), so on the next refresh the
   app may rescan them and rebuild the ledger.
 - If you set up the optional scheduled export, also remove its LaunchAgent

@@ -102,6 +102,8 @@ This machine's CommandLineTools installation has two version-mismatch defects (a
 - 💬 Every permission prompt explains why it is needed.
 - 🧩 Provider adapters stay isolated, so data-source changes do not affect the pet engine.
 
+See [`PRIVACY.md`](PRIVACY.md) for the promise in plain language and [`docs/DATA_BOUNDARY.md`](docs/DATA_BOUNDARY.md) for the per-data-class checklist of where each thing can (and can't) go.
+
 ## ⚙️ Concurrency model (app + CLI)
 
 The app and the `aipet` CLI share `~/Library/Application Support/AIPetUsage/`. This is safe by design:
@@ -136,6 +138,7 @@ Provider priority: **v1 core** — Codex and Claude Code · **shipped, limited d
 | Document | Contents |
 | --- | --- |
 | [`ROADMAP.md`](ROADMAP.md) | Phased delivery plan from product definition through distribution. |
+| [`PRIVACY.md`](PRIVACY.md) · [`docs/DATA_BOUNDARY.md`](docs/DATA_BOUNDARY.md) | Privacy promise (plain language) and the per-data-class boundary checklist. |
 | [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) | Exact local files read by each provider adapter and the limit-calculation policy. |
 | [`docs/HTML_REPORT_EXPORT_SPEC.md`](docs/HTML_REPORT_EXPORT_SPEC.md) | Local static HTML report export requirements. |
 
