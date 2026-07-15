@@ -173,6 +173,8 @@ runSuite("MoodEngineTests", [
     ("testExhaustedReasonHasWindowValueProvenance", moodTests.testExhaustedReasonHasWindowValueProvenance),
     ("testExhaustedEstimatedNotShownAsOfficial", moodTests.testExhaustedEstimatedNotShownAsOfficial),
     ("testExhaustedRanksRawDoubleNotRounded", moodTests.testExhaustedRanksRawDoubleNotRounded),
+    ("testShortReasonEstimatedIsMarked", moodTests.testShortReasonEstimatedIsMarked),
+    ("testShortReasonProviderReportedIsBare", moodTests.testShortReasonProviderReportedIsBare),
     ("testNoProvidersReasonDistinctFromSleeping", moodTests.testNoProvidersReasonDistinctFromSleeping),
     ("testErrorReasonSeparateFromStale", moodTests.testErrorReasonSeparateFromStale),
     ("testEveryMoodHasNonEmptyReason", moodTests.testEveryMoodHasNonEmptyReason),

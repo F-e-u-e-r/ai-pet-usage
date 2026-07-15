@@ -13,13 +13,19 @@ public enum MoodEngine {
         public var summary: String
         /// 「為何是這個心情」——逐分支的具體觸發原因(如「Idle 47 min」「CC 5h is estimated at 85%」)。
         /// 額度相關原因一律帶 provenance(provider-reported / estimated / stale),避免讓估計值看起來像官方。
+        /// 用於 Dashboard 卡、報告、a11y(空間充足)。
         public var reason: String
+        /// 極窄的浮動泡泡用的**精簡**原因(≈84pt 寬、字級固定)。誠實守則:estimated/stale 的百分比
+        /// 一律帶標記(`~…% est` / `…% stale`),絕不裸露 %;provider-reported 是官方真值可裸露。
+        public var shortReason: String
 
-        public init(mood: PetMood, animationSpeed: Double, summary: String, reason: String) {
+        public init(mood: PetMood, animationSpeed: Double, summary: String,
+                    reason: String, shortReason: String = "") {
             self.mood = mood
             self.animationSpeed = animationSpeed
             self.summary = summary
             self.reason = reason
+            self.shortReason = shortReason
         }
     }
 
@@ -71,7 +77,7 @@ public enum MoodEngine {
             }
         }
         // 觸發某窗 warning 的 provider:取該窗 usedPercent 最大者;平手以 providerId 穩定排序。
-        func trigger(_ window: (ProviderLimitState) -> LimitWindowState) -> (code: String, pct: Int, prov: String)? {
+        func trigger(_ window: (ProviderLimitState) -> LimitWindowState) -> (code: String, pct: Int, conf: Confidence)? {
             let hit = limits
                 .compactMap { l -> (ProviderLimitState, Double)? in
                     guard let p = window(l).usedPercent, p >= warnThreshold else { return nil }
@@ -80,7 +86,7 @@ public enum MoodEngine {
                 .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.providerId < $1.0.providerId }
                 .first
             guard let (l, p) = hit else { return nil }
-            return (shortProviderCode(l.providerId), Int(p.rounded()), provenance(window(l).confidence))
+            return (shortProviderCode(l.providerId), Int(p.rounded()), window(l).confidence)
         }
         // 某 provider「較嚴重的窗」(usedPercent 較高者)+ 其可信度 —— exhausted 原因用。
         // pct 回傳**原始 Double**:排名須用原始值(99.5% 與 100% 四捨五入後皆 100,會讓 tie-break
@@ -92,15 +98,27 @@ public enum MoodEngine {
             if let w { return ("weekly", w, l.weekly.confidence) }
             return nil
         }
+        // 泡泡用的精簡額度字串(誠實守則):estimated → `~N% est`、stale → `N% stale`(**絕不裸露 %**);
+        // provider-reported 是官方真值,可裸露 `N%`。窗名縮寫 5-hour→5h、weekly→wk。
+        func bubbleQuota(_ code: String, _ win: String, _ pct: Int, _ c: Confidence, suffix: String = "") -> String {
+            let w = win == "5-hour" ? "5h" : (win == "weekly" ? "wk" : win)
+            switch c {
+            case .high: return "\(code) \(w) \(pct)%\(suffix)"
+            case .estimated: return "\(code) \(w) ~\(pct)% est\(suffix)"
+            case .stale: return "\(code) \(w) \(pct)% stale\(suffix)"
+            case .unknown: return "\(code) \(w) \(pct)%?\(suffix)"
+            }
+        }
 
-        // 優先序(高 → 低)
+        // 優先序(高 → 低)。每個分支同時給 reason(完整,Dashboard/報告/a11y)與 shortReason(泡泡)。
         if let until = pet.eatingUntil, until > now {
             // 免費 kibble 也走 eating —— 不寫死「a treat」。
-            return Result(mood: .eating, animationSpeed: 1.2, summary: summary, reason: "Eating now.")
+            return Result(mood: .eating, animationSpeed: 1.2, summary: summary,
+                          reason: "Eating now.", shortReason: "eating now")
         }
         if let until = pet.celebrationUntil, until > now {
             return Result(mood: .celebration, animationSpeed: 1.6, summary: "Quota reset! " + summary,
-                          reason: "A quota just reset — celebrating.")
+                          reason: "A quota just reset — celebrating.", shortReason: "quota reset!")
         }
         if anyExhausted {
             // 取「最嚴重窗百分比最高」的耗盡 provider(平手以 providerId 穩定排序);原因帶窗+值+provenance,
@@ -111,37 +129,45 @@ public enum MoodEngine {
                 return a != b ? a > b : $0.providerId < $1.providerId
             }
             let reason: String
+            let short: String
             if let top = ranked.first, let ww = worstWindow(top) {
                 let more = ranked.count > 1 ? " (+\(ranked.count - 1) more)" : ""
-                reason = "\(shortProviderCode(top.providerId)) \(ww.window) is \(provenance(ww.conf)) at \(Int(ww.pct.rounded()))% (limit reached)\(more)."
+                let code = shortProviderCode(top.providerId)
+                let pct = Int(ww.pct.rounded())
+                reason = "\(code) \(ww.window) is \(provenance(ww.conf)) at \(pct)% (limit reached)\(more)."
+                short = bubbleQuota(code, ww.window, pct, ww.conf, suffix: " hit\(ranked.count > 1 ? " +\(ranked.count - 1)" : "")")
             } else {
                 reason = "A provider hit its usage limit."
+                short = "limit hit"
             }
-            return Result(mood: .exhausted, animationSpeed: 0.4, summary: summary, reason: reason)
+            return Result(mood: .exhausted, animationSpeed: 0.4, summary: summary, reason: reason, shortReason: short)
         }
         if let worst = worstFive, worst >= warnThreshold {
-            let reason = trigger { $0.fiveHour }
-                .map { "\($0.code) 5-hour is \($0.prov) at \($0.pct)% (warn at \(warnPct)%)." }
+            let t = trigger { $0.fiveHour }
+            let reason = t.map { "\($0.code) 5-hour is \(provenance($0.conf)) at \($0.pct)% (warn at \(warnPct)%)." }
                 ?? String(format: "5-hour usage at %d%% (warn at %d%%).", Int(worst.rounded()), warnPct)
-            return Result(mood: .warning, animationSpeed: max(speed, 1.5), summary: summary, reason: reason)
+            let short = t.map { bubbleQuota($0.code, "5-hour", $0.pct, $0.conf) } ?? "5h over warn"
+            return Result(mood: .warning, animationSpeed: max(speed, 1.5), summary: summary, reason: reason, shortReason: short)
         }
         if let weekly = worstWeekly, weekly >= warnThreshold {
-            let reason = trigger { $0.weekly }
-                .map { "\($0.code) weekly is \($0.prov) at \($0.pct)% (warn at \(warnPct)%)." }
+            let t = trigger { $0.weekly }
+            let reason = t.map { "\($0.code) weekly is \(provenance($0.conf)) at \($0.pct)% (warn at \(warnPct)%)." }
                 ?? String(format: "Weekly usage at %d%% (warn at %d%%).", Int(weekly.rounded()), warnPct)
-            return Result(mood: .tired, animationSpeed: 0.7, summary: summary, reason: reason)
+            let short = t.map { bubbleQuota($0.code, "weekly", $0.pct, $0.conf) } ?? "wk over warn"
+            return Result(mood: .tired, animationSpeed: 0.7, summary: summary, reason: reason, shortReason: short)
         }
         if noProviders || allNoData {
             return Result(mood: .confused, animationSpeed: 0.8, summary: "No usage data yet. " + summary,
-                          reason: noProviders ? "No providers detected yet." : "No usage data found yet.")
+                          reason: noProviders ? "No providers detected yet." : "No usage data found yet.",
+                          shortReason: noProviders ? "no providers" : "no data yet")
         }
         if anyError {
             return Result(mood: .confused, animationSpeed: 0.8, summary: "Couldn't read a provider log. " + summary,
-                          reason: "A provider log couldn't be read.")
+                          reason: "A provider log couldn't be read.", shortReason: "log unreadable")
         }
         if anyStale {
             return Result(mood: .confused, animationSpeed: 0.8, summary: "Data looks stale. " + summary,
-                          reason: "Provider data looks stale (logs may be behind).")
+                          reason: "Provider data looks stale (logs may be behind).", shortReason: "data stale")
         }
         let idleMinutes = lastEventAt.map { now.timeIntervalSince($0) / 60 } ?? .infinity
         if idleMinutes > 45 {
@@ -149,22 +175,24 @@ public enum MoodEngine {
             let reason = lastEventAt != nil
                 ? "Idle \(Int(idleMinutes)) min — no recent activity."
                 : "No recent activity."
-            return Result(mood: .sleeping, animationSpeed: 0.3, summary: summary, reason: reason)
+            let short = lastEventAt != nil ? "idle \(Int(idleMinutes))m" : "no activity"
+            return Result(mood: .sleeping, animationSpeed: 0.3, summary: summary, reason: reason, shortReason: short)
         }
         if pet.hunger < 30 {
             // pet.hunger 是「飽足度」meter(feed 增、衰減減;<30 = 餓)。
             return Result(mood: .hungry, animationSpeed: 1.1, summary: "Hungry! " + summary,
-                          reason: "Fullness \(Int(pet.hunger))% — time to feed.")
+                          reason: "Fullness \(Int(pet.hunger))% — time to feed.", shortReason: "feed me")
         }
         if let until = pet.happyUntil, until > now {
-            return Result(mood: .happy, animationSpeed: 1.2, summary: summary, reason: "Recently fed.")
+            return Result(mood: .happy, animationSpeed: 1.2, summary: summary,
+                          reason: "Recently fed.", shortReason: "just fed")
         }
         if idleMinutes <= 10 {
             return Result(mood: .focused, animationSpeed: speed, summary: summary,
-                          reason: "Active in the last 10 minutes.")
+                          reason: "Active in the last 10 minutes.", shortReason: "active <10m")
         }
         return Result(mood: .idle, animationSpeed: min(speed, 1.2), summary: summary,
-                      reason: "Calm — nothing needs attention.")
+                      reason: "Calm — nothing needs attention.", shortReason: "all calm")
     }
 
     /// mood → 疊加在寵物本體旁的小徽章。

@@ -254,6 +254,7 @@ final class MoodEngineTests: XCTestCase {
         func check(_ d: DashboardState, _ p: PetStateData, _ label: String) {
             let r = MoodEngine.evaluate(dashboard: d, pet: p, warnThreshold: 80, now: now)
             XCTAssertFalse(r.reason.isEmpty, "\(label) → \(r.mood) has empty reason")
+            XCTAssertFalse(r.shortReason.isEmpty, "\(label) → \(r.mood) has empty shortReason")
         }
         var eatingPet = pet(); eatingPet.eatingUntil = now.addingTimeInterval(60)
         var celebPet = pet(); celebPet.celebrationUntil = now.addingTimeInterval(60)
@@ -270,6 +271,24 @@ final class MoodEngineTests: XCTestCase {
         check(dashboard(five: 30, lastEventMinutesAgo: 5), happyPet, "happy")
         check(dashboard(five: 30, lastEventMinutesAgo: 5), pet(), "focused")
         check(dashboard(five: 30, lastEventMinutesAgo: 20), pet(), "idle")
+    }
+
+    // 泡泡 shortReason 誠實守則:estimated 的百分比一律帶 `~`+`est` 標記(絕不裸露官方外觀)。
+    func testShortReasonEstimatedIsMarked() {
+        let r = MoodEngine.evaluate(dashboard: dashboardEstimatedFive(85), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.shortReason.contains("est"), r.shortReason)
+        XCTAssertTrue(r.shortReason.contains("~"), r.shortReason)
+        XCTAssertTrue(r.shortReason.contains("85%"), r.shortReason)
+    }
+
+    // provider-reported 是官方真值,short 可裸露 %(且**不得**被標成 estimated)。
+    func testShortReasonProviderReportedIsBare() {
+        let r = MoodEngine.evaluate(dashboard: dashboard(five: 85), pet: pet(), warnThreshold: 80, now: now)
+        XCTAssertEqual(r.mood, .warning)
+        XCTAssertTrue(r.shortReason.contains("85%"), r.shortReason)
+        XCTAssertFalse(r.shortReason.contains("est"), "official value must not be tagged estimated: \(r.shortReason)")
+        XCTAssertFalse(r.shortReason.contains("~"), r.shortReason)
     }
 
     func testTiredWeeklyReasonCarriesProvenance() {
