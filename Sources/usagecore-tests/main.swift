@@ -422,4 +422,31 @@ runSuite("FlyerEnvelopeCycleTests", [
     ("testSnapThenCommitPresentsGroundedPose", flyerEnvelopeCycle.testSnapThenCommitPresentsGroundedPose),
 ])
 
+let redaction = RedactionTests()
+runSuite("RedactionTests", [
+    ("testHomePrefixToTilde", redaction.testHomePrefixToTilde),
+    ("testHomeBoundaryDoesNotEatOtherUser", redaction.testHomeBoundaryDoesNotEatOtherUser),
+    ("testOtherUsersPathRedacted", redaction.testOtherUsersPathRedacted),
+    ("testNonHomeAbsolutePathsRedacted", redaction.testNonHomeAbsolutePathsRedacted),
+    ("testTokenPatternsRedacted", redaction.testTokenPatternsRedacted),
+    ("testOrdinaryTextUntouched", redaction.testOrdinaryTextUntouched),
+    ("testIdempotent", redaction.testIdempotent),
+])
+
+let diagReport = DiagnosticReportTests()
+runSuite("DiagnosticReportTests", [
+    ("testTextHasNoLeaks", diagReport.testTextHasNoLeaks),
+    ("testJSONHasNoLeaks", diagReport.testJSONHasNoLeaks),
+    ("testAllowListedContentPresent", diagReport.testAllowListedContentPresent),
+    ("testUnknownProviderDropped", diagReport.testUnknownProviderDropped),
+    ("testMissingTokensAreNilNotZero", diagReport.testMissingTokensAreNilNotZero),
+    ("testIdleWindowNeverRendersZero", diagReport.testIdleWindowNeverRendersZero),
+    ("testEnabledProvidersClosedFilter", diagReport.testEnabledProvidersClosedFilter),
+    ("testInProcessReadOnlyNoMutation", diagReport.testInProcessReadOnlyNoMutation),
+    ("testQualityClassification", diagReport.testQualityClassification),
+    ("testDeterministicAcrossInputPermutation", diagReport.testDeterministicAcrossInputPermutation),
+    ("testJSONValidAndSchemaVersion", diagReport.testJSONValidAndSchemaVersion),
+    ("testCLIDiagNoFilesystemMutation", diagReport.testCLIDiagNoFilesystemMutation),
+])
+
 finishTestRun()

@@ -35,6 +35,12 @@ public struct CodexAdapter: ProviderAdapter {
         return ProviderAvailability(available: true, detail: "found \(root.path)")
     }
 
+    public func diagnosticSources() -> [DiagnosticSourceDescriptor] {
+        // 預設候選順序為 [sessions, archived_sessions];以固定 id 對位。
+        let ids: [DiagnosticSourceID] = [.codexSessions, .codexArchived]
+        return zip(candidateRoots, ids).map { DiagnosticSourceDescriptor(id: $1, url: $0) }
+    }
+
     public func explainDataSources() -> String {
         "Reads Codex CLI rollout logs (rollout-*.jsonl) under ~/.codex/sessions and ~/.codex/archived_sessions. Only token_count totals, rate-limit percentages, reset times, model IDs, project paths, and timestamps are extracted. Prompts and message contents are never read into the ledger."
     }

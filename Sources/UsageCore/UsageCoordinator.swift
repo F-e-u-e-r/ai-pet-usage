@@ -150,14 +150,18 @@ public actor UsageCoordinator {
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
     private var pricingOverridesURL: URL { dataDir.appendingPathComponent("pricing-overrides.json") }
 
+    /// `readOnly`:純唯讀入口(如 `aipet diag`)不得建立資料目錄——略過 `ensureDirectory`,
+    /// 使得對不存在的資料目錄執行時「零檔案系統副作用」(目錄仍不存在)。其餘讀取路徑
+    /// (ledger/limits/scan-state/pricing)本就容忍缺檔並回傳空值。
     public init(dataDir: URL? = nil, settings: CoreSettings = CoreSettings(),
-                adapters: [ProviderAdapter]? = nil, refreshLockTimeout: TimeInterval = 60) {
+                adapters: [ProviderAdapter]? = nil, refreshLockTimeout: TimeInterval = 60,
+                readOnly: Bool = false) {
         let dir = dataDir ?? AppPaths.dataDirectory()
         self.dataDir = dir
         self.settings = settings
         self.adapters = adapters ?? [CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter()]
         self.refreshLockTimeout = refreshLockTimeout
-        try? AppPaths.ensureDirectory(dir)
+        if !readOnly { try? AppPaths.ensureDirectory(dir) }
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
         self.ledger = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
         self.limits = LimitEngine(stateURL: dir.appendingPathComponent("limits-state.json"))
@@ -175,6 +179,36 @@ public actor UsageCoordinator {
 
     public func adapterInfos() -> [(providerId: String, displayName: String, availability: ProviderAvailability, dataSources: String, permissions: String)] {
         adapters.map { ($0.providerId, $0.displayName, $0.detectAvailability(), $0.explainDataSources(), $0.explainRequiredPermissions()) }
+    }
+
+    /// 診斷用:對每個 adapter 的候選來源做 stat,回報固定 id + 狀態 + mtime 分桶。
+    /// **只 stat 根本身,不走訪子項**——故任何子路徑/專案名都不會外洩。fail-closed:
+    /// 無法判定存在(EACCES/其他 errno)絕不當成 present。symlink 的根會回報其目標狀態
+    /// (使用者刻意把資料目錄 symlink 出去是合法的;此處僅讀取狀態,不寫入)。唯讀。
+    public func diagnosticSourceStates(now: Date = Date()) -> [DiagnosticSourceState] {
+        let fm = FileManager.default
+        var out: [DiagnosticSourceState] = []
+        for adapter in adapters {
+            for src in adapter.diagnosticSources() {
+                let path = src.url.path
+                var st = stat()
+                let state: SourceState
+                var age: AgeBucket? = nil
+                if stat(path, &st) == 0 {
+                    state = fm.isReadableFile(atPath: path) ? .present : .unreadable
+                    let mtime = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec))
+                    age = AgeBucket(seconds: now.timeIntervalSince(mtime))
+                } else {
+                    switch errno {
+                    case ENOENT, ENOTDIR: state = .missing
+                    case EACCES: state = .unreadable
+                    default: state = .unknown          // fail-closed:判定不了 → 絕不宣稱 present
+                    }
+                }
+                out.append(DiagnosticSourceState(id: src.id, state: state, modifiedAge: age))
+            }
+        }
+        return out
     }
 
     /// FSEvents 監看計畫。監看目錄 = 存在的 provider 記錄目錄 + statusline 檔的存在父目錄;

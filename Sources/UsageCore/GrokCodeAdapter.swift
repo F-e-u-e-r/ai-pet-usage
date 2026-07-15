@@ -45,6 +45,10 @@ public struct GrokCodeAdapter: ProviderAdapter {
         return ProviderAvailability(available: true, detail: "found \(root.path)")
     }
 
+    public func diagnosticSources() -> [DiagnosticSourceDescriptor] {
+        candidateRoots.prefix(1).map { DiagnosticSourceDescriptor(id: .grokSessions, url: $0) }
+    }
+
     public func explainDataSources() -> String {
         "Reads Grok CLI session logs (updates.jsonl) under ~/.grok/sessions (or GROK_HOME) — only the cumulative token counter (_meta.totalTokens) plus model ID and project path from sibling summary.json/signals.json. Also reads the tail of logs/unified.jsonl for the subscription tier label (one key narrowly decoded from billing lines; other log content is never parsed). Token figures are context-growth estimates that undercount billed usage and have no input/output split. Prompts and message contents are never read; no network; credential files are never touched. Grok exposes no usage percent locally, so none is shown."
     }
