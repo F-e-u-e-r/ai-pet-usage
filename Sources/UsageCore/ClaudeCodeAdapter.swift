@@ -53,6 +53,15 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         return ProviderAvailability(available: true, detail: "found \(root.path)")
     }
 
+    public func diagnosticSources() -> [DiagnosticSourceDescriptor] {
+        // 多個 projects 候選根都對到同一個 id(.claudeProjects);蒐集層以 present>unreadable>missing
+        // 折疊成單列。statusline 兩個候選各有專屬 id。
+        var out = candidateRoots.map { DiagnosticSourceDescriptor(id: .claudeProjects, url: $0) }
+        let slIds: [DiagnosticSourceID] = [.claudeStatuslineOurHook, .claudeStatuslineShared]
+        out += zip(statuslineFiles, slIds).map { DiagnosticSourceDescriptor(id: $1, url: $0) }
+        return out
+    }
+
     public func explainDataSources() -> String {
         "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times) when a statusline hook saves it locally, and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never read."
     }

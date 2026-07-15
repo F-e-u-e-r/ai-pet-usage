@@ -435,8 +435,36 @@ public protocol ProviderAdapter: Sendable {
     func refreshUsage(state: ScanState) throws -> (AdapterRefreshResult, ScanState)
     func explainDataSources() -> String
     func explainRequiredPermissions() -> String
+    /// 診斷用的候選來源(未經存在性過濾),供 `aipet diag` 回報每個來源的
+    /// 存在/可讀/mtime——只回報固定 id + 狀態,絕不外洩實際 URL/路徑。預設空。
+    /// **必須**列為 protocol 要求(而非僅 extension),否則對 existential 會靜態派發到預設空實作。
+    func diagnosticSources() -> [DiagnosticSourceDescriptor]
 }
 
 public extension ProviderAdapter {
     var watchFiles: [URL] { [] }
+    func diagnosticSources() -> [DiagnosticSourceDescriptor] { [] }
+}
+
+/// 診斷來源的**固定**識別碼。標籤(如 `~/.codex/sessions`)由 DiagnosticReport 的固定查表
+/// 產生,不使用實際解析後的 URL——即使 CODEX_HOME/CLAUDE_CONFIG_DIR/GROK_HOME 指向家目錄外,
+/// 報告也只呈現正規預設標籤,永不回顯真實路徑。
+public enum DiagnosticSourceID: String, Codable, Sendable, CaseIterable {
+    case codexSessions
+    case codexArchived
+    case claudeProjects
+    case claudeStatuslineOurHook
+    case claudeStatuslineShared
+    case grokSessions
+}
+
+/// adapter 回報的候選來源:固定 id + 實際 URL。URL 只在蒐集階段用來 stat,
+/// **絕不**寫入診斷報告(報告只留 id/狀態/mtime 分桶)。
+public struct DiagnosticSourceDescriptor: Sendable {
+    public var id: DiagnosticSourceID
+    public var url: URL
+    public init(id: DiagnosticSourceID, url: URL) {
+        self.id = id
+        self.url = url
+    }
 }

@@ -12,6 +12,7 @@ import UsageCore
 //   aipet report [--refresh] [--out FILE] [--days N]   匯出 HTML 報告(預設今日)
 //   aipet sources                         說明各 adapter 讀取哪些本機檔案
 //   aipet reindex                         全量重建帳本索引(寫入,持鎖)
+//   aipet diag [--json] [--out FILE]      輸出 redacted 診斷(封閉詞彙,可安全貼進 issue;唯讀、無寫入)
 //   aipet sprites [--out DIR]             匯出像素寵物 PNG contact sheets(預設 dist/sprite-preview)
 
 let args = CommandLine.arguments.dropFirst()
@@ -25,7 +26,42 @@ func value(for flag: String) -> String? {
 
 let dataDir = AppPaths.dataDirectory()
 // 與 GUI 同源的設定(settings.json 的 core 欄位):預算、閾值、啟用的 provider。
-let coordinator = UsageCoordinator(dataDir: dataDir, settings: CoreSettings.loadShared(dataDir: dataDir))
+// diag 為純唯讀入口 → readOnly:不建立資料目錄(對不存在的目錄零副作用)。
+let coordinator = UsageCoordinator(dataDir: dataDir, settings: CoreSettings.loadShared(dataDir: dataDir),
+                                   readOnly: command == "diag")
+
+/// diag `--out`:同目錄暫存檔以 0600 建立後,用 rename(2) 原子替換(mode 隨 rename 保留,無權限窗)。
+func writeDiagAtomic(_ text: String, to url: URL) throws {
+    let fm = FileManager.default
+    let dir = url.deletingLastPathComponent()
+    let tmp = dir.appendingPathComponent(".aipet-diag-\(ProcessInfo.processInfo.processIdentifier).tmp")
+    // 清掉前次崩潰殘留的同名 tmp(含可能被植入的 symlink;removeItem 移除連結本身而非目標)。
+    try? fm.removeItem(at: tmp)
+    // O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW、mode 0600:獨佔建立、拒絕跟隨 symlink、建立即 0600(無權限窗)。
+    let fd = open(tmp.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
+    guard fd >= 0 else { throw NSError(domain: "aipet", code: 1) }
+    let bytes = Array(text.utf8)
+    var ok = true
+    bytes.withUnsafeBytes { buf in
+        var written = 0
+        while written < bytes.count {
+            let n = write(fd, buf.baseAddress!.advanced(by: written), bytes.count - written)
+            if n < 0 {
+                if errno == EINTR { continue }   // 被訊號中斷 → 重試,不當失敗
+                ok = false; break
+            }
+            if n == 0 { ok = false; break }
+            written += n
+        }
+    }
+    close(fd)
+    guard ok else { try? fm.removeItem(at: tmp); throw NSError(domain: "aipet", code: 1) }
+    // rename(2):原子替換,mode 隨檔案保留(0600)。
+    if rename(tmp.path, url.path) != 0 {
+        try? fm.removeItem(at: tmp)
+        throw NSError(domain: "aipet", code: 1)
+    }
+}
 
 func fmtDate(_ d: Date?) -> String {
     guard let d else { return "—" }
@@ -136,6 +172,31 @@ Task {
             for q in dash.dataQuality { print("  ⚠ \(q)") }
         }
 
+    case "diag":
+        // 唯讀、無網路、無寫入(除非 --out)。輸出為封閉詞彙的 redacted 診斷,可安全貼進 issue。
+        let now = Date()
+        let dash = await coordinator.dashboard()
+        let sources = await coordinator.diagnosticSourceStates(now: now)
+        let info = Bundle.main.infoDictionary
+        let osv = ProcessInfo.processInfo.operatingSystemVersion
+        let app = DiagnosticAppInfo(
+            version: info?["CFBundleShortVersionString"] as? String,
+            channel: BuildChannel(known: info?["AIPetUsageBuildChannel"] as? String),
+            os: "\(osv.majorVersion).\(osv.minorVersion).\(osv.patchVersion)"
+        )
+        let report = DiagnosticReport.collect(dashboard: dash, sourceStates: sources,
+                                              settings: await coordinator.currentSettings(),
+                                              app: app, now: now)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let text = args.contains("--json") ? report.renderJSON(home: home) : report.renderText(home: home)
+        if let out = value(for: "--out") {
+            let url = URL(fileURLWithPath: (out as NSString).expandingTildeInPath)
+            do { try writeDiagAtomic(text, to: url); print("diagnostic written") }
+            catch { print("diagnostic write failed"); exit(1) }
+        } else {
+            print(text)
+        }
+
     case "sources":
         for info in await coordinator.adapterInfos() {
             print("\(info.displayName) (\(info.providerId)) — available: \(info.availability.available), \(info.availability.detail)")
@@ -147,7 +208,7 @@ Task {
         SpriteExport.run(outPath: value(for: "--out"))
 
     default:
-        print("usage: aipet [status|report|sources|reindex|sprites] [--refresh] [--out FILE|DIR] [--days N]")
+        print("usage: aipet [status|report|sources|reindex|diag|sprites] [--refresh] [--out FILE|DIR] [--days N] [--json]")
     }
 }
 
