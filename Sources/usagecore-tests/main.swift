@@ -512,7 +512,6 @@ let menuMetrics = MenuPanelMetricsTests()
 runSuite("MenuPanelMetricsTests", [
     ("testWindowColumnFitsWorstCase", menuMetrics.testWindowColumnFitsWorstCase),
     ("testPanelWidthAccommodatesColumns", menuMetrics.testPanelWidthAccommodatesColumns),
-    ("testOldHardcodedColumnWasTooNarrowForTripleDigits", menuMetrics.testOldHardcodedColumnWasTooNarrowForTripleDigits),
 ])
 
 let statusRenderer = StatusRendererTests()

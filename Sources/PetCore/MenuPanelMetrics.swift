@@ -21,21 +21,23 @@ public enum MenuPanelMetrics {
     }
 
     /// worst-case 內容組合:label 取較寬者、value 取 "100%"(三位數)與 "idle"。
-    public static var worstWindowCellWidth: CGFloat {
+    /// 值域註:usedPercent 在模型層 clamp 0...100(Models.swift),故 "100%" 就是真實顯示上限;
+    /// "idle" 是最寬的非數字值。static let:系統字體在行程生命期不變,量一次即可。
+    public static let worstWindowCellWidth: CGFloat =
         [("5h", "100%"), ("wk", "100%"), ("5h", "idle"), ("wk", "idle")]
             .map { measuredWindowCellWidth(label: $0.0, value: $0.1) }
             .max() ?? 0
-    }
 
     /// 5h/wk 欄寬:實測 worst-case + 2pt(ceil 去次像素)。
-    public static var windowColumnWidth: CGFloat { ceil(worstWindowCellWidth) + 2 }
+    public static let windowColumnWidth: CGFloat = ceil(worstWindowCellWidth) + 2
 
     /// reset 欄寬(compact 標籤 ≤ 9 字元,見 ResetLabelTests.testCompactWorstCaseFitsBudget)。
     public static let resetColumnWidth: CGFloat = 64
 
-    /// 面板總寬:名稱欄下限(dot 8 + 短名)~110 + 兩個窗欄 + reset 欄 + HStack spacing 8×4
-    /// + 面板 padding 12;與現行 340 取大者(欄寬未超過原預算時外觀不變)。
-    public static var panelWidth: CGFloat {
-        max(340, ceil(110 + 2 * windowColumnWidth + resetColumnWidth + 4 * 8 + 12))
-    }
+    /// 面板總寬 = max(340, 名稱欄下限 110(dot 8 + 短名)+ 兩個窗欄 + reset 欄
+    /// + HStack spacing 8×4 + header 水平 padding 16(.padding(.horizontal, 8)×2,
+    /// 上一版漏算 —— 兩位審查者各自抓到)+ 面板 padding 12)。
+    /// 欄寬未超過原預算時維持 340,外觀不變。
+    public static let panelWidth: CGFloat =
+        max(340, ceil(110 + 2 * windowColumnWidth + resetColumnWidth + 4 * 8 + 16 + 12))
 }
