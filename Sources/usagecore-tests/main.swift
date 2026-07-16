@@ -28,6 +28,8 @@ let claude = ClaudeCodeAdapterTests()
 runSuite("ClaudeCodeAdapterTests", [
     ("testParsesFixture", claude.testParsesFixture),
     ("testStatuslinePayloadYieldsOfficialRateLimits", claude.testStatuslinePayloadYieldsOfficialRateLimits),
+    ("testHookFrozenSchemaFixtureDecodes", claude.testHookFrozenSchemaFixtureDecodes),
+    ("testHookProducedFileDecodesEndToEnd", claude.testHookProducedFileDecodesEndToEnd),
     ("testIncrementalScanDoesNotDuplicate", claude.testIncrementalScanDoesNotDuplicate),
     ("testDetectAvailabilityRechecksInjectedRootAfterCreation", claude.testDetectAvailabilityRechecksInjectedRootAfterCreation),
     ("testStatuslinePerWindowFreshestComposition", claude.testStatuslinePerWindowFreshestComposition),

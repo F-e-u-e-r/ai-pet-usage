@@ -1,0 +1,47 @@
+# statusline hook 的殼層測試(純 bash、無相依;macOS runner 以系統 /bin/bash 3.2 執行,
+# 與使用者機器一致)。另跑 Swift 測試套件作 producer→consumer 契約檢查 ——
+# hook-only 的 PR 也必須驗證 Swift reader 讀得懂 hook 的落地形狀。
+# 觸發路徑含測試腳本與本 workflow 自身(弱化測試的 PR 也會跑),以及 reader 與
+# 契約測試所在的 Swift 檔(cross-model plan review:契約兩端任一端改動都要重驗)。
+name: statusline-hook-tests
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'Scripts/claude-statusline-hook.sh'
+      - 'Scripts/test-claude-statusline-hook.sh'
+      - '.github/workflows/statusline-hook-tests.yml'
+      - 'Sources/UsageCore/ClaudeCodeAdapter.swift'
+      - 'Sources/usagecore-tests/Tests.swift'
+      - 'Sources/usagecore-tests/main.swift'
+      - 'Package.swift'
+  push:
+    branches: [main]
+    paths:
+      - 'Scripts/claude-statusline-hook.sh'
+      - 'Scripts/test-claude-statusline-hook.sh'
+      - '.github/workflows/statusline-hook-tests.yml'
+      - 'Sources/UsageCore/ClaudeCodeAdapter.swift'
+      - 'Sources/usagecore-tests/Tests.swift'
+      - 'Sources/usagecore-tests/main.swift'
+      - 'Package.swift'
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check (bash -n)
+        run: |
+          /bin/bash -n Scripts/claude-statusline-hook.sh
+          /bin/bash -n Scripts/test-claude-statusline-hook.sh
+      - name: Shell test suite
+        run: /bin/bash Scripts/test-claude-statusline-hook.sh
+      - name: Swift consumer contract (usagecore-tests)
+        run: |
+          swift build
+          swift run usagecore-tests
