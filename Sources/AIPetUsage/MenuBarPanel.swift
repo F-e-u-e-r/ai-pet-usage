@@ -68,7 +68,8 @@ struct MenuBarPanel: View {
             }
         }
         .padding(6)
-        .frame(width: 340)   // 略加寬:固定欄(name 彈性 + 5h/wk/reset 50/50/64)在 340 留餘裕,worst-case 不截
+        // 寬度 = MenuPanelMetrics.panelWidth(≥340;窗欄按實測 worst-case 配寬,100% 三位數不截)。
+        .frame(width: MenuPanelMetrics.panelWidth)
     }
 }
 
@@ -127,21 +128,24 @@ private struct ProviderStatusRow: View {
                                          displayName: model.providerName(state.providerId))
         // 固定欄寬 HStack:name 彈性佔剩餘寬(左、truncate),5h/wk/reset 各自固定寬右對齊 →
         // 每列相同固定寬 ⇒ 跨列對齊成表格,且 reset 有專屬寬度不被鄰欄擠掉(取代原 Spacer 大空隙 +
-        // reset 截字)。用固定寬而非 Grid:布局決定性、可純推理驗證(AFK 無法實測時較穩);
-        // macOS 無使用者可調 Dynamic Type,固定密度可接受,minimumScaleFactor 為溢位保險。
+        // reset 截字)。欄寬 = MenuPanelMetrics **實測** worst-case("wk 100%" 在本機 51.45pt,
+        // 舊寫死 50pt → 三位數截字,2026-07-16 使用者回報);macOS 無使用者可調 Dynamic Type,
+        // 固定密度可接受,minimumScaleFactor 為溢位保險(window cell 也要有,不只 reset)。
         HStack(spacing: 8) {
             ProviderDot(brand: brand, size: 8)
             Text(brand.shortName)   // A2:面板用中短名(Claude/Codex/Grok);全名在 .help / a11y。
                 .font(.callout.weight(.medium))
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            windowText("5h", state.fiveHour).frame(width: 50, alignment: .trailing)
-            windowText("wk", state.weekly).frame(width: 50, alignment: .trailing)
+            windowText("5h", state.fiveHour)
+                .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+            windowText("wk", state.weekly)
+                .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
             Text(resetLabel)
                 .font(.caption).monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.85)
-                .frame(width: 64, alignment: .trailing)
+                .frame(width: MenuPanelMetrics.resetColumnWidth, alignment: .trailing)
         }
         .help("\(brand.displayName) (\(brand.code)) — official/estimated 5h & weekly usage")
         .accessibilityElement(children: .ignore)
@@ -153,11 +157,15 @@ private struct ProviderStatusRow: View {
         let severity = UsageSeverity.of(percent: percent,
                                         warn: model.settings.core.warnThresholdPercent,
                                         danger: model.settings.core.dangerThresholdPercent)
+        // 字體規格與 MenuPanelMetrics.measuredWindowCellWidth 一一對應(改這裡要同步那裡)。
+        // lineLimit(1)+minScale:欄寬已按 worst-case 實測,此為最後保險 —— 寧可微縮不可折行/截字。
         return HStack(spacing: 2) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.85)
             Text(window.idle ? "idle" : (percent.map { "\(Int($0.rounded()))%" } ?? "—"))
                 .font(.callout.weight(.semibold)).monospacedDigit()
                 .foregroundStyle(window.idle ? Color.secondary : (severityColor(severity) ?? .primary))
+                .lineLimit(1).minimumScaleFactor(0.85)
         }
     }
 
