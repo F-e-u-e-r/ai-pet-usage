@@ -719,3 +719,34 @@ final class ResetLabelTests: XCTestCase {
                        "no reset scheduled")
     }
 }
+
+// MARK: - Menu 面板欄寬(100% 三位數截字修復)
+
+final class MenuPanelMetricsTests: XCTestCase {
+    // 重現痕跡:原欄寬寫死 50pt;本機實測 "wk 100%" 內容寬印於測試輸出(修復前 > 50 → 截字)。
+    func testWindowColumnFitsWorstCase() {
+        let worst = MenuPanelMetrics.worstWindowCellWidth
+        print("measured worst window cell = \(worst)pt (old hardcoded column = 50pt)")
+        XCTAssertTrue(MenuPanelMetrics.windowColumnWidth >= worst + 1,
+                      "欄寬必須 ≥ worst-case 內容 + 呼吸:\(MenuPanelMetrics.windowColumnWidth) vs \(worst)")
+        // 釘住 100% 案例本身(修復的觸發器):三位數 cell 不得超過欄寬
+        XCTAssertTrue(MenuPanelMetrics.measuredWindowCellWidth(label: "wk", value: "100%")
+                        <= MenuPanelMetrics.windowColumnWidth,
+                      "wk 100% 必須放得進欄寬")
+    }
+
+    func testPanelWidthAccommodatesColumns() {
+        let minimum = 110 + 2 * MenuPanelMetrics.windowColumnWidth + MenuPanelMetrics.resetColumnWidth + 4 * 8 + 12
+        XCTAssertTrue(MenuPanelMetrics.panelWidth >= minimum,
+                      "面板寬 \(MenuPanelMetrics.panelWidth) 必須 ≥ 欄位總和 \(minimum)")
+        XCTAssertTrue(MenuPanelMetrics.panelWidth >= 340, "不小於原設計寬(外觀不回退)")
+    }
+
+    // 舊 bug 的可失敗性證明:若系統字體下 "wk 100%" ≤ 50pt,此測試會提醒重新評估
+    // (它記錄的是「50pt 欄裝不下三位數」這個修復前提在本機為真)。
+    func testOldHardcodedColumnWasTooNarrowForTripleDigits() {
+        let cell = MenuPanelMetrics.measuredWindowCellWidth(label: "wk", value: "100%")
+        XCTAssertTrue(cell > 50,
+                      "修復前提:三位數 cell(\(cell)pt)超過舊 50pt 欄;若不再成立請重新評估此修復")
+    }
+}
