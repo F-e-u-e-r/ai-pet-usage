@@ -448,6 +448,22 @@ final class StatusRendererTests: XCTestCase {
         XCTAssertFalse(out.contains("\u{1B}"), "--full 仍須剝控制字元(終端安全)")
     }
 
+    // codex impl-review SEV1:projectName 不可用 → fallback 取 projectId 的 basename;
+    // raw ID 夾帶換行/ESC 不得偽造輸出行(projectId 也必須先剝控制字元)。
+    func testStatusProjectIdFallbackStripsControls() throws {
+        var dash = poisonedDashboard()
+        dash.topProjects = [ProjectSummary(projectId: "/tmp/x\nINJECTED_ID_LINE",
+                                           projectName: "/",
+                                           tokens: TokenBreakdown(input: 100), cost: .zero,
+                                           providers: ["codex"], topModel: nil, lastActive: nil,
+                                           shareOfPeriod: 1)]
+        let out = StatusRenderer.statusText(dashboard: dash, headline: "h", full: false)
+        XCTAssertFalse(out.contains("\nINJECTED_ID_LINE"),
+                       "fallback 的 projectId basename 不得帶入換行偽造輸出行:\(out)")
+        XCTAssertTrue(out.contains("xINJECTED_ID_LINE"),
+                      "剝除控制字元後的 basename 照常顯示:\(out)")
+    }
+
     // planType 是 provider 可控自由字串:路徑形收斂 + 上限;正常方案名原樣。
     func testStatusPlanLabelPolicy() throws {
         let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "h", full: false)

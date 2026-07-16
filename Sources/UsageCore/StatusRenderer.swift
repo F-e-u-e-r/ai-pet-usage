@@ -82,9 +82,11 @@ public enum StatusRenderer {
             lines.append("top projects:")
             for p in dash.topProjects.prefix(5) {
                 // sink 端 fail-closed:即使上游已 basename,顯示前仍過 displayProjectName。
+                // projectId 也必須先剝控制字元:name 不可用時 fallback 取其 basename,
+                // raw ID 夾帶換行可偽造輸出行(codex impl-review SEV1)。
                 let name = PrivacyRedaction.displayProjectName(
                     projectName: stripTerminalControls(p.projectName),
-                    projectId: p.projectId)
+                    projectId: stripTerminalControls(p.projectId))
                 lines.append(String(format: "  %-32s %10s  %5.1f%%", (name as NSString).utf8String!,
                                     (ReportGenerator.fmtTokens(p.tokens.total) as NSString).utf8String!,
                                     p.shareOfPeriod * 100))

@@ -18,9 +18,10 @@ import UsageCore
 let args = CommandLine.arguments.dropFirst()
 let command = args.first ?? "status"
 let wantsRefresh = args.contains("--refresh")
-// status/sources 預設抑制原始路徑/錯誤原文(sink 政策見 StatusRenderer);--full 印原文。
+// status/sources/reindex 預設抑制原始路徑/錯誤原文(sink 政策見 StatusRenderer);--full 印原文。
+// reindex 完成後同樣印 status 文字 → 警語必須涵蓋(codex impl-review SEV2)。
 let wantsFull = args.contains("--full")
-if wantsFull, command == "status" || command == "sources" {
+if wantsFull, command == "status" || command == "sources" || command == "reindex" {
     FileHandle.standardError.write(
         "⚠ --full output may contain full local paths and raw provider/error text — don't paste it publicly.\n"
             .data(using: .utf8)!)
@@ -165,7 +166,7 @@ Task {
 
     default:
         print("usage: aipet [status|report|sources|reindex|diag|sprites] [--refresh] [--full] [--out FILE|DIR] [--days N] [--json]")
-        print("  --full   status/sources: print raw local paths and raw error text (default output suppresses them; not for public pasting either way — use `aipet diag` to share)")
+        print("  --full   status/sources/reindex: print raw local paths and raw error text (default output suppresses them; not for public pasting either way — use `aipet diag` to share)")
     }
 }
 

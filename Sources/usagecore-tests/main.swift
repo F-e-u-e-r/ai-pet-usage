@@ -512,6 +512,7 @@ let statusRenderer = StatusRendererTests()
 runSuite("StatusRendererTests", [
     ("testStatusDefaultSuppressesPathsErrorsAndControls", statusRenderer.testStatusDefaultSuppressesPathsErrorsAndControls),
     ("testStatusFullPassesRawButStripsControls", statusRenderer.testStatusFullPassesRawButStripsControls),
+    ("testStatusProjectIdFallbackStripsControls", statusRenderer.testStatusProjectIdFallbackStripsControls),
     ("testStatusPlanLabelPolicy", statusRenderer.testStatusPlanLabelPolicy),
     ("testSourcesDisclosureRendering", statusRenderer.testSourcesDisclosureRendering),
     ("testRootDisclosureClassify", statusRenderer.testRootDisclosureClassify),
