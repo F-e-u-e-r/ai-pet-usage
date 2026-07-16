@@ -377,13 +377,45 @@ public struct CostResult: Codable, Sendable, Hashable {
 
 // MARK: - Provider adapter contract
 
+/// 根目錄的**封閉揭露分類**(`aipet sources` 預設輸出的隱私軸):
+/// - `.builtin(label:)`:選定根 == 某個內建預設候選(路徑正規化相等)→ 只印該候選的固定標籤
+///   (found/not-found 措辭由 `available` 決定);全新安裝(候選全屬內建、皆不存在)亦落此案
+///   (帶主要候選標籤)—— gpt catch-up SEV2:Bool 載體表達不了這一案。
+/// - `.custom`:任何非內建根的介入(env 覆寫到非預設位置、注入 roots)→ 一律
+///   `custom root (…; details hidden)`,**無論在不在 $HOME 底下**;原始路徑僅 `--full`。
+public enum RootDisclosure: Sendable, Equatable {
+    case builtin(label: String)
+    case custom
+
+    /// 分類:selected == nil 時,候選全屬內建 → 主要內建標籤;任一非內建候選 → custom。
+    /// 正規化 = `standardizedFileURL.path`(**不**解 symlink;無法證明是內建 → fail-closed custom)。
+    public static func classify(selectedRoot: URL?, candidates: [URL],
+                                builtin: [(url: URL, label: String)]) -> RootDisclosure {
+        func norm(_ u: URL) -> String { u.standardizedFileURL.path }
+        var map: [String: String] = [:]
+        for b in builtin { map[norm(b.url)] = b.label }
+        if let root = selectedRoot {
+            if let label = map[norm(root)] { return .builtin(label: label) }
+            return .custom
+        }
+        if candidates.allSatisfy({ map[norm($0)] != nil }), let primary = builtin.first {
+            return .builtin(label: primary.label)
+        }
+        return .custom
+    }
+}
+
 public struct ProviderAvailability: Sendable {
     public var available: Bool
+    /// 原始細節(可含完整本機路徑)—— 只供 `--full` / 本機除錯;預設輸出走 `disclosure`。
     public var detail: String
+    /// 預設輸出的封閉揭露(fail-closed 預設 `.custom`:未分類的建構點不得洩漏路徑)。
+    public var disclosure: RootDisclosure
 
-    public init(available: Bool, detail: String) {
+    public init(available: Bool, detail: String, disclosure: RootDisclosure = .custom) {
         self.available = available
         self.detail = detail
+        self.disclosure = disclosure
     }
 }
 

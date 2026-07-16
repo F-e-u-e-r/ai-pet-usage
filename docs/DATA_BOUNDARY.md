@@ -25,13 +25,13 @@ Columns:
 | App version | — | — | No | Yes | **Version only**, in the update-check `User-Agent` |
 | OS version | — | — | No | Yes | **No** (diag only; not on the wire) |
 
-† **Scanned vs extracted.** To find usage lines, the scanner reads raw log bytes and a matching line may be
-parsed transiently in memory — a line whose text happens to contain a usage marker can be materialized while
-the usage fields are pulled out. What is guaranteed is that message content is **never extracted into the
-app's data model, retained, written to disk, exported, or displayed** — only the declared usage/metadata
-fields are kept. (The Claude and Grok adapters use narrow decoders on their matching session lines that don't even build the
-content into an object; the Codex adapter still fully parses matching lines via `JSONSerialization` — a
-follow-up.)
+† **Scanned vs extracted.** To find usage lines, the scanner reads raw log bytes; what is guaranteed is that
+message content is **never extracted into the app's data model, retained, written to disk, exported, or
+displayed** — only the declared usage/metadata fields are kept. All three adapters (Claude, Codex, Grok) now
+parse their matching session lines through **narrow decoders** that never build undeclared fields — prompts,
+message content, instruction blobs — into an object at all. For Codex this matters concretely: rollout
+`session_meta` lines carry `base_instructions` and a filter-matched `response_item` line can carry message
+content; the previous `JSONSerialization` parse materialized those transiently, the narrow decoder does not.
 
 ### The only network egress
 
@@ -44,10 +44,13 @@ OpenRouter or any pricing/telemetry service at runtime.
 
 ### Not share-hardened
 
-`aipet status` and `aipet sources` are convenience CLI output — `status` can print project names, plan
-labels, times and (on error) raw messages; `sources` prints your detected root paths. They are **not**
-designed to be pasted publicly the way `aipet diag` and a default HTML report are. Prefer those two when
-sharing.
+`aipet status` and `aipet sources` are convenience CLI output. Their **default** output suppresses raw
+local paths and raw error text (custom roots print as `custom root (details hidden)`; errors print a fixed
+line; data-quality notes go through the closed-vocabulary templates; every dynamic string is
+control-character-stripped) — but it still shows project **basenames**, plan labels, usage numbers and
+exact times, so it is **not** a public share artifact. `--full` opts back into raw paths and raw error
+text for local debugging (with a stderr warning). For anything you paste publicly, use `aipet diag` or a
+default HTML report — those are the paste-hardened artifacts.
 
 ### The contributor rule
 

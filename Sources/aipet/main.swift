@@ -8,9 +8,9 @@ import UsageCore
 // 寫入階段;所有寫入都由跨行程檔案鎖(refresh.lock)互斥。
 //
 // 用法:
-//   aipet status [--refresh]              顯示各 provider 的限額與今日用量
+//   aipet status [--refresh] [--full]     顯示各 provider 的限額與今日用量(預設抑制原始路徑/錯誤)
 //   aipet report [--refresh] [--out FILE] [--days N]   匯出 HTML 報告(預設今日)
-//   aipet sources                         說明各 adapter 讀取哪些本機檔案
+//   aipet sources [--full]                說明各 adapter 讀取哪些本機檔案(預設隱藏自訂根路徑)
 //   aipet reindex                         全量重建帳本索引(寫入,持鎖)
 //   aipet diag [--json] [--out FILE]      輸出 redacted 診斷(封閉詞彙,可安全貼進 issue;唯讀、無寫入)
 //   aipet sprites [--out DIR]             匯出像素寵物 PNG contact sheets(預設 dist/sprite-preview)
@@ -18,6 +18,14 @@ import UsageCore
 let args = CommandLine.arguments.dropFirst()
 let command = args.first ?? "status"
 let wantsRefresh = args.contains("--refresh")
+// status/sources/reindex 預設抑制原始路徑/錯誤原文(sink 政策見 StatusRenderer);--full 印原文。
+// reindex 完成後同樣印 status 文字 → 警語必須涵蓋(codex impl-review SEV2)。
+let wantsFull = args.contains("--full")
+if wantsFull, command == "status" || command == "sources" || command == "reindex" {
+    FileHandle.standardError.write(
+        "⚠ --full output may contain full local paths and raw provider/error text — don't paste it publicly.\n"
+            .data(using: .utf8)!)
+}
 
 func value(for flag: String) -> String? {
     guard let i = args.firstIndex(of: flag), args.index(after: i) < args.endIndex else { return nil }
@@ -61,26 +69,6 @@ func writeDiagAtomic(_ text: String, to url: URL) throws {
         try? fm.removeItem(at: tmp)
         throw NSError(domain: "aipet", code: 1)
     }
-}
-
-func fmtDate(_ d: Date?) -> String {
-    guard let d else { return "—" }
-    let df = DateFormatter()
-    df.dateFormat = "yyyy-MM-dd HH:mm"
-    return df.string(from: d)
-}
-
-func fmtWindow(_ w: LimitWindowState) -> String {
-    if w.idle { return "   idle    (idle — no active 5h window)" }
-    var out = ""
-    if let p = w.usedPercent { out += String(format: "%5.1f%%", p) } else { out += "   — " }
-    if let t = w.usedTokens {
-        out += " [\(ReportGenerator.fmtTokens(t))"
-        if let b = w.budgetTokens { out += "/\(ReportGenerator.fmtTokens(b))" }
-        out += "]"
-    }
-    out += "  resets: \(fmtDate(w.resetAt))  (\(w.confidence.rawValue)\(w.corrected ? ", corrected" : ""))"
-    return out
 }
 
 let semaphore = DispatchSemaphore(value: 0)
@@ -142,35 +130,8 @@ Task {
             return
         }
 
-        print("AI Pet Usage — status (\(headline))")
-        print(String(repeating: "─", count: 72))
-        for snap in dash.snapshots {
-            let limit = dash.limitStates.first { $0.providerId == snap.providerId }
-            print("\(snap.displayName)  [\(snap.status.rawValue)]\(snap.errorMessage.map { "  error: \($0)" } ?? "")")
-            if let limit {
-                print("  5h:     \(fmtWindow(limit.fiveHour))")
-                print("  weekly: \(fmtWindow(limit.weekly))")
-                print("  burn: \(ReportGenerator.fmtTokens(Int(limit.burnRateTokensPerHour)))/h" +
-                      (limit.projectedExhaustionAt.map { "  → limit at \(fmtDate($0))" } ?? "") +
-                      (limit.planType.map { "  plan: \($0)" } ?? ""))
-            }
-            print("  today: \(ReportGenerator.fmtTokens(snap.tokenInput ?? 0)) in / \(ReportGenerator.fmtTokens(snap.tokenOutput ?? 0)) out / \(ReportGenerator.fmtTokens(snap.tokenCache ?? 0)) cache" +
-                  "   last data: \(fmtDate(snap.updatedAt))")
-        }
-        print(String(repeating: "─", count: 72))
-        print("today: \(ReportGenerator.fmtTokens(dash.todayTotals.total)) tokens, ~\(ReportGenerator.fmtUSD(dash.todayCost.knownUSD))" +
-              (dash.todayCost.unknownModelTokens > 0 ? " (+\(ReportGenerator.fmtTokens(dash.todayCost.unknownModelTokens)) tokens unpriced)" : ""))
-        if !dash.topProjects.isEmpty {
-            print("top projects:")
-            for p in dash.topProjects.prefix(5) {
-                print(String(format: "  %-32s %10s  %5.1f%%", (p.projectName as NSString).utf8String!,
-                             (ReportGenerator.fmtTokens(p.tokens.total) as NSString).utf8String!, p.shareOfPeriod * 100))
-            }
-        }
-        if !dash.dataQuality.isEmpty {
-            print("data quality:")
-            for q in dash.dataQuality { print("  ⚠ \(q)") }
-        }
+        // 渲染邏輯(含 sink 隱私政策)集中在 StatusRenderer(純函式、可測試)。
+        print(StatusRenderer.statusText(dashboard: dash, headline: headline, full: wantsFull))
 
     case "diag":
         // 唯讀、無網路、無寫入(除非 --out)。輸出為封閉詞彙的 redacted 診斷,可安全貼進 issue。
@@ -198,17 +159,14 @@ Task {
         }
 
     case "sources":
-        for info in await coordinator.adapterInfos() {
-            print("\(info.displayName) (\(info.providerId)) — available: \(info.availability.available), \(info.availability.detail)")
-            print("  data: \(info.dataSources)")
-            print("  permissions: \(info.permissions)")
-        }
+        print(StatusRenderer.sourcesText(infos: await coordinator.adapterInfos(), full: wantsFull))
 
     case "sprites":
         SpriteExport.run(outPath: value(for: "--out"))
 
     default:
-        print("usage: aipet [status|report|sources|reindex|diag|sprites] [--refresh] [--out FILE|DIR] [--days N] [--json]")
+        print("usage: aipet [status|report|sources|reindex|diag|sprites] [--refresh] [--full] [--out FILE|DIR] [--days N] [--json]")
+        print("  --full   status/sources/reindex: print raw local paths and raw error text (default output suppresses them; not for public pasting either way — use `aipet diag` to share)")
     }
 }
 

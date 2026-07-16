@@ -42,8 +42,11 @@ declares only those fields — message content is not among them.
   diagnostic goes
   further: it is **closed-vocabulary** (status codes, counts, bucketed ages) with **no project names,
   prompts, or real local paths** — its source labels are fixed canonical names like `~/.codex/sessions`,
-  never your actual paths — built to be pasteable into a bug report. (Note: `aipet status` / `aipet sources` are
-  convenience CLI output, not hardened share artifacts — prefer `aipet diag` or an HTML report when sharing.)
+  never your actual paths — built to be pasteable into a bug report. (Note: `aipet status` / `aipet sources`
+  suppress raw paths and raw error text by default — a custom log location prints as
+  `custom root (details hidden)`, errors as a fixed line, `--full` opts back into the raw text for local
+  debugging — but they still show project basenames, plan labels and exact times, so they are convenience
+  output, not hardened share artifacts. Prefer `aipet diag` or an HTML report when sharing.)
 
 ## The one network call
 

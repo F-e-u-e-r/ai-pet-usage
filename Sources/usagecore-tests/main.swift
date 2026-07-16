@@ -504,7 +504,26 @@ runSuite("ReportRedactionTests", [
     ("testDisplayModelIdAndSafeLabel", reportRedaction.testDisplayModelIdAndSafeLabel),
     ("testAbsolutePathScrubCatchesSchemeAndEmbeddedForms", reportRedaction.testAbsolutePathScrubCatchesSchemeAndEmbeddedForms),
     ("testAbsolutePathScrubTildeUserAndFileHost", reportRedaction.testAbsolutePathScrubTildeUserAndFileHost),
+    ("testAbsolutePathScrubCompoundURLNotBypassed", reportRedaction.testAbsolutePathScrubCompoundURLNotBypassed),
     ("testProjectSummaryBasenamesPathAtSource", reportRedaction.testProjectSummaryBasenamesPathAtSource),
+])
+
+let statusRenderer = StatusRendererTests()
+runSuite("StatusRendererTests", [
+    ("testStatusDefaultSuppressesPathsErrorsAndControls", statusRenderer.testStatusDefaultSuppressesPathsErrorsAndControls),
+    ("testStatusFullPassesRawButStripsControls", statusRenderer.testStatusFullPassesRawButStripsControls),
+    ("testStatusProjectIdFallbackStripsControls", statusRenderer.testStatusProjectIdFallbackStripsControls),
+    ("testStatusPlanLabelPolicy", statusRenderer.testStatusPlanLabelPolicy),
+    ("testSourcesDisclosureRendering", statusRenderer.testSourcesDisclosureRendering),
+    ("testRootDisclosureClassify", statusRenderer.testRootDisclosureClassify),
+    ("testAdapterDisclosureCustomRoots", statusRenderer.testAdapterDisclosureCustomRoots),
+])
+
+let codexPrivacy = CodexPrivacyTests()
+runSuite("CodexPrivacyTests", [
+    ("testCodexAdapterIgnoresMessageContent", codexPrivacy.testCodexAdapterIgnoresMessageContent),
+    ("testCodexAdapterUsesNarrowDecoder", codexPrivacy.testCodexAdapterUsesNarrowDecoder),
+    ("testCodexDecoderStrictnessAndFallbacks", codexPrivacy.testCodexDecoderStrictnessAndFallbacks),
 ])
 
 let claudePrivacy = ClaudePrivacyTests()

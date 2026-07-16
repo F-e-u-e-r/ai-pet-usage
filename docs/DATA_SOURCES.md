@@ -22,6 +22,11 @@ Everything is read-only. Your usage data is never uploaded — no telemetry, no 
 
 **Not read**: prompts, assistant messages, tool call payloads, `history.jsonl`, auth files.
 
+**Narrow decode (privacy boundary).** Each matching line is parsed through a **narrow decoder** that
+declares only the fields listed above. Undeclared fields — `session_meta`'s `base_instructions`, a
+filter-matched `response_item`'s message content, `turn_context` policy details — are **not decoded into
+retained objects, written to the ledger, or included in reports/diagnostics.**
+
 Codex limit percentages are **provider-reported** (confidence: high). Codex's `rate_limits.primary`/`secondary` are **not** positionally tied to the 5-hour / weekly windows — the adapter maps each window to the 5-hour or weekly slot by `window_minutes` (`300` → 5-hour, `10080` → weekly; other durations are ignored rather than mislabeled). This matters when Codex reports only one window (e.g. it may place the weekly window in `primary` with no `secondary`, such as when a plan temporarily has no 5-hour limit). The ledger event for each turn is the delta of `total_token_usage` against the previous `token_count` in the same file; `input` is normalized to non-cached input (`input_tokens − cached_input_tokens`), cache reads are tracked separately.
 
 ## Claude Code (`providerId: claude-code`)
