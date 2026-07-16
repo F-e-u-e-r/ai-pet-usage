@@ -96,19 +96,20 @@ public enum PrivacyRedaction {
         return Int(match[d])
     }
 
-    /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok SEV2 round-2/3 迭代)。步驟:
-    /// 1. **非 file** 的 URL(https 等)整串移除 —— 網址不是本機路徑,留著路徑段會誤中(`/docs`);
-    /// 2. `file:` URL 剝掉 scheme+authority(含 `file://localhost/...` 主機形)→ 路徑主體受測;
-    /// 3. 掃描「分隔字元(或字串開頭)後緊接路徑起始」:`/x`、`~/`、`~user/`(grok round-3:
-    ///    `~alice/...` 是正常絕對路徑形,r3 曾回歸漏掉)、`C:\`、`\\`(UNC)。
+    /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok r2/r3 + codex catch-up 迭代)。兩道掃描:
+    /// 1. **原字串**直接掃「分隔字元(或開頭)後緊接路徑起始」:`/x`、`~/`、`~user/`、`C:\`、
+    ///    `\\`(UNC)。一般 URL 不會誤中(其 `/` 前是字母或 `//`,如 `https://example.com/docs`),
+    ///    但 URL query 裡挾帶的本機路徑(`?local=/Users/…`)會被 `=` 分隔符抓到 —— 絕不可先把
+    ///    URL 整串移除再掃(codex catch-up SEV1:`\S*` 會把 query 裡的路徑一併吞掉造成繞過)。
+    /// 2. `file:` URL 剝掉 scheme+authority(`file:///…`、`file://localhost/…`)後**再掃一次**,
+    ///    讓路徑主體受測。
     /// 不誤中:`vendor/model`、`anthropic.com/pricing`、`https://example.com/docs`、`~5 min`。
     static func containsAbsolutePath(_ s: String) -> Bool {
-        var t = s.replacingOccurrences(of: #"(?i)\b(?!file:)[a-z][a-z0-9+.\-]*://\S*"#,
-                                       with: " ", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"(?i)\bfile://[^/\s]*"#,
-                                   with: " ", options: .regularExpression)
-        return t.range(of: #"(^|[\s=:'"`(<\[{])(/[^\s/]|~[/\\]|~[A-Za-z_][A-Za-z0-9_.\-]*[/\\]|[A-Za-z]:[/\\]|\\\\)"#,
-                       options: .regularExpression) != nil
+        let pathStart = #"(^|[\s=:'"`(<\[{])(/[^\s/]|~[/\\]|~[A-Za-z_][A-Za-z0-9_.\-]*[/\\]|[A-Za-z]:[/\\]|\\\\)"#
+        if s.range(of: pathStart, options: .regularExpression) != nil { return true }
+        let defiled = s.replacingOccurrences(of: #"(?i)\bfile://[^/\s]*"#,
+                                             with: " ", options: .regularExpression)
+        return defiled != s && defiled.range(of: pathStart, options: .regularExpression) != nil
     }
 
     /// 模型 ID 的 sink 端防護:合法 ID(`claude-fable-5`、`vendor/model` 相對形)原樣;

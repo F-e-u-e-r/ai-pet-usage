@@ -249,6 +249,20 @@ final class ReportRedactionTests: XCTestCase {
         XCTAssertEqual(PrivacyRedaction.safeLabel("tilde ~ alone"), "tilde ~ alone")
     }
 
+    // codex catch-up SEV1:URL 整串移除會把 query 裡挾帶的本機路徑一併吞掉 → 繞過。
+    // 原字串必須先掃(= 分隔符抓到 ?local=/Users/…);一般 URL 仍不誤中。
+    func testAbsolutePathScrubCompoundURLNotBypassed() throws {
+        XCTAssertEqual(
+            PrivacyRedaction.safeLabel("source=https://example.test/?local=/Users/alice/Secret/prices.json"),
+            "custom (path redacted)")
+        XCTAssertEqual(
+            PrivacyRedaction.displayModelId("https://x.test/?m=/Users/alice/Secret/model.bin"),
+            "model.bin")
+        // 一般 URL(無挾帶路徑)仍不誤中
+        XCTAssertEqual(PrivacyRedaction.safeLabel("see https://example.com/docs/prices"),
+                       "see https://example.com/docs/prices")
+    }
+
     func testProjectSummaryBasenamesPathAtSource() throws {
         let ledger = UsageLedger(fileURL: nil)
         let ts = Date(timeIntervalSince1970: 1_700_000_100)
@@ -298,16 +312,217 @@ final class ClaudePrivacyTests: XCTestCase {
     }
 
     // test 5:架構守則——assistant 行解析不得再用 JSONSerialization(改用窄 Decodable)。
+    // 以 #filePath 定位原始碼(cwd 無關),讀不到 → 測試**失敗**而非默默略過(fail-closed;
+    // gpt plan-review SEV3:vacuous pass 會讓守則測試在 harness cwd 改變時形同虛設)。
     func testClaudeAdapterUsesNarrowDecoder() throws {
-        let cwd = FileManager.default.currentDirectoryPath
-        let src = URL(fileURLWithPath: cwd).appendingPathComponent("Sources/UsageCore/ClaudeCodeAdapter.swift")
-        guard let text = try? String(contentsOf: src, encoding: .utf8) else {
-            XCTAssertTrue(true, "skipped — source not found from cwd")
-            return
-        }
+        let text = try String(contentsOf: adapterSource("ClaudeCodeAdapter.swift"), encoding: .utf8)
         XCTAssertTrue(text.contains("decode(ClaudeAssistantLine.self"),
                       "assistant line must be parsed via narrow Decodable")
         XCTAssertFalse(text.contains("JSONSerialization.jsonObject(with: hit.data)"),
                        "assistant line must NOT materialize the whole object via JSONSerialization")
+    }
+}
+
+/// 以測試檔自身位置(#filePath)解析 UsageCore 原始碼路徑 —— 與 harness cwd 無關。
+private func adapterSource(_ name: String) -> URL {
+    URL(fileURLWithPath: #filePath)              // …/Sources/usagecore-tests/PrivacyHardeningTests.swift
+        .deletingLastPathComponent()             // …/Sources/usagecore-tests
+        .deletingLastPathComponent()             // …/Sources
+        .appendingPathComponent("UsageCore").appendingPathComponent(name)
+}
+
+// MARK: - Codex 窄 decoder(Phase 2 item 1:最後一個 content-bearing 全物化解析)
+
+final class CodexPrivacyTests: XCTestCase {
+    private func writeRollout(_ lines: [String]) throws -> URL {
+        let root = privTempDir()
+        let dir = root.appendingPathComponent("2026/01/15")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try lines.joined(separator: "\n").appending("\n").data(using: .utf8)!
+            .write(to: dir.appendingPathComponent("rollout-2026-01-15T10-00-00-test.jsonl"))
+        return root
+    }
+
+    // 通過 quickFilter 的行帶訊息內容/机密 → 只擷取用量;事件與帳本不得含机密。
+    func testCodexAdapterIgnoresMessageContent() throws {
+        let root = try writeRollout([
+            #"{"timestamp":"2026-01-15T10:00:00.000Z","type":"session_meta","payload":{"id":"s1","cwd":"/Users/alice/SecretClient/foo","base_instructions":{"text":"SECRET_INSTRUCTIONS_SHOULD_NOT_APPEAR"}}}"#,
+            // response_item 含 "token_count" 字樣 → 通過 quickFilter,但窄 decoder 不物化 content
+            #"{"timestamp":"2026-01-15T10:01:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"SECRET_OUTPUT token_count SHOULD_NOT_APPEAR /Users/alice/SecretClient"}]}}"#,
+            #"{"timestamp":"2026-01-15T10:02:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100,"total_tokens":1100}},"rate_limits":{"primary":{"used_percent":54.0,"window_minutes":300,"resets_at":1768475700},"secondary":null,"plan_type":"plus"}}}"#,
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let adapter = CodexAdapter(roots: [root])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.events.count, 1)
+        let e = result.events[0]
+        XCTAssertEqual(e.tokens.input, 800)      // 1000 − 200 cached
+        XCTAssertEqual(e.tokens.cacheRead, 200)
+        XCTAssertEqual(e.tokens.output, 100)
+        XCTAssertEqual(e.projectName, "foo")
+        let encoded = String(data: try JSONEncoder().encode(e), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("SECRET_"), "content leaked into UsageEvent: \(encoded)")
+        XCTAssertEqual(result.rateLimits.count, 1)
+        XCTAssertEqual(result.rateLimits[0].planType, "plus")
+        XCTAssertEqual(result.rateLimits[0].primary?.usedPercent, 54.0)
+    }
+
+    // 架構守則:rollout 行解析不得用 JSONSerialization(窄 Decodable);fail-closed 定位原始碼。
+    func testCodexAdapterUsesNarrowDecoder() throws {
+        let text = try String(contentsOf: adapterSource("CodexAdapter.swift"), encoding: .utf8)
+        XCTAssertTrue(text.contains("decode(CodexLine.self"),
+                      "rollout line must be parsed via narrow Decodable")
+        XCTAssertFalse(text.contains("JSONSerialization.jsonObject"),
+                       "rollout parsing must NOT materialize whole objects via JSONSerialization")
+    }
+
+    // decoder 嚴格度 pin(grok plan P5):整數 used_percent 解進 Double、外層 timestamp 壞 →
+    // payload 後援、usage 型別錯 → parseError+跳行(不默默 0)、secondary null 容忍。
+    func testCodexDecoderStrictnessAndFallbacks() throws {
+        let root = try writeRollout([
+            // 整數 used_percent(77)+ null secondary + 外層 timestamp 無效 → payload.timestamp 後援
+            #"{"timestamp":"not-a-date","type":"event_msg","payload":{"type":"token_count","timestamp":"2026-01-15T11:00:00.000Z","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":0,"output_tokens":50,"total_tokens":550}},"rate_limits":{"primary":{"used_percent":77,"window_minutes":300,"resets_at":1768475700},"secondary":null,"plan_type":"plus"}}}"#,
+            // usage 整體型別錯(字串)→ 整行 decode 失敗 → parseErrors+1、不產生事件
+            #"{"timestamp":"2026-01-15T11:05:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":"corrupted"},"rate_limits":{"primary":{"used_percent":80.0,"window_minutes":300,"resets_at":1768475700}}}}"#,
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let adapter = CodexAdapter(roots: [root])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.events.count, 1, "只有健康行產生事件")
+        XCTAssertEqual(result.events[0].timestamp, ISO8601.parse("2026-01-15T11:00:00.000Z"),
+                       "外層 timestamp 壞 → payload.timestamp 後援")
+        XCTAssertEqual(result.rateLimits.count, 1, "壞行的 rate_limits 不得部分擷取")
+        XCTAssertEqual(result.rateLimits[0].primary?.usedPercent, 77.0, "JSON 整數解進 Double")
+        XCTAssertEqual(result.parseErrors, 1, "型別錯的行計入 parseErrors")
+    }
+}
+
+// MARK: - StatusRenderer / RootDisclosure(Phase 2 item 2:status/sources 的 sink 政策)
+
+final class StatusRendererTests: XCTestCase {
+    private func poisonedDashboard() -> DashboardState {
+        let now = Date(timeIntervalSince1970: 1_768_000_000)
+        let snap = UsageSnapshot(providerId: "codex", displayName: "Codex\u{1B}[31m",
+                                 status: .error, sourceDescription: "t",
+                                 errorMessage: "read failed at /Users/alice/SecretClient/x.jsonl SENTINEL_ERR")
+        let limit = ProviderLimitState(
+            providerId: "codex",
+            fiveHour: LimitWindowState(usedPercent: 50, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(usedPercent: 20, windowMinutes: 10080, confidence: .high),
+            burnRateTokensPerHour: 1000, lastEventAt: now,
+            warning: .ok, planType: "/Users/alice/SecretClient\u{1B}]0;pwn\u{07} plan")
+        let proj = ProjectSummary(projectId: "/Users/alice/SecretClient/proj",
+                                  projectName: "/Users/alice/SecretClient/proj\nINJECTED",
+                                  tokens: TokenBreakdown(input: 100), cost: .zero,
+                                  providers: ["codex"], topModel: nil, lastActive: nil, shareOfPeriod: 1)
+        return DashboardState(generatedAt: now, snapshots: [snap], limitStates: [limit],
+                              todayTotals: TokenBreakdown(input: 100), todayCost: .zero, todayByProvider: [],
+                              burnRateTokensPerHour: 1000, burnCostPerHour: 0, hourly: [],
+                              topProjects: [proj], models: [],
+                              dataQuality: ["codex: refresh error — cause at /Users/alice/SecretClient/log SENTINEL_DQ"],
+                              lastRefreshAt: now)
+    }
+
+    // 預設輸出:路徑/錯誤原文/控制字元一律不得出現;--full 出原文但仍無控制字元。
+    func testStatusDefaultSuppressesPathsErrorsAndControls() throws {
+        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "cached", full: false)
+        XCTAssertFalse(out.contains("/Users/"), out)
+        XCTAssertFalse(out.contains("SecretClient"), out)
+        XCTAssertFalse(out.contains("SENTINEL_ERR"), "錯誤原文不得出現在預設輸出")
+        XCTAssertFalse(out.contains("SENTINEL_DQ"), "dataQuality 原文不得出現在預設輸出")
+        XCTAssertFalse(out.contains("\u{1B}"), "控制字元必須剝除")
+        XCTAssertFalse(out.contains("INJECTED\n") || out.contains("\nINJECTED"),
+                       "換行注入不得偽造輸出行:\(out)")
+        XCTAssertTrue(out.contains("provider refresh failed (run with --full"), out)
+        XCTAssertTrue(out.contains("refresh error"), "dataQuality 走 safeDataQuality 樣板")
+        XCTAssertTrue(out.contains("proj"), "專案 basename 保留")
+    }
+
+    func testStatusFullPassesRawButStripsControls() throws {
+        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "cached", full: true)
+        XCTAssertTrue(out.contains("SENTINEL_ERR"), "--full 應印錯誤原文")
+        XCTAssertTrue(out.contains("SENTINEL_DQ"), "--full 應印 dataQuality 原文")
+        XCTAssertTrue(out.contains("/Users/alice/SecretClient"), "--full 應印原始路徑")
+        XCTAssertFalse(out.contains("\u{1B}"), "--full 仍須剝控制字元(終端安全)")
+    }
+
+    // planType 是 provider 可控自由字串:路徑形收斂 + 上限;正常方案名原樣。
+    func testStatusPlanLabelPolicy() throws {
+        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "h", full: false)
+        XCTAssertTrue(out.contains("plan: custom (path redacted)"), out)
+        var dash = poisonedDashboard()
+        dash.limitStates[0].planType = "Max 20x"
+        let ok = StatusRenderer.statusText(dashboard: dash, headline: "h", full: false)
+        XCTAssertTrue(ok.contains("plan: Max 20x"), ok)
+    }
+
+    func testSourcesDisclosureRendering() throws {
+        func info(_ a: ProviderAvailability)
+            -> (providerId: String, displayName: String, availability: ProviderAvailability,
+                dataSources: String, permissions: String) {
+            ("codex", "Codex", a, "docs", "read-only")
+        }
+        let builtinFound = StatusRenderer.sourcesText(
+            infos: [info(ProviderAvailability(available: true, detail: "found /Users/alice/.codex/sessions",
+                                              disclosure: .builtin(label: "~/.codex/sessions")))], full: false)
+        XCTAssertTrue(builtinFound.contains("found ~/.codex/sessions"), builtinFound)
+        XCTAssertFalse(builtinFound.contains("/Users/"), "預設不印原始路徑:\(builtinFound)")
+
+        let customFound = StatusRenderer.sourcesText(
+            infos: [info(ProviderAvailability(available: true,
+                                              detail: "found /Users/alice/Clients/SecretAcquisition/codex/sessions"))],
+            full: false)
+        XCTAssertTrue(customFound.contains("custom root (found; details hidden)"), customFound)
+        XCTAssertFalse(customFound.contains("SecretAcquisition"), customFound)
+
+        let customFull = StatusRenderer.sourcesText(
+            infos: [info(ProviderAvailability(available: true,
+                                              detail: "found /Users/alice/Clients/SecretAcquisition/codex/sessions"))],
+            full: true)
+        XCTAssertTrue(customFull.contains("SecretAcquisition"), "--full 應印 detail 原文")
+    }
+
+    // RootDisclosure.classify:偵測到的根對照內建候選(不是 env 有沒有設)。
+    func testRootDisclosureClassify() throws {
+        let home = URL(fileURLWithPath: "/Users/alice")
+        let builtin = [(url: home.appendingPathComponent(".claude/projects"), label: "~/.claude/projects"),
+                       (url: home.appendingPathComponent(".config/claude/projects"), label: "~/.config/claude/projects")]
+        // (a) 只有次要內建存在 → 吻合的次要標籤(不得寫死主要)
+        XCTAssertEqual(RootDisclosure.classify(selectedRoot: home.appendingPathComponent(".config/claude/projects"),
+                                               candidates: builtin.map(\.url), builtin: builtin),
+                       .builtin(label: "~/.config/claude/projects"))
+        // (b) env 設了但指向內建位置(等價路徑,含 ../ 正規化)→ 仍是 builtin
+        XCTAssertEqual(RootDisclosure.classify(
+                           selectedRoot: URL(fileURLWithPath: "/Users/alice/.claude/../.claude/projects"),
+                           candidates: builtin.map(\.url), builtin: builtin),
+                       .builtin(label: "~/.claude/projects"))
+        // (c) 覆寫到非內建 —— 家內或家外一律 custom(/Users/alice2 前綴碰撞也是 custom)
+        for custom in ["/Users/alice/Clients/Secret/claude/projects", "/srv/claude/projects",
+                       "/Users/alice2/.claude/projects"] {
+            XCTAssertEqual(RootDisclosure.classify(selectedRoot: URL(fileURLWithPath: custom),
+                                                   candidates: builtin.map(\.url) + [URL(fileURLWithPath: custom)],
+                                                   builtin: builtin),
+                           .custom, custom)
+        }
+        // 全新安裝:無選定根、候選全屬內建 → 主要內建標籤(gpt catch-up SEV2 的表達力案例)
+        XCTAssertEqual(RootDisclosure.classify(selectedRoot: nil,
+                                               candidates: builtin.map(\.url), builtin: builtin),
+                       .builtin(label: "~/.claude/projects"))
+        // 無選定根但候選含非內建 → custom(fail-closed)
+        XCTAssertEqual(RootDisclosure.classify(selectedRoot: nil,
+                                               candidates: [URL(fileURLWithPath: "/srv/x")], builtin: builtin),
+                       .custom)
+    }
+
+    // adapter 層:注入自訂 roots → detectAvailability 揭露為 custom(detail 保留原文供 --full)。
+    func testAdapterDisclosureCustomRoots() throws {
+        let tmp = privTempDir()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let a = CodexAdapter(roots: [tmp]).detectAvailability()
+        XCTAssertEqual(a.disclosure, .custom)
+        XCTAssertTrue(a.available)
+        XCTAssertTrue(a.detail.contains(tmp.lastPathComponent), "detail 保留原文供 --full")
     }
 }

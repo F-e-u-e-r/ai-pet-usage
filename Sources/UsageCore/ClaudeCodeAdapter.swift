@@ -46,11 +46,24 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         }
     }
 
+    /// 內建預設候選(**真實 home**;`CLAUDE_CONFIG_DIR` 只影響候選建構,不是隱私軸)。
+    /// Claude 有兩個內建位置 —— sources 預設輸出要印**吻合的**那個標籤,不得寫死主要位置
+    /// (grok plan SEV2:secondary-only 使用者會被誤標)。
+    static func builtinRoots() -> [(url: URL, label: String)] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [(home.appendingPathComponent(".claude/projects"), "~/.claude/projects"),
+                (home.appendingPathComponent(".config/claude/projects"), "~/.config/claude/projects")]
+    }
+
     public func detectAvailability() -> ProviderAvailability {
+        let disclosure = RootDisclosure.classify(selectedRoot: roots.first,
+                                                 candidates: candidateRoots,
+                                                 builtin: Self.builtinRoots())
         guard let root = roots.first else {
-            return ProviderAvailability(available: false, detail: "~/.claude/projects not found")
+            return ProviderAvailability(available: false, detail: "~/.claude/projects not found",
+                                        disclosure: disclosure)
         }
-        return ProviderAvailability(available: true, detail: "found \(root.path)")
+        return ProviderAvailability(available: true, detail: "found \(root.path)", disclosure: disclosure)
     }
 
     public func diagnosticSources() -> [DiagnosticSourceDescriptor] {

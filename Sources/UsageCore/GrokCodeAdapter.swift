@@ -38,11 +38,21 @@ public struct GrokCodeAdapter: ProviderAdapter {
         self.billingLogFiles = billingLogFiles ?? [grokHome.appendingPathComponent("logs/unified.jsonl")]
     }
 
+    /// 內建預設候選(**真實 home**,與 GROK_HOME 無關)。
+    static func builtinRoots() -> [(url: URL, label: String)] {
+        [(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/sessions"),
+          "~/.grok/sessions")]
+    }
+
     public func detectAvailability() -> ProviderAvailability {
+        let disclosure = RootDisclosure.classify(selectedRoot: roots.first,
+                                                 candidates: candidateRoots,
+                                                 builtin: Self.builtinRoots())
         guard let root = roots.first else {
-            return ProviderAvailability(available: false, detail: "~/.grok/sessions not found")
+            return ProviderAvailability(available: false, detail: "~/.grok/sessions not found",
+                                        disclosure: disclosure)
         }
-        return ProviderAvailability(available: true, detail: "found \(root.path)")
+        return ProviderAvailability(available: true, detail: "found \(root.path)", disclosure: disclosure)
     }
 
     public func diagnosticSources() -> [DiagnosticSourceDescriptor] {

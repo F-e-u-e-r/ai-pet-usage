@@ -28,11 +28,22 @@ public struct CodexAdapter: ProviderAdapter {
         }
     }
 
+    /// 內建預設候選(**真實 home**,與 CODEX_HOME 無關)→ sources 預設輸出的固定標籤對照表。
+    static func builtinRoots() -> [(url: URL, label: String)] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [(home.appendingPathComponent(".codex/sessions"), "~/.codex/sessions"),
+                (home.appendingPathComponent(".codex/archived_sessions"), "~/.codex/archived_sessions")]
+    }
+
     public func detectAvailability() -> ProviderAvailability {
+        let disclosure = RootDisclosure.classify(selectedRoot: roots.first,
+                                                 candidates: candidateRoots,
+                                                 builtin: Self.builtinRoots())
         guard let root = roots.first else {
-            return ProviderAvailability(available: false, detail: "~/.codex/sessions not found")
+            return ProviderAvailability(available: false, detail: "~/.codex/sessions not found",
+                                        disclosure: disclosure)
         }
-        return ProviderAvailability(available: true, detail: "found \(root.path)")
+        return ProviderAvailability(available: true, detail: "found \(root.path)", disclosure: disclosure)
     }
 
     public func diagnosticSources() -> [DiagnosticSourceDescriptor] {
@@ -42,7 +53,7 @@ public struct CodexAdapter: ProviderAdapter {
     }
 
     public func explainDataSources() -> String {
-        "Reads Codex CLI rollout logs (rollout-*.jsonl) under ~/.codex/sessions and ~/.codex/archived_sessions. Only token_count totals, rate-limit percentages, reset times, model IDs, project paths, and timestamps are extracted. Prompts and message contents are never read into the ledger."
+        "Reads Codex CLI rollout logs (rollout-*.jsonl) under ~/.codex/sessions and ~/.codex/archived_sessions. Only token_count totals, rate-limit percentages, reset times, model IDs, project paths, and timestamps are decoded (narrow decoder; undeclared fields are never built into objects). Prompts and message contents are never extracted, retained, or emitted."
     }
 
     public func explainRequiredPermissions() -> String {
@@ -69,15 +80,20 @@ public struct CodexAdapter: ProviderAdapter {
                 let fileStem = url.deletingPathExtension().lastPathComponent
 
                 do {
+                    // 隱私邊界:以**窄 Decodable** 只解出宣告過的用量/中繼欄位。session_meta 的
+                    // base_instructions、通過 quickFilter 的 response_item 訊息內容等未宣告欄位
+                    // 不會被 decode 成我方持有的物件(對照舊碼:JSONSerialization 會把整行物化
+                    // 成 [String:Any])。見 docs/ADAPTER_CONTRACT.md。
+                    let decoder = JSONDecoder()
                     let newOffset = try JSONLScanner.scan(
                         url: url, from: startOffset,
                         quickFilters: ["token_count", "turn_context", "session_meta"]
                     ) { hit in
-                        guard let obj = (try? JSONSerialization.jsonObject(with: hit.data)) as? JSONObject else {
+                        guard let line = try? decoder.decode(CodexLine.self, from: hit.data) else {
                             parseErrors += 1
                             return
                         }
-                        Self.parseLine(obj, ctx: &ctx, fileStem: fileStem, byteOffset: hit.byteOffset,
+                        Self.parseLine(line, ctx: &ctx, fileStem: fileStem, byteOffset: hit.byteOffset,
                                        sourcePath: url.path, events: &events, readings: &readings)
                     }
                     newState.files[key] = FileScanMark(offset: newOffset, size: size, context: ctx.serialized())
@@ -121,26 +137,62 @@ public struct CodexAdapter: ProviderAdapter {
         }
     }
 
-    static func parseLine(_ obj: JSONObject, ctx: inout FileContext, fileStem: String, byteOffset: Int64,
+    /// Codex rollout 行的**窄 Decodable**:只宣告解析所需的用量/中繼欄位。session_meta 的
+    /// `base_instructions`、response_item 的訊息內容、turn_context 的 policy/sandbox 細節等
+    /// **未宣告**欄位不會被 decode 成我方持有的物件。DATA_SOURCES.md 的隱私邊界以此為準。
+    struct CodexLine: Decodable {
+        let type: String?
+        let timestamp: String?
+        let payload: Payload?
+
+        struct Payload: Decodable {
+            let type: String?
+            let timestamp: String?
+            let cwd: String?
+            let model: String?
+            let info: Info?
+            let rate_limits: RateLimits?
+        }
+        struct Info: Decodable { let total_token_usage: Totals? }
+        struct Totals: Decodable {
+            let input_tokens: Int?
+            let cached_input_tokens: Int?
+            let output_tokens: Int?
+        }
+        struct RateLimits: Decodable {
+            let plan_type: String?
+            let primary: Window?
+            let secondary: Window?
+        }
+        struct Window: Decodable {
+            let used_percent: Double?
+            let window_minutes: Int?
+            let resets_at: Double?
+            let resets_in_seconds: Double?
+        }
+    }
+
+    static func parseLine(_ line: CodexLine, ctx: inout FileContext, fileStem: String, byteOffset: Int64,
                           sourcePath: String, events: inout [UsageEvent], readings: inout [RateLimitReading]) {
-        guard let type = obj.str("type") else { return }
-        let payload = obj.obj("payload") ?? [:]
-        let timestamp = obj.date("timestamp") ?? payload.date("timestamp")
+        guard let type = line.type else { return }
+        let payload = line.payload
+        // 與舊碼同義的逐欄後援:外層 timestamp 缺/壞 → 用 payload.timestamp(皆經 ISO8601.parse)。
+        let timestamp = line.timestamp.flatMap(ISO8601.parse) ?? payload?.timestamp.flatMap(ISO8601.parse)
 
         switch type {
         case "session_meta":
-            if let cwd = payload.str("cwd") { ctx.cwd = cwd }
+            if let cwd = payload?.cwd { ctx.cwd = cwd }
         case "turn_context":
-            if let cwd = payload.str("cwd") { ctx.cwd = cwd }
-            if let model = payload.str("model") { ctx.model = model }
+            if let cwd = payload?.cwd { ctx.cwd = cwd }
+            if let model = payload?.model { ctx.model = model }
         case "event_msg":
-            guard payload.str("type") == "token_count" else { return }
+            guard payload?.type == "token_count" else { return }
             guard let ts = timestamp else { return }
 
-            if let info = payload.obj("info"), let totals = info.obj("total_token_usage") {
-                let input = totals.int("input_tokens") ?? 0
-                let cached = totals.int("cached_input_tokens") ?? 0
-                let output = totals.int("output_tokens") ?? 0
+            if let totals = payload?.info?.total_token_usage {
+                let input = totals.input_tokens ?? 0
+                let cached = totals.cached_input_tokens ?? 0
+                let output = totals.output_tokens ?? 0
 
                 var dIn = input - ctx.totalInput
                 var dCached = cached - ctx.totalCached
@@ -171,13 +223,13 @@ public struct CodexAdapter: ProviderAdapter {
                 }
             }
 
-            if let limits = payload.obj("rate_limits") {
+            if let limits = payload?.rate_limits {
                 // Codex 的 primary/secondary 欄位「不」固定對應 5h/週(觀察到 Codex 暫撤 5h 時
                 // 只回報週窗口且放在 primary、secondary 為 null),故以 window_minutes 分類到
                 // 5h/週兩槽,而非 JSON 位置。RateLimitReading 契約:primary=5h、secondary=週。
-                let planType = limits.str("plan_type")
-                let (fiveHour, weekly) = classifyWindows(parseWindow(limits.obj("primary"), observedAt: ts),
-                                                         parseWindow(limits.obj("secondary"), observedAt: ts))
+                let planType = limits.plan_type
+                let (fiveHour, weekly) = classifyWindows(parseWindow(limits.primary, observedAt: ts),
+                                                         parseWindow(limits.secondary, observedAt: ts))
                 let reading = RateLimitReading(
                     providerId: "codex",
                     observedAt: ts,
@@ -196,13 +248,13 @@ public struct CodexAdapter: ProviderAdapter {
         }
     }
 
-    static func parseWindow(_ obj: JSONObject?, observedAt: Date) -> RateLimitWindowReading? {
-        guard let obj, let percent = obj.double("used_percent") else { return nil }
-        let windowMinutes = obj.int("window_minutes") ?? 0
+    static func parseWindow(_ w: CodexLine.Window?, observedAt: Date) -> RateLimitWindowReading? {
+        guard let w, let percent = w.used_percent else { return nil }
+        let windowMinutes = w.window_minutes ?? 0
         var resetsAt: Date?
-        if let unix = obj.double("resets_at") {
+        if let unix = w.resets_at {
             resetsAt = Date(timeIntervalSince1970: unix)
-        } else if let inSeconds = obj.double("resets_in_seconds") {
+        } else if let inSeconds = w.resets_in_seconds {
             resetsAt = observedAt.addingTimeInterval(inSeconds)
         }
         return RateLimitWindowReading(usedPercent: percent, windowMinutes: windowMinutes, resetsAt: resetsAt)
