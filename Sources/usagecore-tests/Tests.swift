@@ -283,6 +283,116 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         XCTAssertTrue(noResult.rateLimits.isEmpty)
     }
 
+    // MARK: statusline hook 凍結 schema 契約(producer = Scripts/claude-statusline-hook.sh)
+
+    func testHookFrozenSchemaFixtureDecodes() throws {
+        // hook 落地檔的凍結形狀(schema_version / captured_at / 窄化 model 與 rate_limits);
+        // reader 對多餘欄位寬容 —— 此測試釘住「消費端讀得懂 producer 的新形狀」。
+        let payload = """
+        {"schema_version":1,"captured_at":"2026-07-17T01:23:45Z",
+         "model":{"id":"claude-fable-5","display_name":"Fable 5"},
+         "rate_limits":{"five_hour":{"used_percentage":42.4,"resets_at":1789000000},
+                        "seven_day":{"used_percentage":81,"resets_at":1789400000}}}
+        """
+        let dir = makeTempDir()
+        let file = dir.appendingPathComponent("claude-statusline.json")
+        try payload.data(using: .utf8)!.write(to: file)
+
+        let readings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [file])
+        XCTAssertEqual(readings.count, 1)
+        XCTAssertEqual(readings[0].primary?.usedPercent ?? -1, 42.4, accuracy: 0.0001)
+        XCTAssertEqual(readings[0].primary?.resetsAt?.timeIntervalSince1970, 1_789_000_000)
+        XCTAssertEqual(readings[0].secondary?.usedPercent, 81)
+        XCTAssertEqual(readings[0].secondary?.resetsAt?.timeIntervalSince1970, 1_789_400_000)
+
+        // hook 明確允許只落單一可用窗口 —— reader 不得拒讀單窗形狀
+        let single = """
+        {"schema_version":1,"captured_at":"2026-07-17T01:23:45Z","model":null,
+         "rate_limits":{"five_hour":{"used_percentage":7,"resets_at":1789000000}}}
+        """
+        let singleFile = dir.appendingPathComponent("single.json")
+        try single.data(using: .utf8)!.write(to: singleFile)
+        let singleReadings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [singleFile])
+        XCTAssertEqual(singleReadings.count, 1)
+        XCTAssertEqual(singleReadings[0].primary?.usedPercent, 7)
+        XCTAssertNil(singleReadings[0].secondary)
+    }
+
+    func testHookProducedFileDecodesEndToEnd() throws {
+        // 真實 producer→consumer:實際執行 hook 落地(cross-model plan review 指出
+        // 手寫雙 fixture 會各自漂移),餵含 session 雜訊與 used_percent 別名的 payload,
+        // 斷言 reader 解得出兩窗、正規化生效、白名單外欄位不落地。
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // usagecore-tests
+            .deletingLastPathComponent()   // Sources
+            .deletingLastPathComponent()   // repo root
+        let hook = root.appendingPathComponent("Scripts/claude-statusline-hook.sh")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: hook.path), "hook not found: \(hook.path)")
+
+        let dataDir = makeTempDir()
+        let payload = #"{"session_id":"sekrit","cwd":"/Users/x","model":{"id":"claude-fable-5","display_name":"Fable"},"rate_limits":{"five_hour":{"used_percent":42.4,"resets_at":1789000000},"seven_day":{"used_percentage":81},"one_hour":{"used_percentage":5}}}"#
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [hook.path]
+        var env = ProcessInfo.processInfo.environment
+        env["AIPET_DATA_DIR"] = dataDir.path
+        env.removeValue(forKey: "AIPET_STATUSLINE_HOOK_ACTIVE")
+        process.environment = env
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        stdinPipe.fileHandleForWriting.write(payload.data(using: .utf8)!)
+        stdinPipe.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        let landed = dataDir.appendingPathComponent("claude-statusline.json")
+        let raw = try String(contentsOf: landed, encoding: .utf8)
+        XCTAssertFalse(raw.contains("sekrit"), raw)
+        XCTAssertFalse(raw.contains("one_hour"), raw)
+        XCTAssertFalse(raw.contains("\"used_percent\":"), "alias 應正規化為 used_percentage:\(raw)")
+
+        let readings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [landed])
+        XCTAssertEqual(readings.count, 1)
+        XCTAssertEqual(readings[0].primary?.usedPercent ?? -1, 42.4, accuracy: 0.0001)
+        XCTAssertEqual(readings[0].primary?.resetsAt?.timeIntervalSince1970, 1_789_000_000)
+        XCTAssertEqual(readings[0].secondary?.usedPercent, 81)
+        XCTAssertNil(readings[0].secondary?.resetsAt)
+
+        // consumer 相容性攻擊面(cross-model code review r1 #2):python 寫得出去、
+        // 但 JSONSerialization 會整檔拒讀的值(巨大整數、lone surrogate)必須被
+        // producer 端白名單擋掉 —— 落地檔永遠是本 reader 讀得動的形狀。
+        let hostile = #"{"model":{"id":"\ud800","display_name":"Fable"},"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":9999999999999999999999999999999999999999}}}"#
+        let dataDir2 = makeTempDir()
+        let process2 = Process()
+        process2.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process2.arguments = [hook.path]
+        var env2 = ProcessInfo.processInfo.environment
+        env2["AIPET_DATA_DIR"] = dataDir2.path
+        env2.removeValue(forKey: "AIPET_STATUSLINE_HOOK_ACTIVE")
+        process2.environment = env2
+        let stdin2 = Pipe()
+        process2.standardInput = stdin2
+        process2.standardOutput = Pipe()
+        process2.standardError = Pipe()
+        try process2.run()
+        stdin2.fileHandleForWriting.write(hostile.data(using: .utf8)!)
+        stdin2.fileHandleForWriting.closeFile()
+        process2.waitUntilExit()
+        XCTAssertEqual(process2.terminationStatus, 0)
+
+        let landed2 = dataDir2.appendingPathComponent("claude-statusline.json")
+        let hostileReadings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [landed2])
+        XCTAssertEqual(hostileReadings.count, 1, "hostile payload 的落地檔必須仍可讀")
+        XCTAssertEqual(hostileReadings[0].primary?.usedPercent, 42)
+        XCTAssertNil(hostileReadings[0].primary?.resetsAt, "巨大整數 resets_at 應被丟棄")
+        let raw2 = try String(contentsOf: landed2, encoding: .utf8)
+        XCTAssertFalse(raw2.contains("ud800"), "lone surrogate 不得落地:\(raw2)")
+    }
+
     func testIncrementalScanDoesNotDuplicate() throws {
         let root = try makeRoot()
         let adapter = ClaudeCodeAdapter(roots: [root], statuslineFiles: [], planConfigFiles: [])

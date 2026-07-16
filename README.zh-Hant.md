@@ -60,6 +60,39 @@ open "dist/AI Pet Usage.app"
 - app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。可**檢查 GitHub 更新**(opt-in —— Settings → General → *Automatically check for updates*;僅版本檢查,不送任何使用資料),或從選單列隨時手動檢查。
 - Developer ID 簽章/公證的下載規劃於 beta(見 [`ROADMAP.md`](ROADMAP.md))。
 
+### Claude Code 官方限額(可選的 statusline hook)
+
+Claude Code 會把官方限額(真實的 5 小時 / 週 `used_percentage`)餵給你在 `statusLine` 設定的指令。只要有 hook 把這份 payload 存到本機,app 就能顯示**官方回報**的限額 —— 不必手動設 token budget。本 repo 附了一支:[`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh)(它在 repo 裡、不在 app bundle 內 —— Homebrew 使用者請 clone repo 或從 release 的原始碼 zip 取得)。
+
+**全新安裝**(還沒有自訂 statusline)—— 在 `~/.claude/settings.json` 加入:
+
+```json
+"statusLine": {"type": "command", "command": "/bin/bash /path/to/ai-pet-usage/Scripts/claude-statusline-hook.sh"}
+```
+
+**已有自訂 statusline?** 用包裹模式 —— 你的腳本**完全不會被修改**,其 stdin(原始 JSON 原封 byte)、stdout、stderr 與退出碼全部原樣透傳:
+
+1. 打開 `~/.claude/settings.json`,找到現有的 `statusLine.command`,先把那串字存起來(復原 = 貼回去)。
+2. 改成讓 hook 包裹你的指令:
+
+```json
+"statusLine": {"type": "command", "command": "/bin/bash /path/to/ai-pet-usage/Scripts/claude-statusline-hook.sh --wrap /Users/you/.claude/statusline-command.sh"}
+```
+
+- 包裹目標必須**可執行**;沒有執行權限的純 shell 腳本請寫 `--wrap /bin/bash -- /path/to/script.sh`。
+- 額外參數放在 `--` 之後逐一傳遞(`--wrap /path/to/cmd -- --compact`);不接受整串複合 shell 指令。
+- 落地內容是**凍結白名單**——恰好這個形狀,別無其他(session id、transcript 路徑、cwd 與任何層級的未知欄位一律丟棄):
+
+```json
+{"schema_version": 1, "captured_at": "<UTC ISO8601>",
+ "model": {"id": "...", "display_name": "..."},
+ "rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": 1789000000},
+                 "seven_day":  {"used_percentage": 81, "resets_at": 1789400000}}}
+```
+
+- hook **不發送任何網路請求**;檔案只存在 `~/Library/Application Support/AIPetUsage/`。payload 缺可用的 `rate_limits` 時**不會覆蓋上一份好檔**;資料新舊由 app 依檔案 mtime 判定。
+- 替代方案:已有其他工具把 payload 存到 `~/.claude/usage-status.json` 的話,直接可用,毋需本腳本。
+
 ## 🚀 建置與執行
 
 ```bash

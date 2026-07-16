@@ -60,6 +60,39 @@ open "dist/AI Pet Usage.app"
 - The app lives in the menu bar; enable **launch at login** in Settings if you want it always on. It can **check GitHub for updates** (opt-in — Settings → General → *Automatically check for updates*; a version check only, no usage data is sent), or check on demand from the menu bar.
 - Developer ID–signed/notarized downloads are planned for the beta (see [`ROADMAP.md`](ROADMAP.md)).
 
+### Claude Code official limits (optional statusline hook)
+
+Claude Code pipes its official rate limits (the real 5-hour / weekly `used_percentage`) into whatever `statusLine` command you configure. If a hook saves that payload locally, the app shows **provider-reported** limits — no manual token budget needed. This repo ships one: [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh) (it lives in the repo, not in the app bundle — Homebrew users: clone the repo or grab the file from the source zip of a release).
+
+**Fresh install** (you don't have a custom statusline yet) — add to `~/.claude/settings.json`:
+
+```json
+"statusLine": {"type": "command", "command": "/bin/bash /path/to/ai-pet-usage/Scripts/claude-statusline-hook.sh"}
+```
+
+**Already have a custom statusline?** Use wrapper mode — your script is **never modified**, and its stdin (the exact original JSON bytes), stdout, stderr, and exit code all pass through untouched:
+
+1. Open `~/.claude/settings.json`, find your current `statusLine.command`, and save that string somewhere (rollback = paste it back).
+2. Replace it with the hook wrapping your command:
+
+```json
+"statusLine": {"type": "command", "command": "/bin/bash /path/to/ai-pet-usage/Scripts/claude-statusline-hook.sh --wrap /Users/you/.claude/statusline-command.sh"}
+```
+
+- The wrap target must be **executable**; for a plain shell script without the executable bit, use `--wrap /bin/bash -- /path/to/script.sh`.
+- Extra arguments go after `--`, one per argument (`--wrap /path/to/cmd -- --compact`); compound shell command strings are not accepted.
+- What gets persisted is a **frozen allowlist only** — this exact shape, nothing else (session ids, transcript paths, cwd, and any unknown fields are dropped at every level):
+
+```json
+{"schema_version": 1, "captured_at": "<UTC ISO8601>",
+ "model": {"id": "...", "display_name": "..."},
+ "rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": 1789000000},
+                 "seven_day":  {"used_percentage": 81, "resets_at": 1789400000}}}
+```
+
+- The hook makes **no network requests**; the file stays under `~/Library/Application Support/AIPetUsage/`. A payload without usable `rate_limits` never overwrites the last good file; staleness is judged by the app from the file's mtime.
+- Alternative: any other tool that already saves the payload to `~/.claude/usage-status.json` works too — then you don't need this hook at all.
+
 ## 🚀 Build & run
 
 ```bash
