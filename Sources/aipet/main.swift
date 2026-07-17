@@ -14,6 +14,8 @@ import UsageCore
 //   aipet reindex                         全量重建帳本索引(寫入,持鎖)
 //   aipet diag [--json] [--out FILE]      輸出 redacted 診斷(封閉詞彙,可安全貼進 issue;唯讀、無寫入)
 //   aipet sprites [--out DIR]             匯出像素寵物 PNG contact sheets(預設 dist/sprite-preview)
+//   aipet install-hook [--dry-run]        安裝 Claude Code statusline hook(自動偵測既有
+//                                         statusline 並以 --wrap 包住;寫入前備份 settings.json)
 
 let args = CommandLine.arguments.dropFirst()
 let command = args.first ?? "status"
@@ -35,8 +37,10 @@ func value(for flag: String) -> String? {
 let dataDir = AppPaths.dataDirectory()
 // 與 GUI 同源的設定(settings.json 的 core 欄位):預算、閾值、啟用的 provider。
 // diag 為純唯讀入口 → readOnly:不建立資料目錄(對不存在的目錄零副作用)。
+// install-hook 同樣 readOnly:它不使用 coordinator,自己在「真正安裝」時才建
+// 資料目錄 —— 否則 --dry-run/refuse 也會留下空目錄,違反「零寫入」承諾(grok code-r2 #1)。
 let coordinator = UsageCoordinator(dataDir: dataDir, settings: CoreSettings.loadShared(dataDir: dataDir),
-                                   readOnly: command == "diag")
+                                   readOnly: command == "diag" || command == "install-hook")
 
 /// diag `--out`:同目錄暫存檔以 0600 建立後,用 rename(2) 原子替換(mode 隨 rename 保留,無權限窗)。
 func writeDiagAtomic(_ text: String, to url: URL) throws {
@@ -164,8 +168,28 @@ Task {
     case "sprites":
         SpriteExport.run(outPath: value(for: "--out"))
 
+    case "install-hook":
+        // 唯一允許的參數是可選的 --dry-run;其餘一律拒絕(不安裝)—— 否則 `--dryrun`
+        // 之類的打錯字會被當成「非 dry-run」而做真安裝(codex code-r12b #3)。
+        let extra = args.dropFirst().filter { $0 != "--dry-run" }
+        if !extra.isEmpty {
+            FileHandle.standardError.write(
+                "install-hook: unknown argument(s): \(extra.joined(separator: " ")) — usage: aipet install-hook [--dry-run]\n"
+                    .data(using: .utf8)!)
+            exit(2)
+        }
+        // 安裝/接線 Claude Code statusline hook。configDir 尊重 CLAUDE_CONFIG_DIR
+        // (與 adapter 同一慣例);home 用真實家目錄(getpwuid 系,非 $HOME)。
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+            .flatMap { $0.isEmpty ? nil : $0 } ?? (home + "/.claude")
+        let result = InstallHook.run(configDir: configDir, dataDir: dataDir.path, home: home,
+                                     dryRun: args.contains("--dry-run"))
+        print(result.output)
+        if result.exitCode != 0 { exit(result.exitCode) }
+
     default:
-        print("usage: aipet [status|report|sources|reindex|diag|sprites] [--refresh] [--full] [--out FILE|DIR] [--days N] [--json]")
+        print("usage: aipet [status|report|sources|reindex|diag|sprites|install-hook] [--refresh] [--full] [--out FILE|DIR] [--days N] [--json] [--dry-run]")
         print("  --full   status/sources/reindex: print raw local paths and raw error text (default output suppresses them; not for public pasting either way — use `aipet diag` to share)")
     }
 }

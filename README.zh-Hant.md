@@ -62,9 +62,20 @@ open "dist/AI Pet Usage.app"
 
 ### Claude Code 官方限額(可選的 statusline hook)
 
-Claude Code 會把官方限額(真實的 5 小時 / 週 `used_percentage`)餵給你在 `statusLine` 設定的指令。只要有 hook 把這份 payload 存到本機,app 就能顯示**官方回報**的限額 —— 不必手動設 token budget。本 repo 附了一支:[`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh)(它在 repo 裡、不在 app bundle 內 —— Homebrew 使用者請 clone repo 或從 release 的原始碼 zip 取得)。
+Claude Code 會把官方限額(真實的 5 小時 / 週 `used_percentage`)餵給你在 `statusLine` 設定的指令。只要有 hook 把這份 payload 存到本機,app 就能顯示**官方回報**的限額 —— 不必手動設 token budget。
 
-**全新安裝**(還沒有自訂 statusline)—— 在 `~/.claude/settings.json` 加入:
+**最簡單:一行指令。** app bundle 內建的 `aipet` CLI 會全部裝好(寫入內建 hook、先備份 `settings.json`;若你的 `statusLine` 已指向一個 **script 檔**,就原封包住那個 script):
+
+```bash
+"/Applications/AI Pet Usage.app/Contents/MacOS/aipet" install-hook          # Homebrew / zip 安裝
+.build/debug/aipet install-hook                                             # 從原始碼建置
+```
+
+加 `--dry-run` 可先預覽、不寫入。若你既有的 `statusLine` 是**複合指令**(含管線/參數)而非單一 script 路徑,它不會亂猜 —— 會拒絕並給指引、零改動,讓你自行手動包裹(見下)。symlink/dotfiles 管理的 settings、非 `command` 型 statusLine、非本工具管理的 hook 引用同樣一律拒絕且零改動;安裝完會印出復原指令。
+
+**手動替代方案** —— 同一支 hook 在 repo 的 [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh)(不在 app bundle 內 —— Homebrew 使用者請 clone repo 或從 release 的原始碼 zip 取得)。
+
+全新安裝(還沒有自訂 statusline)—— 在 `~/.claude/settings.json` 加入:
 
 ```json
 "statusLine": {"type": "command", "command": "/bin/bash /path/to/ai-pet-usage/Scripts/claude-statusline-hook.sh"}

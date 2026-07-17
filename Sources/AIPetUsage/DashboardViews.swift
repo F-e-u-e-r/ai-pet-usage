@@ -693,7 +693,7 @@ struct LimitsView: View {
                 }
 
                 if dash.limitStates.first(where: { $0.providerId == "claude-code" })?.fiveHour.usedPercent == nil {
-                    Label("Claude Code official limits appear automatically when a statusline hook saves Claude Code's payload locally (see Scripts/claude-statusline-hook.sh). Without it, set an estimated token budget in Settings → Limits.",
+                    Label("Claude Code official limits appear automatically when a statusline hook saves Claude Code's payload locally — run `aipet install-hook` once to set it up (if your statusLine already points at a script, it wraps that script untouched). Without it, set an estimated token budget in Settings → Limits.",
                           systemImage: "info.circle")
                         .font(Theme.FontScale.note)
                         .foregroundStyle(Theme.textSecondary)
