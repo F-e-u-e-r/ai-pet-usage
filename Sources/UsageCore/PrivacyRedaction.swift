@@ -51,7 +51,7 @@ public enum PrivacyRedaction {
         }
         if lower.contains("history kept") { return prefixed("history kept (provider unavailable during reindex)") }
         if lower.contains("percent unavailable") {
-            return prefixed("usage percent unavailable (install the statusline hook or set a token budget)")
+            return prefixed("usage percent unavailable (run aipet install-hook or set a token budget)")
         }
         if lower.contains("rate-limit reading is older") { return prefixed("rate-limit reading is stale; percent may lag") }
         if lower.contains("corrected downward") {

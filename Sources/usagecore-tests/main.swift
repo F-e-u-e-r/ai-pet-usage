@@ -24,6 +24,42 @@ runSuite("ScheduledReportTests", [
     ("testPlistXMLContentAndEscaping", scheduled.testPlistXMLContentAndEscaping),
 ])
 
+let installHook = InstallHookTests()
+runSuite("InstallHookTests", [
+    ("testShellSingleQuote", installHook.testShellSingleQuote),
+    ("testFreshVariants", installHook.testFreshVariants),
+    ("testRefusals", installHook.testRefusals),
+    ("testWrapSimpleScriptPath", installHook.testWrapSimpleScriptPath),
+    ("testTildeExpansion", installHook.testTildeExpansion),
+    ("testDirectoryOrSpecialTargetRefused", installHook.testDirectoryOrSpecialTargetRefused),
+    ("testComplexCommandRefused", installHook.testComplexCommandRefused),
+    ("testBareRelativeMissingRefused", installHook.testBareRelativeMissingRefused),
+    ("testCommandPointingAtHookRefused", installHook.testCommandPointingAtHookRefused),
+    ("testCanonicalFormsAlreadyInstalled", installHook.testCanonicalFormsAlreadyInstalled),
+    ("testCanonicalWithoutTypeGetsPreciseRefusal", installHook.testCanonicalWithoutTypeGetsPreciseRefusal),
+    ("testCanonicalIsByteExactNoTrim", installHook.testCanonicalIsByteExactNoTrim),
+    ("testEmbeddedHookMatchesScriptsFile", installHook.testEmbeddedHookMatchesScriptsFile),
+    ("testRunnerFreshInstall", installHook.testRunnerFreshInstall),
+    ("testRunnerIdempotentAndRepairsHook", installHook.testRunnerIdempotentAndRepairsHook),
+    ("testRunnerWrapExistingScriptEndToEnd", installHook.testRunnerWrapExistingScriptEndToEnd),
+    ("testRunnerDryRunWritesNothing", installHook.testRunnerDryRunWritesNothing),
+    ("testRunnerSymlinkedSettingsRefusedButHookRepairable", installHook.testRunnerSymlinkedSettingsRefusedButHookRepairable),
+    ("testRunnerConfigDirIsRegularFile", installHook.testRunnerConfigDirIsRegularFile),
+    ("testRunnerBackupCollision", installHook.testRunnerBackupCollision),
+    ("testNewCommandEscapedInOutput", installHook.testNewCommandEscapedInOutput),
+    ("testRefuseComplexEscapesControlChars", installHook.testRefuseComplexEscapesControlChars),
+    ("testACLClearedOnCreatedFiles", installHook.testACLClearedOnCreatedFiles),
+    ("testRunnerSymlinkToHookRefused", installHook.testRunnerSymlinkToHookRefused),
+    ("testAlreadyInstalledCanonicalAliasToHookRefused", installHook.testAlreadyInstalledCanonicalAliasToHookRefused),
+    ("testHookACLRepairedWhenPresent", installHook.testHookACLRepairedWhenPresent),
+    ("testACLAbsentErrnoClassification", installHook.testACLAbsentErrnoClassification),
+    ("testAlreadyInstalledHardlinkToHookRefused", installHook.testAlreadyInstalledHardlinkToHookRefused),
+    ("testHookACLLookupErrorFailsClosed", installHook.testHookACLLookupErrorFailsClosed),
+    ("testCLIUnknownArgWritesNothing", installHook.testCLIUnknownArgWritesNothing),
+    ("testCLIProcessExitCode", installHook.testCLIProcessExitCode),
+    ("testCLIDryRunCreatesNothing", installHook.testCLIDryRunCreatesNothing),
+])
+
 let claude = ClaudeCodeAdapterTests()
 runSuite("ClaudeCodeAdapterTests", [
     ("testParsesFixture", claude.testParsesFixture),

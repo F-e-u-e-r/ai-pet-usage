@@ -207,7 +207,7 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .refreshSkippedInFlight: return "refresh skipped — a refresh was already in progress"
         case .correctedRecently: return "usage percent corrected downward recently"
         case .staleReading: return "rate-limit reading older than 6h; percent may lag"
-        case .percentUnavailable: return "percent unavailable — install the statusline hook or set a token budget"
+        case .percentUnavailable: return "percent unavailable — run aipet install-hook or set a token budget"
         case .other: return "other data-quality note (details withheld)"
         }
     }

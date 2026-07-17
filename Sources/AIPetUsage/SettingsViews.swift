@@ -281,7 +281,7 @@ struct LimitsPricingSettings: View {
             }
 
             Section("Claude Code estimated budgets (fallback)") {
-                Text("Statusline official values take priority; token budgets are fallback estimates. Claude Code's own statusline payload carries official 5h/weekly percentages — any statusline hook that saves it (e.g. Scripts/claude-statusline-hook.sh) enables them automatically. Budgets only kick in when no fresh statusline data exists. Codex never needs budgets.")
+                Text("Statusline official values take priority; token budgets are fallback estimates. Claude Code's own statusline payload carries official 5h/weekly percentages — run `aipet install-hook` once (bundled CLI; if your statusLine already points at a script, it wraps that script untouched) and they appear on their own. Budgets only kick in when no fresh statusline data exists. Codex never needs budgets.")
                     .font(.caption).foregroundStyle(.secondary)
                 BudgetField(label: "5-hour budget (tokens)", value: Binding(
                     get: { model.settings.core.claudeFiveHourTokenBudget },

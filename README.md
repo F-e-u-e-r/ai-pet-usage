@@ -62,9 +62,20 @@ open "dist/AI Pet Usage.app"
 
 ### Claude Code official limits (optional statusline hook)
 
-Claude Code pipes its official rate limits (the real 5-hour / weekly `used_percentage`) into whatever `statusLine` command you configure. If a hook saves that payload locally, the app shows **provider-reported** limits — no manual token budget needed. This repo ships one: [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh) (it lives in the repo, not in the app bundle — Homebrew users: clone the repo or grab the file from the source zip of a release).
+Claude Code pipes its official rate limits (the real 5-hour / weekly `used_percentage`) into whatever `statusLine` command you configure. If a hook saves that payload locally, the app shows **provider-reported** limits — no manual token budget needed.
 
-**Fresh install** (you don't have a custom statusline yet) — add to `~/.claude/settings.json`:
+**Easiest: one command.** The `aipet` CLI ships inside the app bundle and installs everything (writes the bundled hook, backs up `settings.json` first, and — if your `statusLine` already points at a **script file** — wraps that script untouched):
+
+```bash
+"/Applications/AI Pet Usage.app/Contents/MacOS/aipet" install-hook          # Homebrew / zip install
+.build/debug/aipet install-hook                                             # built from source
+```
+
+Add `--dry-run` to preview without writing. If your existing `statusLine` is a **compound command** (with pipes/arguments) rather than a single script path, it won't guess — it refuses with guidance and leaves everything unchanged, so you can wrap it manually (see below). It also refuses (changing nothing) on symlinked/dotfiles-managed settings, non-`command` statusLine types, and unmanaged hook references, and prints the revert line after installing.
+
+**Manual alternative** — the same hook lives in the repo at [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh) (not in the app bundle — Homebrew users: clone the repo or grab the file from the source zip of a release).
+
+Fresh install (you don't have a custom statusline yet) — add to `~/.claude/settings.json`:
 
 ```json
 "statusLine": {"type": "command", "command": "/bin/bash /path/to/ai-pet-usage/Scripts/claude-statusline-hook.sh"}
