@@ -2,7 +2,7 @@
 
 This document lists exactly which local files the app reads, what is extracted, and why. It is the source of truth for the in-app "Providers" and "Data & Privacy" settings copy.
 
-Everything is read-only. Your usage data is never uploaded — no telemetry, no account login. The only optional network call is a GitHub version check for app updates (opt-in; Settings → General), which sends no usage data.
+Everything is read-only. Your usage data is never uploaded — no telemetry, no account login. Two optional network calls exist, each opt-in and off by default, and neither sends usage data: a GitHub version check for app updates (Settings → General), and an OpenRouter credit-balance check (Settings → Providers; see "OpenRouter credits" below).
 
 ## Codex (`providerId: codex`)
 
@@ -86,6 +86,46 @@ The session-folder name is the URL-encoded project path and is decoded to attrib
 **Token figures are estimates that undercount.** Grok's local log exposes only a cumulative, context-size-like token counter per session, and it even regresses after context compaction (a later line reports a smaller value). The ledger event for each turn is the positive growth of that counter since the previous turn; on a regression the baseline is reset and no negative event is produced. Because the counter tracks context size rather than billed input/output, these figures **undercount actual billed usage** and have no input/output/cache split (all growth is recorded as input, confidence: estimated). **Grok exposes no usage limits locally, so no usage percent is provided.**
 
 **Pricing: curated entries only, and costs are lower-bound estimates.** Auto-generated price entries are ignored for Grok (a price list refresh can never silently start pricing rough token estimates). Grok models are priced only through deliberate, source-verified curated entries or a user price override — currently `grok-4.5` ($2/$6, cache read $0.50, verified against docs.x.ai and OpenRouter 2026-07-11). Because the underlying token counts undercount billed usage, grok costs are **lower-bound estimates**, not invoices. Models without a verifiable public price (e.g. `grok-composer-2.5-fast`) stay unpriced and appear as "unknown model" rows.
+
+## OpenRouter credits (optional, off by default; not a provider adapter)
+
+For people who run **opencode** on OpenRouter prepaid credits. This is the app's second (and last)
+network feature; it is **opt-in** (Settings → Providers), default **off**, and lives entirely outside the
+adapter layer — it produces no usage events, no rate-limit readings, and never feeds the rings, moods,
+notifications, reports, or the CLI.
+
+**Path read (only while enabled, only at request time)**
+
+- `~/.local/share/opencode/auth.json` (or `$XDG_DATA_HOME/opencode/auth.json` when set) — opencode's
+  credential file. The file is read as bytes (refused above 1 MB) and decoded through a **narrow decoder**
+  that materializes only the `openrouter.{type, key}` entry; credentials any other CLI stored in the same
+  file are never decoded into objects, logged, or retained. A key is accepted only when `type == "api"`,
+  20–512 chars, printable ASCII (no whitespace/control characters — it goes into an HTTP header). The
+  `OPENROUTER_API_KEY` environment variable is deliberately **ignored** (it could silently select a
+  different account than the opencode login being monitored). No key found → **no network call is made.**
+
+**Network call (the only one this feature makes)**
+
+- `GET https://openrouter.ai/api/v1/credits` — about every 15 minutes while enabled, plus once on enable
+  and on manual Refresh. Headers: `Authorization` (the key above), `Accept: application/json`,
+  `User-Agent: AIPetUsage/<app-version>`. No usage data, no OS string, no query parameters. Transport: a
+  dedicated in-memory-only session (no disk cache, no cookies) that **refuses all redirects**; a response
+  is discarded unless it still comes from `https://openrouter.ai`. Hardcoded HTTPS host, system TLS trust;
+  no certificate pinning. Fields consumed from the response: `data.total_credits`, `data.total_usage` —
+  nothing else is decoded, and responses over 256 KB are refused.
+
+**What is shown, and how honestly**
+
+- The dropdown panel row and pet-bubble lines show the **derived** remaining balance
+  (`total_credits − total_usage`) with its age. It is presented as *calculated from OpenRouter-reported
+  totals* — the app never labels the derived number "official". Overspend shows as a real negative
+  ("over by $0.12"), never a fake `$0.00`; an account with no prepaid credits shows a fixed
+  "no prepaid credits" line, never "$0.00 left of $0". A failed refresh switches the row to a fixed error
+  line and demotes the last value to an explicit "last $X · age"; a rejected key (opencode keys rotate and
+  expire) clears the balance entirely. All error text comes from a **closed vocabulary** — raw error or
+  response text is never rendered.
+- **Nothing is persisted**: the snapshot lives in memory only; disabling the toggle (or quitting) discards
+  it. Credit figures never appear in HTML reports, `aipet diag`, the CLI, or any export.
 
 ## Limit calculation policy
 

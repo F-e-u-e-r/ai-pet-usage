@@ -31,6 +31,9 @@ struct MenuBarPanel: View {
             }
             PanelActionRow(title: model.refreshing ? "Refreshing…" : "Refresh Now",
                            trailing: "⌘R", shortcut: "r", disabled: model.refreshing) {
+                // 手動刷新 = 使用者意圖「全部更新」:credits 一併抓(自動節奏仍是獨立的
+                // 15 分鐘輪詢,絕不掛在 FSEvents 觸發的 refreshNow 上)。
+                model.orCredits.refreshNow()
                 Task { await model.refreshNow() }
             }
             PanelActionRow(title: "Export Today's Report…") {
@@ -101,6 +104,9 @@ private struct PanelHeader: View {
                     if model.orderedLimitStates.isEmpty {
                         Text("No providers enabled")
                             .font(.callout).foregroundStyle(.secondary)
+                    }
+                    if model.settings.openRouterCreditsEnabled {
+                        OpenRouterCreditsRow(status: model.orCredits.status, now: context.date)
                     }
                     if let alert = model.alertSummary {
                         Label(alert.text, systemImage: "exclamationmark.triangle.fill")
@@ -183,6 +189,75 @@ private struct ProviderStatusRow: View {
         return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly)). "
             + ResetLabel.accessibility(fiveHourResetAt: state.fiveHour.resetAt,
                                        weeklyResetAt: state.weekly.resetAt, now: now)
+    }
+}
+
+/// OpenRouter 預付 credits 列(opt-in;獨立版面 —— 預付餘額不是 5h/wk 配額,不進
+/// provider 表格欄)。bar 為**中性 teal 的剩餘比例**,無 warn/danger 色(R1 雙審 C8:
+/// 對預付餘額套配額警戒色是未經證成的 urgency 語意);teal 只是本列的識別色,
+/// 刻意**不是** ProviderBrand(不得被 rings/報告/CLI 泛化撿走 —— C7)。
+/// 所有字串來自 OpenRouterCreditsStatus.presentation 的封閉詞彙。
+private struct OpenRouterCreditsRow: View {
+    let status: OpenRouterCreditsStatus
+    let now: Date
+
+    private static let teal = Color(red: 0x14 / 255, green: 0xB8 / 255, blue: 0xA6 / 255)
+
+    var body: some View {
+        let p = status.presentation(now: now)
+        HStack(spacing: 8) {
+            Circle().fill(Self.teal).frame(width: 8, height: 8)
+            Text("OpenRouter")
+                .font(.callout.weight(.medium))
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .trailing, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(p.primary)
+                        .font(.callout.weight(.semibold)).monospacedDigit()
+                        .foregroundStyle(p.barFraction == nil ? Color.secondary : .primary)
+                        .lineLimit(1).minimumScaleFactor(0.85)
+                    if let fraction = p.barFraction {
+                        CreditsRemainingBar(fraction: fraction, tint: Self.teal)
+                    }
+                }
+                if let detail = p.detail {
+                    // 「· stale」只補在成功形式(of $…)上;失敗形式的 detail 已是
+                    // 「last $X · 2h」,再疊 stale 是重複標示(R2 grok P3-6)。
+                    Text(p.stale && p.barFraction != nil ? "\(detail) · stale" : detail)
+                        .font(.caption2).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.85)
+                }
+            }
+            Text(p.age.map { "\($0)" } ?? "")
+                .font(.caption).monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
+        }
+        .help(p.tooltip)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(p.tooltip)
+    }
+}
+
+/// 中性剩餘比例 bar(fuel gauge;fraction 已在模型層 clamp 0…1,僅視覺幾何)。
+private struct CreditsRemainingBar: View {
+    let fraction: Double
+    let tint: Color
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule().fill(.quaternary)
+            if fraction > 0 {
+                GeometryReader { geo in
+                    // 不設最小寬(R2 codex P3-8):微小殘額照實呈現,不放大到看似還有 3%+。
+                    Capsule().fill(tint)
+                        .frame(width: geo.size.width * fraction)
+                }
+            }
+        }
+        .frame(width: 56, height: 5)
     }
 }
 

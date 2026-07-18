@@ -22,9 +22,12 @@ the price lists.
 
 The product promise is: **your usage data never leaves your Mac; no telemetry; no account.** A PR must not:
 
-- read prompts, assistant message bodies, tool payloads, or auth files;
+- read prompts, assistant message bodies, tool payloads, or auth files (single reviewed exception: the
+  opt-in OpenRouter credits monitor narrowly reads one key from opencode's `auth.json` — see
+  [`docs/DATA_BOUNDARY.md`](docs/DATA_BOUNDARY.md) ‡; nothing else may touch auth material);
 - write any of the above into the ledger, a report, an export, or a diagnostic bundle;
-- add an outbound network call other than the existing opt-in GitHub update check.
+- add an outbound network call beyond the two existing opt-in, off-by-default calls (GitHub update check;
+  OpenRouter credits check).
 
 If your change is near the ledger / report / export / network layer, say so explicitly in the PR.
 
@@ -40,8 +43,9 @@ is what keeps a fix from regressing.
 ## Pricing
 
 Verified prices go in the curated `Sources/UsageCore/Resources/model-prices.json` (with an authoritative
-source); the generated list is regenerated offline from OpenRouter's public catalog (the app never
-contacts OpenRouter at runtime). Costs are always estimates; leave a model **unpriced** rather than
+source); the generated list is regenerated offline from OpenRouter's public catalog (the **pricing
+pipeline** never contacts OpenRouter at runtime — the separate opt-in credits monitor is unrelated to
+pricing and fetches credit totals only). Costs are always estimates; leave a model **unpriced** rather than
 guessing (the UI shows `$X+` for unpriced usage — never a fake `$0`).
 
 ## Pull requests

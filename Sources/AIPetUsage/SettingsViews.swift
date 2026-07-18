@@ -232,6 +232,25 @@ struct ProviderSettings: View {
                 }
             }
 
+            // OpenRouter credits(opt-in;boundary 變更 —— 揭露文案必須說清楚讀什麼、送哪裡)。
+            Section("OpenRouter credits") {
+                Toggle("Show OpenRouter credit balance (opencode)", isOn: Binding(
+                    get: { model.settings.openRouterCreditsEnabled },
+                    set: { v in model.updateSettings { $0.openRouterCreditsEnabled = v } }
+                ))
+                Text("""
+                Off by default. When on, the app reads the OpenRouter API key that opencode saved in \
+                ~/.local/share/opencode/auth.json (or $XDG_DATA_HOME/opencode/auth.json when set; the \
+                file is read as bytes and only the "openrouter" entry is decoded) and asks \
+                https://openrouter.ai for your prepaid credit totals — about every 15 minutes and on \
+                manual Refresh. The key is sent only to openrouter.ai as the \
+                Authorization header over HTTPS (system TLS, redirects refused) and is never stored, \
+                logged, exported, or displayed. The balance appears in the menu-bar dropdown and the \
+                pet's bubble; nothing about it is written to disk. No other account data is fetched.
+                """)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             // 選單列/量表短代號圖例(UIUX spec P2):dot = 身分色,恆定不變
             Section("Menu bar legend") {
                 ForEach(ProviderBrands.known, id: \.id) { brand in
@@ -446,8 +465,8 @@ struct DataPrivacySettings: View {
             }
             Section("Privacy") {
                 Text("""
-                • Usage data is parsed and stored only on this Mac and is never uploaded — no telemetry, no account login. The one optional network call is a GitHub version check for updates (opt-in; Settings → General), which sends no usage data.
-                • Only token counts, model IDs, project paths, timestamps, and rate-limit numbers are read — never prompts or message contents.
+                • Usage data is parsed and stored only on this Mac and is never uploaded — no telemetry, no account login. Two optional network calls exist, each opt-in and off by default: a GitHub version check for updates (Settings → General) and an OpenRouter credit-balance check (Settings → Providers). Neither sends usage data.
+                • Only token counts, model IDs, project paths, timestamps, and rate-limit numbers are read — never prompts or message contents. The OpenRouter monitor additionally reads one API key from opencode's auth.json, used only as the request's Authorization header and never stored or shown.
                 • HTML reports are local files and redact full project paths by default.
                 """)
                 .font(.caption)

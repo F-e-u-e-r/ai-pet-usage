@@ -45,6 +45,8 @@ final class AppModel {
 
     // 內部
     let coordinator: UsageCoordinator
+    /// OpenRouter credits 監控(opt-in;獨立 15 分鐘節奏,刻意不掛 FSEvents 刷新風暴)。
+    let orCredits = OpenRouterCreditsChecker()
     private let settingsStore: SettingsStore
     private let dataDir: URL
     /// monitor-only(低 RAM)模式下完全不建立;只在 full 模式第一次用到時載入。
@@ -92,6 +94,7 @@ final class AppModel {
             }
         }
         if settings.notificationsEnabled { Notifier.requestAuthorization() }
+        orCredits.setEnabled(settings.openRouterCreditsEnabled)
         applyModeSideEffects()
         observeAppearanceChanges()
         // 排程匯出:啟動時重套(修正 app 被移動後 plist 內失效的絕對路徑);僅 bundle 版有效。
@@ -133,6 +136,7 @@ final class AppModel {
         fileWatcher?.stop()
         fileWatcher = nil
         settingsPushTask?.cancel()
+        orCredits.setEnabled(false)
     }
 
     /// 深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
@@ -262,8 +266,13 @@ final class AppModel {
         let oldProviders = settings.core.enabledProviders
         let oldEngineV2 = settings.petEngineV2Enabled
         let oldRange = settings.petWanderRangePercent
+        let oldORCredits = settings.openRouterCreditsEnabled
         settingsStore.update(mutate)
         settings = settingsStore.settings
+        // OpenRouter credits 開關:啟用即抓一次 + 開始 15 分鐘輪詢;停用即取消並清空狀態。
+        if oldORCredits != settings.openRouterCreditsEnabled {
+            orCredits.setEnabled(settings.openRouterCreditsEnabled)
+        }
         // Pet Engine V2 切換:flag 先映射;面板重建整合進下方的單一分派
         //(避免重建後又走一次 apply 的雙重 restart;grok P2-6)。
         let v2Toggled = oldEngineV2 != settings.petEngineV2Enabled

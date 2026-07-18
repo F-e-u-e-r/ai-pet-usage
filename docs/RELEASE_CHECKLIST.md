@@ -47,13 +47,17 @@ Launch the app, then verify the beta gate below.
 hard blocker:
 
 - Prompt / assistant / tool content **or** auth secrets appearing **anywhere** (ledger, report, `aipet diag`,
-  network) → blocker.
+  network) → blocker. Sole reviewed exception: the opt-in OpenRouter credits monitor may send the opencode
+  key **only** as the `Authorization` header to `openrouter.ai` (DATA_BOUNDARY ‡); that key in any other
+  destination — or any egress beyond the two documented opt-in calls — is still a blocker.
 - A **full local path** in an **HTML report, `aipet diag`, or any network call** → blocker. (Paths in the
   local `ledger.jsonl` / `scan-state.json` are expected and are *not* a blocker.)
 - **Usage token counts** are allowed in the ledger, HTML report, and diag — they are not a leak, and must
   not be confused with auth tokens/keys (which are the blocker above).
-- Any outbound network call **other than** the opt-in GitHub update check (whose UA is
-  `AIPetUsage/<version>`, no usage data) → blocker.
+- Any outbound network call **other than** the two documented opt-in, off-by-default calls — the GitHub
+  update check and the OpenRouter credits check (each sends UA `AIPetUsage/<version>`, no usage data;
+  the credits call carries the opencode key **only** as its `Authorization` header, per DATA_BOUNDARY ‡)
+  → blocker.
 - Verify with the sentinel tests (`PrivacyHardeningTests`, `DiagnosticTests`) **and** a manual
   `aipet report --out /tmp/r.html` + `aipet diag`, then
   `grep -E "/Users/|<a prompt sentinel>" /tmp/r.html` returns nothing (bar fixed doc strings). "Looks clean"

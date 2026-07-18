@@ -67,6 +67,9 @@ struct AppSettings: Codable {
     /// bird 等尚無 enum case 的 pack id 由此到達(flag 後偵錯/前向相容通道,E1 無 UI);
     /// 儲存的 `species` enum 保持不動。
     var speciesPackIdOverride: String?
+    /// OpenRouter credits 監控(opt-in,**預設關**;boundary 變更見 docs/DATA_SOURCES.md)。
+    /// GUI-only 設定,刻意不放 `core` —— CLI 維持零網路。
+    var openRouterCreditsEnabled: Bool = false
     var core = CoreSettings()
 
     // MARK: - EngineV2 pack id 相容 facade(M2 §3-A;語意委派 PetSpecies,PetCore 端可測)
@@ -93,6 +96,7 @@ struct AppSettings: Codable {
         case menuBarDisplayMode, alertsSnoozedUntil
         case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
         case speciesPackIdOverride
+        case openRouterCreditsEnabled
         case core
     }
 
@@ -123,6 +127,7 @@ struct AppSettings: Codable {
         dailyExportRangeDays = (try? c.decodeIfPresent(Int.self, forKey: .dailyExportRangeDays)) ?? 30 ?? 30
         dailyExportFolderPath = (try? c.decodeIfPresent(String.self, forKey: .dailyExportFolderPath)) ?? nil
         speciesPackIdOverride = (try? c.decodeIfPresent(String.self, forKey: .speciesPackIdOverride)) ?? nil
+        openRouterCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .openRouterCreditsEnabled)) ?? false ?? false
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
     }
 }
