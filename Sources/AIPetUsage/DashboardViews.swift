@@ -14,8 +14,17 @@ func costDisplay(_ c: CostResult) -> (value: String, caption: String?) {
         return ("Pricing unavailable", "\(tk(c.unknownModelTokens)) tokens unpriced")
     }
     if c.unknownModelTokens > 0 {
+        // 混合情境(部分 unpriced + 部分 opencode-reported)也不得吞掉出處(R2 codex F4)。
+        let provenance = c.providerReportedUSD > 0 ? "; incl. opencode-reported (est.)" : ""
         return (ReportGenerator.fmtUSD(c.knownUSD) + "+",
-                "+ means \(tk(c.unknownModelTokens)) tokens are unpriced")
+                "+ means \(tk(c.unknownModelTokens)) tokens are unpriced\(provenance)")
+    }
+    // provider 回報的成本要標示出處(R1 codex C4):不得籠統寫成「cache rates estimated」。
+    if c.providerReportedUSD > 0 {
+        let all = abs(c.providerReportedUSD - c.knownUSD) < 0.005
+        return (ReportGenerator.fmtUSD(c.knownUSD),
+                all ? "opencode-reported (models.dev rates, est.)"
+                    : "incl. \(ReportGenerator.fmtUSD(c.providerReportedUSD)) opencode-reported (est.)")
     }
     return (ReportGenerator.fmtUSD(c.knownUSD), c.isEstimated ? "cache rates estimated" : nil)
 }

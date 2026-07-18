@@ -28,7 +28,7 @@
 
 - 🍎 **原生 macOS** —— SwiftUI + AppKit 選單列 app,搭配漂浮的像素寵物面板。
 - 📊 **三個頁面,而非一張擁擠的儀表板** —— Today、Limits、Projects,另有含使用熱區圖與連續紀錄的 Trends 頁。
-- 🔌 **Provider 轉接器** —— Codex 與 Claude Code(含官方 5h/週限額);Grok Code 預設啟用(token 用量 + 方案等級;本 app 尚未接入 Grok 的官方限額);Antigravity 在研究閘後;OpenCode 為下一步規劃。
+- 🔌 **Provider 轉接器** —— Codex 與 Claude Code(含官方 5h/週限額);Grok Code 預設啟用(token 用量 + 方案等級;本 app 尚未接入 Grok 的官方限額);**OpenCode**(預設關 —— Settings → Providers;從其本機 SQLite 以唯讀 + 執行期欄位白名單讀取,提供各專案/模型的 token 用量與 opencode 回報成本);Antigravity 在研究閘後。
 - 💳 **OpenRouter credits(opt-in,預設關)** —— 用 opencode 搭配 OpenRouter 預付 credit?開啟 Settings → Providers → OpenRouter credits,即可在選單列下拉面板與寵物泡泡看到剩餘額度(含 bar 與資料年齡)。只讀 opencode 存的 key、只連 openrouter.ai、不落地任何資料 —— 細節見 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)。
 - 🧮 **本機帳本 + 額度引擎** —— 配額、重置視窗、token 消耗率,以及來自定價註冊表(每筆皆註明來源與日期)的各模型花費。
 - 🐕 **餵食/XP 迴圈與心情引擎** —— 寵物會對配額剩餘、消耗率、資料過期、專注時段、使用里程碑等訊號做出反應。

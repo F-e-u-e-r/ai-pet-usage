@@ -159,7 +159,9 @@ public actor UsageCoordinator {
         let dir = dataDir ?? AppPaths.dataDirectory()
         self.dataDir = dir
         self.settings = settings
-        self.adapters = adapters ?? [CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter()]
+        // opencode 預設**停用**(enabledProviders 預設集不含它;R1 雙審裁決:db 與 OAuth
+        // 憑證同檔,保守側勝出)——註冊於此使 Settings → Providers 顯示啟用開關。
+        self.adapters = adapters ?? [CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter(), OpenCodeAdapter()]
         self.refreshLockTimeout = refreshLockTimeout
         if !readOnly { try? AppPaths.ensureDirectory(dir) }
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
@@ -505,7 +507,9 @@ public actor UsageCoordinator {
         for m in models {
             if let p = pricing.price(providerId: m.providerId, modelId: m.modelId) {
                 if !pricingRows.contains(p) { pricingRows.append(p) }
-            } else {
+            } else if m.cost.unknownModelTokens > 0 {
+                // provider 自行回報成本的模型(如 opencode/kimi:unknownModelTokens == 0、
+                // providerReportedUSD > 0)不是「未定價」——不得列入 unknown 誤導讀者。
                 unknown.append((m.providerId + "/" + m.modelId, m.tokens.total))
             }
         }

@@ -87,6 +87,63 @@ The session-folder name is the URL-encoded project path and is decoded to attrib
 
 **Pricing: curated entries only, and costs are lower-bound estimates.** Auto-generated price entries are ignored for Grok (a price list refresh can never silently start pricing rough token estimates). Grok models are priced only through deliberate, source-verified curated entries or a user price override — currently `grok-4.5` ($2/$6, cache read $0.50, verified against docs.x.ai and OpenRouter 2026-07-11). Because the underlying token counts undercount billed usage, grok costs are **lower-bound estimates**, not invoices. Models without a verifiable public price (e.g. `grok-composer-2.5-fast`) stay unpriced and appear as "unknown model" rows.
 
+## OpenCode (`providerId: opencode`; off by default)
+
+**Path read**
+
+- `~/.local/share/opencode/opencode.db` (SQLite; `$XDG_DATA_HOME/opencode/opencode.db` when that
+  variable is set to an absolute path). Off by default — enable in Settings → Providers.
+
+**Data consumed** (strictly read-only; a runtime SQLite **authorizer** allowlists exactly this)
+
+| table | columns read | purpose |
+|---|---|---|
+| `session` | `id`, `directory`, `model`, `cost`, `tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `time_updated` | per-session cumulative usage counters → token ledger events (positive deltas), opencode-reported cost, model + project attribution |
+
+**Not read — enforced at runtime, not just by convention.** The same database contains
+`message`/`part`/`session_message` rows (prompt and message content), session `title`/`summary_diffs`,
+and the `account` / `credential` / `control_account` tables (OAuth tokens). The adapter's SQL never
+names them, and a `sqlite3_set_authorizer` allowlist denies reads of any table/column outside the one
+table above — a future schema drift (e.g. `session` becoming a view over another table) fails closed
+instead of silently widening the read.
+
+**Access mode.** The database is opened `SQLITE_OPEN_READONLY`. It is a live WAL database, so reads
+participate in SQLite's standard WAL reader coordination, which updates the `-shm` read-mark (shared
+memory) — never database or WAL **content**. This is the narrow, documented exception to the adapter
+contract's "never touch provider files" rule (see `ADAPTER_CONTRACT.md` rule 1). Sidecar creation:
+the pinned behavior on this platform (regression-tested, including with a write-refused parent
+directory) is that the read-only open **fails closed without creating** `-wal`/`-shm` when they are
+absent — that state fails soft until opencode next runs and recreates them. SQLite upstream reserves
+the right to create sidecars for a readable directory in other configurations; if a future version
+did, they are SQLite's standard coordination files, never database content, and a creation refusal
+simply lands in the same fail-soft path. Any error — locked, busy, missing sidecars, schema mismatch, authorizer
+denial — abandons the whole scan cycle without advancing state (fail soft; other providers
+unaffected).
+
+**Attribution limits (honesty).** `model` is the session's **current** model at the time a delta is
+emitted — a mid-session model switch attributes that delta's tokens to the newer model (same
+documented limitation as Grok). Subagent sessions (`parent_id` set) carry their own counters and are
+counted **independently** of their parent.
+
+**Counter semantics (honesty).** Session rows are cumulative counters. Each refresh emits the positive
+delta per class; if **any** class regresses (revert/compaction/restore), all baselines reset and
+nothing is emitted — never a negative. `tokens_reasoning` is folded into **output** (it is billed
+output-side); `tokens_cache_write` carries no TTL split, so it lands in a dedicated
+`cacheWriteUnknown` bucket — never presented as 5-minute/1-hour cache writes. Timestamps are
+milliseconds. Event ids are `oc:<session-id>:<epoch>:<from>` (epoch increments on regression; `from`
+is the pre-delta cumulative total) — replays after a failed state write deduplicate toward a bounded
+**undercount**, never an overcount. The **first index** attributes each pre-existing session's
+lifetime totals to its last-updated time, so historical days are coarse (documented; live usage is
+near-realtime via file watching).
+
+**Cost is opencode-reported, and labelled that way.** `session.cost` is computed by opencode itself
+(models.dev rates). The delta is attached to events only when finite, positive, and accompanied by a
+token delta — a `cost` of `0` next to nonzero tokens is ambiguous in opencode (both "free" and
+"missing rate" produce 0) and is treated as **unpriced**, falling back to the app's registry (which
+will honestly show unknown-model rows for models it cannot price). Accepted values surface as
+"opencode-reported (models.dev rates, est.)" — always **estimated**, never an invoice. OpenCode
+exposes no usage limits locally, so **no usage percent is shown** (same posture as Grok).
+
 ## OpenRouter credits (optional, off by default; not a provider adapter)
 
 For people who run **opencode** on OpenRouter prepaid credits. This is the app's second (and last)

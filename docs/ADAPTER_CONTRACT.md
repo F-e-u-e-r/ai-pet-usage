@@ -31,7 +31,13 @@ advanced scan state. It is **incremental** (never re-reads from zero on every ti
 
 1. **Read-only, and only the documented files.** Open provider files for reading only. Never write,
    move, or touch them, and never read outside the paths listed in `DATA_SOURCES.md`. Honor the
-   provider's home override env var (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`) when set.
+   provider's home override env var (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, and for OpenCode
+   an absolute `XDG_DATA_HOME`) when set. **Single narrow exception (OpenCode/SQLite):** reading a
+   live WAL database read-only participates in SQLite's reader protocol, which updates the `-shm`
+   read-mark (coordination shared memory) — database and WAL **content** are never written, and the
+   adapter must open with `SQLITE_OPEN_READONLY` plus a `sqlite3_set_authorizer` allowlist covering
+   exactly the documented table/columns (credential-bearing tables in the same file are denied at
+   runtime, not just by convention).
 
 2. **Never parse message content.** Read each line through a narrow decoder that sees only the token
    counter, ids, timestamp, model, and cwd. Prompts, assistant messages, tool-call payloads,
@@ -52,6 +58,7 @@ advanced scan state. It is **incremental** (never re-reads from zero on every ti
    | Codex | `cx:<file-stem>:<byte-offset>` |
    | Claude Code | `cc:<message.id>:<requestId>` (streaming rewrites the same message; first wins) |
    | Grok Code | `gk:<eventId>` (fallback `gk:<session-id>:<byte-offset>`) |
+   | OpenCode | `oc:<session-id>:<epoch>:<from>` (epoch bumps on counter regression; `from` = pre-delta cumulative — replays dedupe toward undercount, never overcount) |
 
    Never key on wall-clock time or array index. A provider's own stable event id is best; a
    `file-stem + byte-offset` pair is the fallback when none exists.

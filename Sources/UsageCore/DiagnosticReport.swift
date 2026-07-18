@@ -13,6 +13,7 @@ public enum KnownProviderID: String, Codable, Sendable, CaseIterable {
     case claudeCode = "claude-code"
     case grokCode = "grok-code"
     case antigravity
+    case opencode
     public init?(known raw: String) { self.init(rawValue: raw) }
 }
 
@@ -185,6 +186,7 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .claudeCode: return "Claude Code"
         case .grokCode: return "Grok Code"
         case .antigravity: return "Antigravity"
+        case .opencode: return "OpenCode"
         }
     }
     /// 來源標籤是**正規預設路徑字面量**,不是解析後的真實路徑(即使有 CODEX_HOME 等覆寫,也只顯示這個)。
@@ -196,6 +198,7 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .claudeStatuslineOurHook: return "~/Library/Application Support/AIPetUsage/claude-statusline.json"
         case .claudeStatuslineShared: return "~/.claude/usage-status.json"
         case .grokSessions: return "~/.grok/sessions"
+        case .opencodeDb: return "~/.local/share/opencode/opencode.db"
         }
     }
     static func qualityText(_ code: QualityCode) -> String {

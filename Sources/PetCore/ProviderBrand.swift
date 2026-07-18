@@ -43,6 +43,9 @@ public enum ProviderBrands {
                       dotColor: 0x3B82F6, needsOutline: false),
         ProviderBrand(id: "grok-code", code: "GK", shortName: "Grok", displayName: "Grok Code",
                       dotColor: 0x2E3138, needsOutline: true),
+        // 深黃(yellow-600):與 CC 橘同暖色系但明度/色相可辨;淺色選單列對比足(R1 codex C11)。
+        ProviderBrand(id: "opencode", code: "OC", shortName: "OpenCode", displayName: "OpenCode",
+                      dotColor: 0xCA8A04, needsOutline: false),
     ]
 
     public static func brand(for providerId: String, displayName: String? = nil) -> ProviderBrand {

@@ -29,7 +29,7 @@ Columns:
 
 † **Scanned vs extracted.** To find usage lines, the scanner reads raw log bytes; what is guaranteed is that
 message content is **never extracted into the app's data model, retained, written to disk, exported, or
-displayed** — only the declared usage/metadata fields are kept. All three adapters (Claude, Codex, Grok) now
+displayed** — only the declared usage/metadata fields are kept. All adapters now
 parse their matching session lines through **narrow decoders** that never build undeclared fields — prompts,
 message content, instruction blobs — into an object at all. For Codex this matters concretely: rollout
 `session_meta` lines carry `base_instructions` and a filter-matched `response_item` line can carry message
