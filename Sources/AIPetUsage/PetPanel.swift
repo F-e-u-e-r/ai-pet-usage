@@ -663,10 +663,14 @@ struct PetView: View {
 
     /// 點擊泡泡三頁(spec「Better Pet Click Bubble」的 tap-to-cycle 版本;
     /// 每行壓在 ~26 字內以符合面板寬度):用量 / 寵物 / 資料。
+    /// 行預算走 BubblePages.compose(≤4 行,決定性「+N more」,絕不靜默截斷);
+    /// OpenRouter credits 行(opt-in)佔最後一槽,錯誤/無資料時整行省略(不顯示假值)。
     private func bubblePageText(_ page: Int) -> String {
+        let orPresentation = model.settings.openRouterCreditsEnabled
+            ? model.orCredits.status.presentation(now: Date()) : nil
         switch page {
         case 0:
-            let lines = model.orderedLimitStates.prefix(4).map { st -> String in
+            let providerLines = model.orderedLimitStates.map { st -> String in
                 let code = shortProviderCode(st.providerId)
                 if st.fiveHour.idle { return "\(code) idle 5h" }
                 guard let p = st.fiveHour.usedPercent else { return "\(code) — no data" }
@@ -674,6 +678,8 @@ struct PetView: View {
                 if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }
                 return line
             }
+            let lines = BubblePages.compose(providerLines: providerLines,
+                                            extraLine: orPresentation?.bubbleUsageLine)
             return lines.isEmpty ? "no usage data yet" : lines.joined(separator: "\n")
         case 1:
             // 「pet」頁:一行**精簡**原因(item 8;心情名冗餘於 sprite/badge,略去)+ Lv/full/treats/burn。
@@ -684,10 +690,17 @@ struct PetView: View {
                 + "\(model.treatsAvailable) treats · \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
         default:
             let refreshed = timeAgo(model.dashboard.lastRefreshAt)
-            let flags = model.orderedLimitStates.prefix(4).map { st in
+            let flags = model.orderedLimitStates.map { st in
                 "\(shortProviderCode(st.providerId)) \(confidenceWord(st.fiveHour.confidence))"
             }
-            return (["refreshed \(refreshed)"] + flags).joined(separator: "\n")
+            // flags 預算恆為 3:加上 refreshed 行,資料頁**任何狀態**都 ≤4 行
+            // (R2 grok F3 + codex F5:預算若鍵在 OR 行是否存在,checking…/停用時
+            // 會回到 refreshed + 4 flags = 5 行的溢位)。≤3 家 provider 時輸出不變;
+            // 第 4 家(未來 antigravity)收進決定性的「+N more」,不靜默截斷。
+            let orLine = orPresentation?.bubbleDataLine
+            let flagLines = BubblePages.compose(providerLines: flags, extraLine: orLine,
+                                                maxLines: 3)
+            return (["refreshed \(refreshed)"] + flagLines).joined(separator: "\n")
         }
     }
 

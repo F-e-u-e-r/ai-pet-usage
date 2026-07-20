@@ -39,8 +39,9 @@ advanced scan state. It is **incremental** (never re-reads from zero on every ti
    emitted. If you must open a file that also contains content (e.g. a billing/tier line deep in a log),
    extract the single field through a decoder that cannot surface anything else.
 
-3. **No network.** Adapters do local file I/O only. There is exactly one outbound call in the whole app —
-   the opt-in GitHub update check — and it does not live in an adapter.
+3. **No network.** Adapters do local file I/O only. The whole app has exactly two outbound calls — the
+   opt-in GitHub update check and the opt-in OpenRouter credits check (both off by default) — and neither
+   lives in an adapter. An adapter must never add one.
 
 4. **Stable, source-derived dedup id.** `UsageEvent.id` must be deterministic across rescans so the
    ledger dedupes on re-read. Derive it from stable **source** identifiers (log position / provider

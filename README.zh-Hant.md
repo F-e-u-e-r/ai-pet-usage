@@ -29,6 +29,7 @@
 - 🍎 **原生 macOS** —— SwiftUI + AppKit 選單列 app,搭配漂浮的像素寵物面板。
 - 📊 **三個頁面,而非一張擁擠的儀表板** —— Today、Limits、Projects,另有含使用熱區圖與連續紀錄的 Trends 頁。
 - 🔌 **Provider 轉接器** —— Codex 與 Claude Code(含官方 5h/週限額);Grok Code 預設啟用(token 用量 + 方案等級;本 app 尚未接入 Grok 的官方限額);Antigravity 在研究閘後;OpenCode 為下一步規劃。
+- 💳 **OpenRouter credits(opt-in,預設關)** —— 用 opencode 搭配 OpenRouter 預付 credit?開啟 Settings → Providers → OpenRouter credits,即可在選單列下拉面板與寵物泡泡看到剩餘額度(含 bar 與資料年齡)。只讀 opencode 存的 key、只連 openrouter.ai、不落地任何資料 —— 細節見 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)。
 - 🧮 **本機帳本 + 額度引擎** —— 配額、重置視窗、token 消耗率,以及來自定價註冊表(每筆皆註明來源與日期)的各模型花費。
 - 🐕 **餵食/XP 迴圈與心情引擎** —— 寵物會對配額剩餘、消耗率、資料過期、專注時段、使用里程碑等訊號做出反應。
 - 📄 **離線 HTML 報表匯出** —— 一份可離線閱讀的本機快照,涵蓋 Today、Limits、Projects、定價假設與資料品質註記。
@@ -141,8 +142,8 @@ open "dist/AI Pet Usage.app"
 ## 🛡️ 隱私 —— 預設本機優先
 
 - ✅ 只讀取已知的本機使用量檔案,或使用者設定的路徑。
-- 🚫 不上傳使用量資料。可選的更新檢查(Settings → General)只向 GitHub 查詢最新版本 —— 不送任何使用資料,且可關閉。
-- 🚫 不需要帳號憑證。
+- 🚫 不上傳使用量資料。共有兩個可選的網路呼叫,皆 opt-in 且預設關閉:更新檢查(Settings → General)向 GitHub 查詢最新版本;OpenRouter credits 檢查(Settings → Providers)向 openrouter.ai 查詢預付餘額 —— 兩者都不送任何使用資料。
+- 🚫 不需要帳號憑證 —— 沒有 app 帳號、不用登入。(可選的 OpenRouter credits 監控只是重用 opencode 已存的 key、僅作為請求標頭;app 永遠不會向你要憑證。)
 - 💬 每個權限提示都會說明為何需要。
 - 🧩 Provider 轉接器保持隔離,資料來源變動不影響寵物引擎。
 

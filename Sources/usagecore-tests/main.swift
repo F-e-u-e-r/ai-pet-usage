@@ -576,4 +576,28 @@ runSuite("ClaudePrivacyTests", [
     ("testClaudeAdapterUsesNarrowDecoder", claudePrivacy.testClaudeAdapterUsesNarrowDecoder),
 ])
 
+let openRouter = OpenRouterCreditsTests()
+runSuite("OpenRouterCreditsTests", [
+    ("testKeyParserHappyPathAndForeignEntriesIgnored", openRouter.testKeyParserHappyPathAndForeignEntriesIgnored),
+    ("testKeyParserRefusals", openRouter.testKeyParserRefusals),
+    ("testRequestShape", openRouter.testRequestShape),
+    ("testRedirectAlwaysRefusedAndTrustedResponseHost", openRouter.testRedirectAlwaysRefusedAndTrustedResponseHost),
+    ("testParseResponseHappyPath", openRouter.testParseResponseHappyPath),
+    ("testParseResponseNarrowAndFailClosed", openRouter.testParseResponseNarrowAndFailClosed),
+    ("testSnapshotRemainingIsSignedAndFractionClampsGeometryOnly", openRouter.testSnapshotRemainingIsSignedAndFractionClampsGeometryOnly),
+    ("testMoneyAndAgeFormatting", openRouter.testMoneyAndAgeFormatting),
+    ("testPresentationFreshSuccess", openRouter.testPresentationFreshSuccess),
+    ("testPresentationStaleByAge", openRouter.testPresentationStaleByAge),
+    ("testPresentationFailedAttemptKeepsAgedValueHonestly", openRouter.testPresentationFailedAttemptKeepsAgedValueHonestly),
+    ("testPresentationErrorStatesWithoutSnapshot", openRouter.testPresentationErrorStatesWithoutSnapshot),
+    ("testPresentationZeroCreditsNeverRendersZeroOfZero", openRouter.testPresentationZeroCreditsNeverRendersZeroOfZero),
+    ("testPresentationFailedAfterZeroCreditsShowsFailureNotZeroClaim", openRouter.testPresentationFailedAfterZeroCreditsShowsFailureNotZeroClaim),
+    ("testPresentationStaleBoundaryAt30Minutes", openRouter.testPresentationStaleBoundaryAt30Minutes),
+    ("testFetchGateSingleFlightAndGenerationSemantics", openRouter.testFetchGateSingleFlightAndGenerationSemantics),
+    ("testPresentationOverspendShowsHonestNegative", openRouter.testPresentationOverspendShowsHonestNegative),
+    ("testBubbleComposeWithoutExtraIsIdentityUpToBudget", openRouter.testBubbleComposeWithoutExtraIsIdentityUpToBudget),
+    ("testBubbleComposeWithExtraLine", openRouter.testBubbleComposeWithExtraLine),
+    ("testBubbleComposeDataPageBudget", openRouter.testBubbleComposeDataPageBudget),
+])
+
 finishTestRun()
