@@ -3,23 +3,44 @@ import Foundation
 // MARK: - Token accounting
 
 /// 正規化的 token 分類。`input` 一律指「非快取」輸入;快取讀寫分開計,方便逐類計價。
+/// `cacheWriteUnknown`:來源未標示 TTL 的快取寫入(如 opencode 的單一 cache_write 欄)——
+/// 誠實守則:不得假冒成 5m/1h 類(R1 codex C7);計入 `cacheWrite`/`total`,registry 不逐類計價。
 public struct TokenBreakdown: Codable, Hashable, Sendable {
     public var input: Int
     public var output: Int
     public var cacheRead: Int
     public var cacheWrite5m: Int
     public var cacheWrite1h: Int
+    public var cacheWriteUnknown: Int
 
-    public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite5m: Int = 0, cacheWrite1h: Int = 0) {
+    public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite5m: Int = 0,
+                cacheWrite1h: Int = 0, cacheWriteUnknown: Int = 0) {
         self.input = input
         self.output = output
         self.cacheRead = cacheRead
         self.cacheWrite5m = cacheWrite5m
         self.cacheWrite1h = cacheWrite1h
+        self.cacheWriteUnknown = cacheWriteUnknown
     }
 
-    public var cacheWrite: Int { cacheWrite5m + cacheWrite1h }
-    public var total: Int { input + output + cacheRead + cacheWrite5m + cacheWrite1h }
+    // **只有新鍵**寬容(缺鍵 → 0);既有鍵維持嚴格 —— 型別錯誤/缺漏的壞列必須整列
+    // 失敗浮出,不得矽轉成看似合理的 0(R2 codex F7:寬容全部欄位 = 靜默資料腐蝕)。
+    private enum CodingKeys: String, CodingKey {
+        case input, output, cacheRead, cacheWrite5m, cacheWrite1h, cacheWriteUnknown
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input = try c.decode(Int.self, forKey: .input)
+        output = try c.decode(Int.self, forKey: .output)
+        cacheRead = try c.decode(Int.self, forKey: .cacheRead)
+        cacheWrite5m = try c.decode(Int.self, forKey: .cacheWrite5m)
+        cacheWrite1h = try c.decode(Int.self, forKey: .cacheWrite1h)
+        cacheWriteUnknown = try c.decodeIfPresent(Int.self, forKey: .cacheWriteUnknown) ?? 0
+    }
+
+    public var cacheWrite: Int { cacheWrite5m + cacheWrite1h + cacheWriteUnknown }
+    public var total: Int { input + output + cacheRead + cacheWrite5m + cacheWrite1h + cacheWriteUnknown }
 
     public static func + (a: TokenBreakdown, b: TokenBreakdown) -> TokenBreakdown {
         TokenBreakdown(
@@ -27,7 +48,8 @@ public struct TokenBreakdown: Codable, Hashable, Sendable {
             output: a.output + b.output,
             cacheRead: a.cacheRead + b.cacheRead,
             cacheWrite5m: a.cacheWrite5m + b.cacheWrite5m,
-            cacheWrite1h: a.cacheWrite1h + b.cacheWrite1h
+            cacheWrite1h: a.cacheWrite1h + b.cacheWrite1h,
+            cacheWriteUnknown: a.cacheWriteUnknown + b.cacheWriteUnknown
         )
     }
 
@@ -49,10 +71,15 @@ public struct UsageEvent: Codable, Hashable, Sendable, Identifiable {
     public var tokens: TokenBreakdown
     public var sourceKind: String
     public var sourcePath: String?
+    /// Provider 自行回報的本事件成本(USD;如 opencode 的 session.cost 差額)。
+    /// 僅在「有限、> 0、且該事件確有 token 差額」時由 adapter 填入;nil = 走 registry 計價。
+    /// Optional → 舊帳本列缺鍵照常解碼。政策見 PricingRegistry.cost(of:)(單一優先序)。
+    public var providerCostUSD: Double?
 
     public init(id: String, providerId: String, accountId: String? = nil, projectId: String? = nil,
                 projectName: String? = nil, modelId: String? = nil, timestamp: Date,
-                tokens: TokenBreakdown, sourceKind: String, sourcePath: String? = nil) {
+                tokens: TokenBreakdown, sourceKind: String, sourcePath: String? = nil,
+                providerCostUSD: Double? = nil) {
         self.id = id
         self.providerId = providerId
         self.accountId = accountId
@@ -63,6 +90,7 @@ public struct UsageEvent: Codable, Hashable, Sendable, Identifiable {
         self.tokens = tokens
         self.sourceKind = sourceKind
         self.sourcePath = sourcePath
+        self.providerCostUSD = providerCostUSD
     }
 }
 
@@ -354,22 +382,41 @@ public struct UsageStreak: Codable, Sendable, Hashable {
     }
 }
 
-/// 成本計算結果:`known` 為有定價依據的部分;缺定價的 token 歸入 `unknownModelTokens`。
+/// 成本計算結果:`known` 為有依據的部分;缺定價的 token 歸入 `unknownModelTokens`。
+/// `providerReportedUSD`:`knownUSD` 中來自 provider 自行回報(如 opencode-reported,
+/// models.dev 費率)的**子集**,供 UI/報告標示出處(R1 codex C4 — 不得只說 estimated)。
 public struct CostResult: Codable, Sendable, Hashable {
     public var knownUSD: Double
     public var unknownModelTokens: Int
     public var isEstimated: Bool
+    public var providerReportedUSD: Double
 
-    public init(knownUSD: Double = 0, unknownModelTokens: Int = 0, isEstimated: Bool = false) {
+    public init(knownUSD: Double = 0, unknownModelTokens: Int = 0, isEstimated: Bool = false,
+                providerReportedUSD: Double = 0) {
         self.knownUSD = knownUSD
         self.unknownModelTokens = unknownModelTokens
         self.isEstimated = isEstimated
+        self.providerReportedUSD = providerReportedUSD
+    }
+
+    // **只有新鍵**寬容;既有鍵嚴格(R2 codex F7 —— 同 TokenBreakdown 的理由)。
+    private enum CodingKeys: String, CodingKey {
+        case knownUSD, unknownModelTokens, isEstimated, providerReportedUSD
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        knownUSD = try c.decode(Double.self, forKey: .knownUSD)
+        unknownModelTokens = try c.decode(Int.self, forKey: .unknownModelTokens)
+        isEstimated = try c.decode(Bool.self, forKey: .isEstimated)
+        providerReportedUSD = try c.decodeIfPresent(Double.self, forKey: .providerReportedUSD) ?? 0
     }
 
     public static func + (a: CostResult, b: CostResult) -> CostResult {
         CostResult(knownUSD: a.knownUSD + b.knownUSD,
                    unknownModelTokens: a.unknownModelTokens + b.unknownModelTokens,
-                   isEstimated: a.isEstimated || b.isEstimated)
+                   isEstimated: a.isEstimated || b.isEstimated,
+                   providerReportedUSD: a.providerReportedUSD + b.providerReportedUSD)
     }
 
     public static let zero = CostResult()
@@ -490,6 +537,8 @@ public enum DiagnosticSourceID: String, Codable, Sendable, CaseIterable {
     case claudeStatuslineOurHook
     case claudeStatuslineShared
     case grokSessions
+    /// opencode 的 SQLite 資料庫(db + wal 視為同一來源;WAL 活躍不得誤判 stale)。
+    case opencodeDb
 }
 
 /// adapter 回報的候選來源:固定 id + 實際 URL。URL 只在蒐集階段用來 stat,

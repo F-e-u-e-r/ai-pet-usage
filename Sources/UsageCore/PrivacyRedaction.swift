@@ -31,7 +31,7 @@ public enum PrivacyRedaction {
         // provider 短碼前綴(僅允許已知者;未知前綴不回顯)。codePrefix 保持**非 Optional**,
         // 否則 `$0 == codePrefix` 會把陣列推成 [String?]、`.first` 回傳 String??(雙層 Optional)。
         let codePrefix = (raw.components(separatedBy: ":").first ?? "").trimmingCharacters(in: .whitespaces)
-        let code = ["codex", "claude-code", "grok-code"].first { $0 == codePrefix }
+        let code = ["codex", "claude-code", "grok-code", "opencode"].first { $0 == codePrefix }
         func prefixed(_ msg: String) -> String {
             if let code { return "\(code): \(msg)" }
             return msg

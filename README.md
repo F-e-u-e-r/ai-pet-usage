@@ -28,7 +28,7 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 
 - 🍎 **Native macOS** — SwiftUI + AppKit menu-bar app with a floating pixel-pet panel.
 - 📊 **Three pages, not one crowded dashboard** — Today, Limits, and Projects, plus a Trends view with usage heatmap and streaks.
-- 🔌 **Provider adapters** — Codex and Claude Code (with official 5h/weekly limits); Grok Code enabled by default (token usage + plan tier; this app does not yet ingest Grok's official limits); Antigravity behind a research gate; OpenCode planned next.
+- 🔌 **Provider adapters** — Codex and Claude Code (with official 5h/weekly limits); Grok Code enabled by default (token usage + plan tier; this app does not yet ingest Grok's official limits); **OpenCode** (off by default — Settings → Providers; token usage + opencode-reported cost per project/model from its local SQLite, read strictly read-only with a runtime column allowlist); Antigravity behind a research gate.
 - 💳 **OpenRouter credits (opt-in, off by default)** — running opencode on OpenRouter prepaid credits? Turn on Settings → Providers → OpenRouter credits to see your remaining balance (with a bar and its age) in the menu-bar dropdown and the pet's bubble. Reads only opencode's stored key, talks only to openrouter.ai, persists nothing — details in [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
 - 🧮 **Local ledger + limit engine** — quota, reset windows, token burn rate, and per-model costs from a pricing registry that is sourced & dated per entry.
 - 🐕 **Feeding/XP loop and mood engine** — the pet reacts to signals such as quota remaining, burn rate, stale data, focus sessions, and usage milestones.

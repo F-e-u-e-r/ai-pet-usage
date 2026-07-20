@@ -321,7 +321,12 @@ struct LimitsPricingSettings: View {
                         HStack {
                             Text("\(entry.model.providerId)/\(entry.model.modelId)").font(.callout)
                             Spacer()
-                            if let price = entry.price {
+                            if entry.model.cost.providerReportedUSD > 0 {
+                                // provider 回報成本**先判**(R3 codex F1):override 存在也不得誤標
+                                // registry —— 計價引擎實際用的是 provider 值。
+                                Text("opencode-reported (models.dev rates, est.)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if let price = entry.price {
                                 Text("\(ReportGenerator.fmtUSD(price.inputPerMillion)) in / \(ReportGenerator.fmtUSD(price.outputPerMillion)) out per M\(price.userOverride ? " (override)" : "")")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else {

@@ -147,7 +147,13 @@ public enum ReportGenerator {
             // `vendor/model` 相對形不受影響);source / effectiveFrom 是使用者覆寫檔可攜任意字串
             // 的描述性標籤 → safeLabel(任一 token 是絕對路徑形 → 整串收斂為固定字樣)。
             let modelCell = "\(esc(m.providerId))/\(esc(PrivacyRedaction.displayModelId(m.modelId)))"
-            if let price {
+            if m.cost.providerReportedUSD > 0 {
+                // provider 回報成本**先判**(R3 codex F1):計價引擎給 providerCostUSD 優先權,
+                // 即使 registry/user override 存在,事件實際計入的是 provider 值 —— 標籤不得
+                // 誤稱 registry。既有價目同時存在時以括號註明實際優先序。
+                let overridden = price != nil ? " (a registry/override price exists but provider-reported cost takes precedence)" : ""
+                html += "<tr><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>\(fmtCost(m.cost))</td><td colspan=\"3\">—</td><td>opencode-reported (models.dev rates, est.)\(overridden)</td><td>—</td></tr>"
+            } else if let price {
                 let override = price.userOverride ? " (user override)" : ""
                 html += "<tr><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>\(fmtCost(m.cost))</td><td>\(money(price.inputPerMillion))</td><td>\(money(price.outputPerMillion))</td><td>\(price.cacheReadPerMillion.map(money) ?? "—")</td><td>\(esc(PrivacyRedaction.safeLabel(price.source)))\(override)</td><td>\(esc(PrivacyRedaction.safeLabel(price.effectiveFrom)))</td></tr>"
             } else {

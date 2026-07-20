@@ -576,6 +576,32 @@ runSuite("ClaudePrivacyTests", [
     ("testClaudeAdapterUsesNarrowDecoder", claudePrivacy.testClaudeAdapterUsesNarrowDecoder),
 ])
 
+let openCode = OpenCodeAdapterTests()
+runSuite("OpenCodeAdapterTests", [
+    ("testHappyPathFoldsAndEmitsProviderCost", openCode.testHappyPathFoldsAndEmitsProviderCost),
+    ("testIncrementalDeltaOnly", openCode.testIncrementalDeltaOnly),
+    ("testRegressionThenRegrowthNeverCollides", openCode.testRegressionThenRegrowthNeverCollides),
+    ("testMixedSignClassesResetAll", openCode.testMixedSignClassesResetAll),
+    ("testReplayFromStaleStateReusesIdForDedupUndercount", openCode.testReplayFromStaleStateReusesIdForDedupUndercount),
+    ("testCostZeroWithTokensIsAmbiguousNotFree", openCode.testCostZeroWithTokensIsAmbiguousNotFree),
+    ("testCostRegressionResetsIndependentlyTokensStillEmit", openCode.testCostRegressionResetsIndependentlyTokensStillEmit),
+    ("testCostOnlyRegressionPersistsResetBaseline", openCode.testCostOnlyRegressionPersistsResetBaseline),
+    ("testAuthorizerDeniesViewOverSqliteMaster", openCode.testAuthorizerDeniesViewOverSqliteMaster),
+    ("testNegativeCountersRejected", openCode.testNegativeCountersRejected),
+    ("testReadOnlyOpenCreatesNoSidecarsOnCheckpointedDb", openCode.testReadOnlyOpenCreatesNoSidecarsOnCheckpointedDb),
+    ("testReadOnlyOpenInUnwritableDirectoryFailsSoftOnly", openCode.testReadOnlyOpenInUnwritableDirectoryFailsSoftOnly),
+    ("testLegacyFieldsDecodeStrictly", openCode.testLegacyFieldsDecodeStrictly),
+    ("testMalformedModelJSON", openCode.testMalformedModelJSON),
+    ("testMissingColumnFailsSoft", openCode.testMissingColumnFailsSoft),
+    ("testAuthorizerDeniesDecoyViewOverCredentials", openCode.testAuthorizerDeniesDecoyViewOverCredentials),
+    ("testBusyDatabaseFailsSoft", openCode.testBusyDatabaseFailsSoft),
+    ("testWatchFilesExactAndNoDirectoryRoots", openCode.testWatchFilesExactAndNoDirectoryRoots),
+    ("testZeroTokenSessionEmitsNothing", openCode.testZeroTokenSessionEmitsNothing),
+    ("testCustomDbLocationDisclosesCustom", openCode.testCustomDbLocationDisclosesCustom),
+    ("testNewFieldsCodableRoundTripAndTolerantDecode", openCode.testNewFieldsCodableRoundTripAndTolerantDecode),
+    ("testPricingPrecedenceProviderReportedCost", openCode.testPricingPrecedenceProviderReportedCost),
+])
+
 let openRouter = OpenRouterCreditsTests()
 runSuite("OpenRouterCreditsTests", [
     ("testKeyParserHappyPathAndForeignEntriesIgnored", openRouter.testKeyParserHappyPathAndForeignEntriesIgnored),

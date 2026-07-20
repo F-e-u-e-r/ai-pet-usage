@@ -113,6 +113,15 @@ public struct PricingRegistry: Sendable {
 
     /// 計算單一事件成本。模型未知或無定價 → unknown token;快取欄位缺價 → 標記估計。
     public func cost(of event: UsageEvent) -> CostResult {
+        // 單一優先序(R1 codex C4/grok G6):provider 自行回報的成本(如 opencode 的
+        // session.cost 差額)存在且有效(adapter 端已保證有限、> 0、伴隨 token 差額)
+        // → 該事件的成本就是它,token 不再走 registry 計價(不得雙重計費);
+        // 一律標 estimated(models.dev 費率是估算,非發票),並記入 providerReportedUSD
+        // 供 UI/報告標示出處。registry 對此事件的 unknown-model 判定同時解除。
+        if let reported = event.providerCostUSD, reported.isFinite, reported > 0 {
+            return CostResult(knownUSD: reported, unknownModelTokens: 0, isEstimated: true,
+                              providerReportedUSD: reported)
+        }
         guard let price = price(providerId: event.providerId, modelId: event.modelId) else {
             return CostResult(knownUSD: 0, unknownModelTokens: event.tokens.total, isEstimated: true)
         }
@@ -132,6 +141,9 @@ public struct PricingRegistry: Sendable {
             if let p = price.cacheWrite1hPerMillion { usd += Double(t.cacheWrite1h) / 1e6 * p }
             else { estimated = true }
         }
+        // TTL 未知的快取寫入無從逐類計價 → 該部分未入帳,結果標 estimated(下界;
+        // R2 codex F11:不得呈現成「免費」的精確值)。
+        if t.cacheWriteUnknown > 0 { estimated = true }
         return CostResult(knownUSD: usd, unknownModelTokens: 0, isEstimated: estimated)
     }
 
