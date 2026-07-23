@@ -6,6 +6,7 @@ import Foundation
 /// 的 model 與 cwd。不讀取提示詞或訊息內容。
 public struct CodexAdapter: ProviderAdapter {
     public let providerId = "codex"
+    public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Codex"
 
     private let candidateRoots: [URL]
@@ -66,9 +67,12 @@ public struct CodexAdapter: ProviderAdapter {
         var readings: [RateLimitReading] = []
         var parseErrors = 0
         var scanned = 0
+        var complete = true   // 契約 E:列舉或任一檔內容讀取失敗 → 不完整(不得取代切片)
 
         for root in roots {
-            for (url, size) in JSONLScanner.listFiles(root: root, pathExtension: "jsonl") {
+            let listing = JSONLScanner.listFiles(root: root, pathExtension: "jsonl")
+            if !listing.complete { complete = false }
+            for (url, size) in listing.files {
                 guard url.lastPathComponent.hasPrefix("rollout-") else { continue }
                 let key = url.path
                 let mark = state.files[key]
@@ -99,10 +103,12 @@ public struct CodexAdapter: ProviderAdapter {
                     newState.files[key] = FileScanMark(offset: newOffset, size: size, context: ctx.serialized())
                 } catch {
                     parseErrors += 1
+                    complete = false   // 檔案內容讀取失敗 → 不完整(契約 E)
                 }
             }
         }
-        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors), newState)
+        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors,
+                                     completeness: (complete && parseErrors == 0) ? .complete : .incomplete("some sources unreadable or unparsable")), newState)
     }
 
     // MARK: - 檔案內解析上下文(跨增量掃描持久化)

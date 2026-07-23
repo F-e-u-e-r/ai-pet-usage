@@ -1,76 +1,173 @@
 import Foundation
 
+/// 帳本檔的身分指紋:偵測「其他行程改寫」用。只比 size 會被同大小內容替換騙過(codex C4),
+/// 故納入 dev+inode+mtime(#44 契約 D)。
+struct FileFingerprint: Equatable {
+    let dev: Int64
+    let ino: UInt64
+    let size: Int64
+    let mtimeSec: Int64
+    let mtimeNsec: Int64
+}
+
 /// 本機用量帳本:彙整所有 provider 的正規化事件,為三個頁面與報告提供查詢。
 /// 帳本是「provider 全域」的聚合,而非單一終端面板的即時值(規格核心要求)。
 public final class UsageLedger {
     public private(set) var events: [UsageEvent] = []
     private var ids: Set<String> = []
     private let fileURL: URL?
-    /// 我們上次讀寫後帳本檔應有的大小;不符表示其他行程動過 → 重新載入。
-    private var expectedFileSize: Int64 = 0
+    /// 我們上次讀寫後帳本檔的身分指紋(dev,ino,size,mtime);不符表示其他行程動過 → 重新載入。
+    /// 只比大小會被「同大小內容替換」騙過(codex C4);故比完整指紋(#44 契約 D)。
+    private var expectedFingerprint: FileFingerprint?
+    /// 非 nil 表示帳本檔存在但讀不到 / 中段損壞(poisoned)。此時記憶體不當空、寫入拒絕、
+    /// coordinator 中止刷新,避免以空/半份資料覆寫使用者仍可救回的檔案(#44 契約 A/B)。
+    public private(set) var loadError: Error?
+    /// 最近一次 append 落盤失敗(交易式:記憶體未提交,無 split-brain)。每次 append 起始清空;
+    /// coordinator 於 append 後檢查並上拋到 per-provider catch,不推進該 provider 的 watermark(契約 B/M5)。
+    public private(set) var writeError: Error?
+    /// 明確的「下一次 reloadIfChanged 必須重載」旗標(R2-MF5):append 半寫 / 讀取不穩時設。
+    /// 比 expectedFingerprint=nil 哨兵可靠——後者在檔案同時 unstatable(currentFingerprint 亦 nil)時
+    /// `nil != nil` 為 false 會漏掉重載。
+    private var needsReload = false
 
     public init(fileURL: URL?) {
         self.fileURL = fileURL
-        loadFromDisk()
+        load()
     }
 
-    private func loadFromDisk() {
+    /// 讀入帳本。三態:不存在(空帳本合法)、存在但 I/O 失敗(unreadable→poisoned)、
+    /// 內容已收尾/中段行損壞(malformed→poisoned)。尾端未收尾片段(部分 append)可容忍。
+    private func load() {
+        loadError = nil
+        needsReload = false
         events = []
         ids = []
-        expectedFileSize = 0
-        guard let fileURL, let data = try? Data(contentsOf: fileURL) else { return }
-        expectedFileSize = Int64(data.count)
+        expectedFingerprint = nil
+        guard let fileURL else { return }
+        // C-MF3:讀資料與取指紋之間可能被併發(持鎖)寫入夾擊 → 記憶體配到過期位元組卻標成新指紋。
+        // 讀前後各取指紋,重試取穩定快照;仍不穩則 expectedFingerprint=nil 強制下一輪重載對帳。
+        let data: Data
+        var stableFingerprint: FileFingerprint?
+        var attempt = 0
+        while true {
+            let fpBefore = currentFingerprint()
+            let d: Data
+            do {
+                d = try Data(contentsOf: fileURL)
+            } catch {
+                if !AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
+                    loadError = StateReadError.unreadable(underlying: error)   // 存在但讀不到/斷 symlink → poisoned
+                }
+                return   // 真的不存在 → 空帳本(合法)
+            }
+            let fpAfter = currentFingerprint()
+            attempt += 1
+            if fpBefore == fpAfter { data = d; stableFingerprint = fpAfter; break }
+            if attempt >= 3 { data = d; stableFingerprint = fpAfter; needsReload = true; break }   // R2-MF5:仍不穩 → needsReload 強制下輪重載(不靠 nil 哨兵)
+        }
+        expectedFingerprint = stableFingerprint
         let decoder = AtomicJSON.decoder()
         var loaded: [UsageEvent] = []
-        data.split(separator: 0x0A).forEach { line in
-            if let e = try? decoder.decode(UsageEvent.self, from: Data(line)), !ids.contains(e.id) {
-                ids.insert(e.id)
-                loaded.append(e)
+        var firstDecodeError: Error?
+        for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            do {
+                let e = try decoder.decode(UsageEvent.self, from: Data(line))
+                if ids.insert(e.id).inserted { loaded.append(e) }
+            } catch {
+                // 零星無法解碼行(部分 append 的斷尾/斷頭)容忍——維持既有「斷尾→續寫復原」;僅記首錯。
+                if firstDecodeError == nil { firstDecodeError = error }
             }
+        }
+        // 契約 A:非空內容卻解不出任何有效事件(含只有換行位元組的損壞檔)→ malformed(poisoned,不覆寫;C-MF7b)。
+        if loaded.isEmpty && !data.isEmpty {
+            loadError = StateReadError.malformed(underlying: firstDecodeError ?? JSONCodecError.notADictionary)
+            return
         }
         events = loaded.sorted { $0.timestamp < $1.timestamp }
     }
 
-    private func diskSize() -> Int64 {
-        guard let fileURL,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-              let size = attrs[.size] as? NSNumber else { return 0 }
-        return size.int64Value
+    /// 目前磁碟檔的身分指紋(dev,ino,size,mtime);檔案不存在或 stat 失敗回 nil。
+    private func currentFingerprint() -> FileFingerprint? {
+        guard let fileURL else { return nil }
+        var st = stat()
+        guard stat(fileURL.path, &st) == 0 else { return nil }
+        return FileFingerprint(dev: Int64(st.st_dev), ino: UInt64(st.st_ino), size: Int64(st.st_size),
+                               mtimeSec: Int64(st.st_mtimespec.tv_sec), mtimeNsec: Int64(st.st_mtimespec.tv_nsec))
     }
 
     /// 其他行程(app ↔ CLI)寫入過帳本時,重新載入以收斂。
     /// ID 為內容穩定鍵,重載後去重保證不重複計費。
     public func reloadIfChanged() {
-        guard fileURL != nil, diskSize() != expectedFileSize else { return }
-        loadFromDisk()
+        // R2-MF5:needsReload 為明確的強制重載旗標(append 半寫 / 讀取不穩時設),優先於指紋比較。
+        guard fileURL != nil, needsReload || currentFingerprint() != expectedFingerprint else { return }
+        let priorEvents = events, priorIds = ids, priorFingerprint = expectedFingerprint
+        load()
+        if loadError != nil {
+            // 非破壞式:讀取失敗不得清掉既有記憶體(否則後續寫入會覆寫好資料)。
+            // 保留舊狀態;coordinator 見 loadError 會中止本輪寫入(#44 契約 A)。
+            events = priorEvents
+            ids = priorIds
+            expectedFingerprint = priorFingerprint
+            needsReload = true   // 讀取失敗 → 保持強制重載,下輪再試
+        }
     }
 
     /// 去重後併入新事件(keep-first,串流重複行不會重複計費),回傳實際新增數。
+    /// 交易式 append(契約 B):先落盤成功才提交記憶體;失敗則**記憶體完全不變**(無 split-brain),
+    /// 並設 `writeError` 供 coordinator 檢查後上拋。poisoned(loadError)時亦拒絕寫入。回傳實際新增數
+    /// (落盤失敗回 0——0 可能是全去重或落盤失敗,呼叫端須以 `writeError` 區分,不可只看回傳值)。
     @discardableResult
     public func append(_ newEvents: [UsageEvent]) -> Int {
+        writeError = nil
+        if let loadError { writeError = loadError; return 0 }
         var inserted: [UsageEvent] = []
-        for e in newEvents where !ids.contains(e.id) {
-            ids.insert(e.id)
+        var batchIds: Set<String> = []
+        for e in newEvents where !ids.contains(e.id) && batchIds.insert(e.id).inserted {
             inserted.append(e)
         }
         guard !inserted.isEmpty else { return 0 }
+        do {
+            try persistAppend(inserted)          // 先落盤
+        } catch {
+            writeError = error                    // 失敗:記憶體不提交(無 split-brain),上報旗標
+            needsReload = true                    // C-MF4/R2-MF5:部分寫入可能已改磁碟 → 強制下一次 reloadIfChanged 對帳
+            return 0
+        }
+        for e in inserted { ids.insert(e.id) }    // 落盤成功才提交記憶體
         events.append(contentsOf: inserted)
         events.sort { $0.timestamp < $1.timestamp }
-        persistAppend(inserted)
         return inserted.count
     }
 
-    private func persistAppend(_ newEvents: [UsageEvent]) {
-        guard let fileURL else { return }
-        do {
-            try AppPaths.ensureDirectory(fileURL.deletingLastPathComponent())
-            let encoder = AtomicJSON.encoder()
-            var blob = Data()
-            for e in newEvents {
-                blob.append(try encoder.encode(e))
-                blob.append(0x0A)
-            }
-            if FileManager.default.fileExists(atPath: fileURL.path) {
+    /// 清除上一輪的落盤失敗旗標(coordinator 於每輪刷新起始呼叫,避免陳舊 writeError 誤觸後續 break;R2-NIT)。
+    public func clearWriteError() {
+        writeError = nil
+    }
+
+    /// 落盤新增行。失敗即 throw(不再吞錯);呼叫端據此不提交記憶體(契約 B)。
+    private func persistAppend(_ newEvents: [UsageEvent]) throws {
+        guard let fileURL else { return }   // 記憶體模式:視為成功
+        try AppPaths.ensureDirectory(fileURL.deletingLastPathComponent())
+        let encoder = AtomicJSON.encoder()
+        var blob = Data()
+        for e in newEvents {
+            blob.append(try encoder.encode(e))
+            blob.append(0x0A)
+        }
+        // R2-MF6 / round-3 P1-A(tri-state fail-closed):原子「整檔建立」只在「確認缺檔」或「stat 成功且 size==0」;
+        // stat 失敗 / 狀態不明一律不整檔覆寫(否則會把既有非空帳本清成只剩本批次 → 史料遺失)。其餘走 FileHandle
+        // 續尾,且**開檔後以實際 end 為準**(不信任先前 stat),`if end > 0` 亦避免 stat/open 間被截斷至 0 造成 end-1 underflow。
+        let fp = currentFingerprint()
+        if AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
+            try blob.write(to: fileURL, options: .atomic)                 // 確認缺檔 → 原子建立
+            expectedFingerprint = currentFingerprint()
+        } else if let fp {
+            if fp.size == 0 {
+                try blob.write(to: fileURL, options: .atomic)            // stat 成功且確認空檔 → 原子建立
+                expectedFingerprint = currentFingerprint()
+            } else {
+                // stat 成功且非空 → FileHandle 續尾。開檔後以**實際** end 為準(不信任先前 stat),
+                // `if end > 0` 亦避免 stat/open 間被截斷至 0 造成 end-1 underflow。
                 let handle = try FileHandle(forWritingTo: fileURL)
                 defer { try? handle.close() }
                 let end = try handle.seekToEnd()
@@ -83,55 +180,80 @@ public final class UsageLedger {
                     }
                 }
                 try handle.write(contentsOf: blob)
-                expectedFileSize = Int64(end) + Int64(blob.count)
-            } else {
-                try blob.write(to: fileURL, options: .atomic)
-                expectedFileSize = Int64(blob.count)
+                try handle.synchronize()   // fsync:落盤耐久(契約 B)
+                expectedFingerprint = currentFingerprint()
             }
-        } catch {
-            // 帳本寫入失敗不應中斷 UI;下次全量重建可恢復。
+        } else {
+            // stat 失敗但非「確認缺檔」(權限/IO/斷 symlink…)→ fail-closed:不覆寫、不冒險,拋錯讓上層(writeError)對帳。
+            throw CocoaError(.fileWriteUnknown)
         }
     }
 
-    /// 丟棄保留期以外的舊事件並重寫帳本檔。
+    /// 丟棄保留期以外的舊事件並重寫帳本檔。交易式(契約 B):先落盤成功才提交記憶體;
+    /// 失敗則舊記憶體與舊檔案皆保留(acceptance #5)。poisoned 時不動。
     public func compact(retentionDays: Int, now: Date = Date()) {
+        guard loadError == nil else { return }
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
         let kept = events.filter { $0.timestamp >= cutoff }
         guard kept.count != events.count else { return }
-        events = kept
-        ids = Set(kept.map(\.id))
-        guard let fileURL else { return }
-        let encoder = AtomicJSON.encoder()
-        var blob = Data()
-        for e in kept {
-            if let d = try? encoder.encode(e) { blob.append(d); blob.append(0x0A) }
+        guard let fileURL else {   // 記憶體模式:直接套用
+            events = kept
+            ids = Set(kept.map(\.id))
+            return
         }
-        try? blob.write(to: fileURL, options: .atomic)
-        expectedFileSize = Int64(blob.count)
+        do {
+            _ = try Self.writeAllAtomic(kept, to: fileURL)   // 先落盤(可能 throw)
+            events = kept                                     // 成功才提交記憶體
+            ids = Set(kept.map(\.id))
+            expectedFingerprint = currentFingerprint()
+        } catch {
+            // 落盤失敗 → 舊記憶體與舊檔案皆保留
+        }
     }
 
-    /// 清除指定 provider 的事件(全量重建索引時只重建目前可用的 provider)。
-    public func clearProviders(_ providerIds: Set<String>) {
-        guard !providerIds.isEmpty else { return }
-        let kept = events.filter { !providerIds.contains($0.providerId) }
-        guard kept.count != events.count else { return }
-        events = kept
-        ids = Set(kept.map(\.id))
-        guard let fileURL else { return }
+    /// 全量原子重寫帳本檔:整份 encode(任一失敗即 throw,不做半份重寫)後 `.atomic`(temp→rename)
+    /// 替換,回傳新檔位元組數。供 compact 與(step 6)切片取代共用。
+    static func writeAllAtomic(_ events: [UsageEvent], to url: URL) throws -> Int64 {
+        try AppPaths.ensureDirectory(url.deletingLastPathComponent())
         let encoder = AtomicJSON.encoder()
         var blob = Data()
-        for e in kept {
-            if let d = try? encoder.encode(e) { blob.append(d); blob.append(0x0A) }
+        for e in events {
+            blob.append(try encoder.encode(e))
+            blob.append(0x0A)
         }
-        try? blob.write(to: fileURL, options: .atomic)
-        expectedFileSize = Int64(blob.count)
+        try blob.write(to: url, options: .atomic)
+        return Int64(blob.count)
+    }
+
+    /// 交易式切片取代(契約 F / codex C11):新帳本 = {其他 provider 事件} ∪ {此 provider 重掃事件},
+    /// keep-first 去重、依時間排序,先原子落盤成功才提交記憶體;失敗即 throw(記憶體與檔案皆不變)。
+    /// poisoned 時拒絕。取代「先 clearProviders 再 append」——後者因去重會變成無操作(codex M2/C11)。
+    @discardableResult
+    public func replaceProviderSlice(_ providerId: String, with freshEvents: [UsageEvent]) throws -> Int {
+        if let loadError { throw loadError }
+        let kept = events.filter { $0.providerId != providerId }
+        var merged = kept
+        var seen = Set(kept.map(\.id))
+        var accepted = 0   // 實際採納(去重後)數;供 coordinator 正確計數(codex NIT)
+        for e in freshEvents where seen.insert(e.id).inserted { merged.append(e); accepted += 1 }
+        merged.sort { $0.timestamp < $1.timestamp }
+        guard let fileURL else {   // 記憶體模式
+            events = merged
+            ids = seen
+            return accepted
+        }
+        _ = try Self.writeAllAtomic(merged, to: fileURL)   // 先落盤;throw → 記憶體不變(舊切片保留)
+        events = merged
+        ids = seen
+        expectedFingerprint = currentFingerprint()
+        return accepted
     }
 
     /// 清空(全量重建索引前呼叫)。
     public func reset() {
         events = []
         ids = []
-        expectedFileSize = 0
+        expectedFingerprint = nil
         if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
     }
 

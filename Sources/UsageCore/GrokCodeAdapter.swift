@@ -20,6 +20,7 @@ import Foundation
 ///   2. session 中途換 model 時,本次掃描產生的事件一律歸屬 summary.json 目前的 model。
 public struct GrokCodeAdapter: ProviderAdapter {
     public let providerId = "grok-code"
+    public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Grok Code"
 
     private let candidateRoots: [URL]
@@ -72,10 +73,13 @@ public struct GrokCodeAdapter: ProviderAdapter {
         var events: [UsageEvent] = []
         var parseErrors = 0
         var scanned = 0
+        var complete = true   // 契約 E:列舉或任一檔內容讀取失敗 → 不完整(不得取代切片)
         let decoder = JSONDecoder()
 
         for root in roots {
-            for (url, size) in JSONLScanner.listFiles(root: root, pathExtension: "jsonl") {
+            let listing = JSONLScanner.listFiles(root: root, pathExtension: "jsonl")
+            if !listing.complete { complete = false }
+            for (url, size) in listing.files {
                 // 只掃 updates.jsonl;events.jsonl(生命週期)等其餘 JSONL 一律略過。
                 guard url.lastPathComponent == "updates.jsonl" else { continue }
                 let key = url.path
@@ -106,6 +110,7 @@ public struct GrokCodeAdapter: ProviderAdapter {
                     newState.files[key] = FileScanMark(offset: newOffset, size: size, context: ctx.serialized())
                 } catch {
                     parseErrors += 1
+                    complete = false   // 檔案內容讀取失敗 → 不完整(契約 E)
                 }
             }
         }
@@ -116,7 +121,8 @@ public struct GrokCodeAdapter: ProviderAdapter {
             readings.append(RateLimitReading(providerId: "grok-code", observedAt: Date(),
                                              primary: nil, secondary: nil, planType: tier))
         }
-        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors), newState)
+        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors,
+                                     completeness: (complete && parseErrors == 0) ? .complete : .incomplete("some sources unreadable or unparsable")), newState)
     }
 
     // MARK: - 訂閱方案標籤(billing 行窄解碼)

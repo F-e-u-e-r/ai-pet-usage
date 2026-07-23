@@ -5,6 +5,7 @@ import Foundation
 /// 不讀取、不保存任何提示詞或訊息內容。
 public struct ClaudeCodeAdapter: ProviderAdapter {
     public let providerId = "claude-code"
+    public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Claude Code"
 
     private let candidateRoots: [URL]
@@ -88,9 +89,12 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         var events: [UsageEvent] = []
         var parseErrors = 0
         var scanned = 0
+        var complete = true   // 契約 E:列舉或任一檔內容讀取失敗 → 不完整(不得取代切片)
 
         for root in roots {
-            for (url, size) in JSONLScanner.listFiles(root: root, pathExtension: "jsonl") {
+            let listing = JSONLScanner.listFiles(root: root, pathExtension: "jsonl")
+            if !listing.complete { complete = false }
+            for (url, size) in listing.files {
                 let key = url.path
                 let mark = state.files[key]
                 if let mark, mark.size == size, mark.offset == size { continue } // 無新內容
@@ -114,6 +118,7 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                     newState.files[key] = FileScanMark(offset: newOffset, size: size)
                 } catch {
                     parseErrors += 1
+                    complete = false   // 檔案內容讀取失敗 → 不完整(契約 E)
                 }
             }
         }
@@ -124,7 +129,8 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                                              primary: nil, secondary: nil,
                                              planType: plan, sourcePath: nil))
         }
-        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors), newState)
+        return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors,
+                                     completeness: (complete && parseErrors == 0) ? .complete : .incomplete("some sources unreadable or unparsable")), newState)
     }
 
     /// 解析 Claude Code statusline payload 落地檔中的官方 `rate_limits`。

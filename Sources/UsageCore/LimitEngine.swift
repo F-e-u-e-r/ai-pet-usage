@@ -102,11 +102,18 @@ public final class LimitEngine {
 
     private var store: [String: PersistedProvider]
     private let stateURL: URL?
+    /// 非 nil 表示 limits-state 檔存在但讀不到 / 損壞;coordinator 見此中止本輪寫入,不覆寫(#44 契約 A)。
+    public private(set) var loadError: Error?
 
     public init(stateURL: URL?) {
         self.stateURL = stateURL
-        if let stateURL, let loaded = AtomicJSON.read([String: PersistedProvider].self, from: stateURL) {
-            store = loaded
+        if let stateURL {
+            do {
+                store = try AtomicJSON.readOrThrow([String: PersistedProvider].self, from: stateURL) ?? [:]
+            } catch {
+                store = [:]
+                loadError = error
+            }
         } else {
             store = [:]
         }
@@ -116,15 +123,26 @@ public final class LimitEngine {
     }
 
     private func save() {
-        guard let stateURL else { return }
+        guard let stateURL, loadError == nil else { return }   // poisoned 時不覆寫(#44 契約 A/B)
         try? AtomicJSON.write(store, to: stateURL)
     }
 
     /// 其他行程可能已寫入較新的限額狀態;寫入階段開始前重新載入以收斂。
+    /// 非破壞式:讀不到/損壞時保留現有記憶體並設 loadError(coordinator 中止本輪,不覆寫)。
     public func reloadFromDisk() {
-        guard let stateURL, let loaded = AtomicJSON.read([String: PersistedProvider].self, from: stateURL) else { return }
-        store = loaded
-        sanitizeCrossTypedWindows()   // 清淨值於接續的 ingest→save 落地(此處不獨立寫檔)
+        guard let stateURL else { return }
+        do {
+            guard let loaded = try AtomicJSON.readOrThrow([String: PersistedProvider].self, from: stateURL) else {
+                store = [:]        // R2-MF7:檔案不存在 → 磁碟真相為空,整份採用(不保留陳舊 store,避免刪檔後復活舊配額/校正/待定窗)
+                loadError = nil
+                return
+            }
+            store = loaded
+            loadError = nil
+            sanitizeCrossTypedWindows()   // 清淨值於接續的 ingest→save 落地(此處不獨立寫檔)
+        } catch {
+            loadError = error   // 讀不到/損壞 → 不動記憶體
+        }
     }
 
     /// 清理「窗型錯置」的持久化窗口:primary 槽存的必是「正規化 5h 窗」(window_minutes=300)、
