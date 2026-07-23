@@ -126,6 +126,55 @@ final class PrivacyRedactionTests: XCTestCase {
 
 // MARK: - HTML report sink 端(使用者指定的 test 1/2/3)
 
+// PR2 (#34) — GUI Data Quality / error share-safety。live dashboard 只能渲染去識別後的投影
+// (原文保留給 CLI --full / 報告 sink)。usagecore-tests 不依賴 AIPetUsage(GUI),故測 view 消費的
+// 純 UsageCore 投影:DashboardState.shareSafeDataQuality / UsageSnapshot.shareSafeError。
+final class DashboardShareSafetyTests: XCTestCase {
+
+    private func snapshot(errorMessage: String?) -> UsageSnapshot {
+        UsageSnapshot(providerId: "codex", displayName: "Codex", status: .error,
+                      sourceDescription: "~/.codex/sessions", errorMessage: errorMessage)
+    }
+
+    private func dashboard(dataQuality: [String]) -> DashboardState {
+        DashboardState(generatedAt: Date(timeIntervalSince1970: 1_700_000_000), snapshots: [],
+                       limitStates: [], todayTotals: .zero, todayCost: .zero, todayByProvider: [],
+                       burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [], topProjects: [],
+                       models: [], dataQuality: dataQuality, lastRefreshAt: nil)
+    }
+
+    // 畫面投影絕不外洩 home 路徑 / 使用者名 / 原始 exception 文字,但已知樣板仍保留有用語意。
+    func testShareSafeDataQualityRedactsRawPathsAndErrors() throws {
+        let raw = [
+            "codex: refresh error — Permission denied: /Users/alice/private/secret.log",
+            "claude-code: 3 unparsable line(s) skipped on last scan at /Users/alice/x.jsonl",
+            "weird freeform note SECRET_XYZ_999 /Users/alice/leak",
+        ]
+        let safe = dashboard(dataQuality: raw).shareSafeDataQuality
+        XCTAssertEqual(safe.count, raw.count)
+        for note in safe {
+            XCTAssertFalse(note.contains("/Users/"), "no home/user path: \(note)")
+            XCTAssertFalse(note.contains("alice"), "no username: \(note)")
+            XCTAssertFalse(note.contains("SECRET_XYZ_999"), "no injected raw text: \(note)")
+            XCTAssertFalse(note.contains("secret.log"), "no raw error path: \(note)")
+        }
+        XCTAssertTrue(safe[0].contains("refresh error"), "known template stays useful")
+    }
+
+    // 卡片錯誤投影:有錯回固定句(永不含原文/路徑),無錯或空字串回 nil。
+    func testShareSafeErrorNeverShowsRawAndNilWhenClean() throws {
+        let leaky = snapshot(errorMessage: "boom at /Users/alice/.codex/x.jsonl SECRET_ABC").shareSafeError
+        XCTAssertNotNil(leaky)
+        if let leaky {
+            XCTAssertFalse(leaky.contains("/Users/"), "no path in card error")
+            XCTAssertFalse(leaky.contains("alice"), "no username in card error")
+            XCTAssertFalse(leaky.contains("SECRET_ABC"), "no raw token in card error")
+        }
+        XCTAssertNil(snapshot(errorMessage: nil).shareSafeError, "no error → nil")
+        XCTAssertNil(snapshot(errorMessage: "").shareSafeError, "empty error → nil")
+    }
+}
+
 final class ReportRedactionTests: XCTestCase {
     // test 1:projectName 為 nil,projectId 是完整路徑 → 報告不得含完整路徑。
     func testReportNoFullPathWhenProjectNameNil() throws {

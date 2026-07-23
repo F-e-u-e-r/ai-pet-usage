@@ -161,6 +161,13 @@ public struct UsageSnapshot: Codable, Sendable, Identifiable {
 
     public var id: String { providerId }
 
+    /// 分享安全:GUI 卡片顯示用。`errorMessage` 原文可含完整路徑/任意 provider 文字,
+    /// 故 GUI 永不顯示原文(與 StatusRenderer 非 `--full` 一致);原文僅 `aipet status --full` 出。
+    public var shareSafeError: String? {
+        guard let e = errorMessage, !e.isEmpty else { return nil }
+        return "Refresh failed — run `aipet status --full` for the raw error"
+    }
+
     public init(providerId: String, displayName: String, status: ProviderStatus,
                 sessionUsagePercent: Double? = nil, weeklyUsagePercent: Double? = nil,
                 resetAt: Date? = nil, updatedAt: Date? = nil,

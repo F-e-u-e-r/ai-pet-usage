@@ -626,4 +626,10 @@ runSuite("OpenRouterCreditsTests", [
     ("testBubbleComposeDataPageBudget", openRouter.testBubbleComposeDataPageBudget),
 ])
 
+let dashShareSafety = DashboardShareSafetyTests()
+runSuite("DashboardShareSafetyTests", [
+    ("testShareSafeDataQualityRedactsRawPathsAndErrors", dashShareSafety.testShareSafeDataQualityRedactsRawPathsAndErrors),
+    ("testShareSafeErrorNeverShowsRawAndNilWhenClean", dashShareSafety.testShareSafeErrorNeverShowsRawAndNilWhenClean),
+])
+
 finishTestRun()
