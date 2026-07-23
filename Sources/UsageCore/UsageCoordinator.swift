@@ -142,12 +142,20 @@ public actor UsageCoordinator {
     private var refreshErrors: [String: String] = [:]
     private var parseErrorCounts: [String: Int] = [:]
     private var fullReindexPreservedProviderIds: Set<String> = []
+    /// 非 nil 表示 scan-state 檔存在但讀不到 / 損壞;與 ledger/limits 的 loadError 一起閘住本輪寫入(#44 契約 A)。
+    private var scanStateLoadError: Error?
+    /// 本輪 reindex 的「誠實通知」(切片保留/累計未重建等,非 error):流入 dashboard dataQuality,兩個 sink 皆辨識。
+    private var refreshQualityNotes: [String] = []
     /// 跨行程互斥:app 與 CLI 對同一資料目錄的寫入階段必須互斥。
     private let refreshLock: FileLock
     private let refreshLockTimeout: TimeInterval
     private var refreshInFlight = false
 
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
+    /// 持久化 scan-state(checked;供 reindex 前置「安全排序」用——失敗即 throw,呼叫端據此不 replace)。
+    private func persistScanState() throws {
+        try AtomicJSON.write(scanStates, to: scanStateURL)
+    }
     private var pricingOverridesURL: URL { dataDir.appendingPathComponent("pricing-overrides.json") }
 
     /// `readOnly`:純唯讀入口(如 `aipet diag`)不得建立資料目錄——略過 `ensureDirectory`,
@@ -167,7 +175,12 @@ public actor UsageCoordinator {
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
         self.ledger = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
         self.limits = LimitEngine(stateURL: dir.appendingPathComponent("limits-state.json"))
-        self.scanStates = AtomicJSON.read([String: ScanState].self, from: dir.appendingPathComponent("scan-state.json")) ?? [:]
+        do {
+            self.scanStates = try AtomicJSON.readOrThrow([String: ScanState].self, from: dir.appendingPathComponent("scan-state.json")) ?? [:]
+        } catch {
+            self.scanStates = [:]
+            self.scanStateLoadError = error   // 存在但讀不到/損壞:刷新時據此中止寫入,不覆寫
+        }
         self.pricing = PricingRegistry.loadDefault(overridesURL: dir.appendingPathComponent("pricing-overrides.json"))
         // 注意:init 必須是純讀取——壓縮(會重寫帳本檔)只能在 refresh() 持鎖後執行,
         // 否則唯讀的 CLI 指令也會寫檔,破壞跨行程安全。
@@ -263,21 +276,38 @@ public actor UsageCoordinator {
             return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true)
         }
         defer { refreshLock.release() }
+        refreshQualityNotes = []
+        ledger.clearWriteError()   // R2-NIT:清除上一輪殘留的落盤失敗旗標,避免誤觸本輪的 break
 
         // 其他行程可能已推進帳本/掃描進度/限額狀態:先收斂再增量掃描,
         // 內容穩定的事件 ID + 去重保證不重複計費。
+        // #44 契約 A:重載三個權威狀態檔;任一「存在但讀不到/損壞」(非「不存在」)→
+        // 中止本輪寫入,絕不以空/舊資料覆寫使用者仍可救回的檔案。
         ledger.reloadIfChanged()
-        if let diskStates = AtomicJSON.read([String: ScanState].self, from: scanStateURL) {
-            for (provider, diskState) in diskStates {
-                var merged = scanStates[provider] ?? ScanState()
-                for (file, diskMark) in diskState.files {
-                    if let ours = merged.files[file], ours.offset >= diskMark.offset { continue }
-                    merged.files[file] = diskMark
-                }
-                scanStates[provider] = merged
-            }
-        }
         limits.reloadFromDisk()
+        var diskStates: [String: ScanState]? = nil
+        do {
+            diskStates = try AtomicJSON.readOrThrow([String: ScanState].self, from: scanStateURL)
+            scanStateLoadError = nil
+        } catch {
+            scanStateLoadError = error
+        }
+        if ledger.loadError != nil || limits.loadError != nil || scanStateLoadError != nil {
+            // 通知由 dashboard() 從 loadError 中央推導(C-MF8),此處不再手動 append。
+            return RefreshOutcome(transitions: [], dashboard: dashboard(now: now), insertedEvents: 0, skipped: true)
+        }
+        // #44 契約 C:持鎖後磁碟為唯一真相——**rebuildable** provider 整份採用磁碟狀態(取代陳舊記憶體、防止復活;
+        // 重讀去重安全)。**cumulativeSnapshotOnly** provider(如 OpenCode)則整段保留記憶體 scan-state、不參與此磁碟
+        // 採用——磁碟缺標記或含異 db-path 標記皆不會把 baseline 清成空而 zero-baseline overcount(回到本 PR 前的安全
+        // 基線;這是最小 pre-PR 回復,非新 heuristic)。cumulative 的 durable-state/recovery——mark identity、generation、
+        // 合法刪除/tombstone、跨行程收斂,含 codex「disk 非空但缺 live mark」案例——為 blocking follow-up(見追蹤)。
+        let cumulativeInMemory = adapters
+            .filter { $0.historyModel == .cumulativeSnapshotOnly }
+            .reduce(into: [String: ScanState]()) { acc, adapter in
+                if let s = scanStates[adapter.providerId] { acc[adapter.providerId] = s }
+            }
+        scanStates = diskStates ?? [:]
+        for (pid, s) in cumulativeInMemory { scanStates[pid] = s }   // cumulative 整段保留記憶體(忽略磁碟採用)
         ledger.compact(retentionDays: settings.retentionDays, now: now) // 僅在持鎖時壓縮
 
         if fullReindex {
@@ -285,26 +315,59 @@ public actor UsageCoordinator {
             let rescan = Set(adapters.filter {
                 settings.enabledProviders.contains($0.providerId) && $0.detectAvailability().available
             }.map { $0.providerId })
-            fullReindexPreservedProviderIds = enabled.subtracting(rescan)
-            ledger.clearProviders(rescan)
-            for pid in rescan { scanStates[pid] = ScanState() }
+            // 契約 F:不再「先清空再 append」(會變無操作/刪歷史);改為迴圈中「從零重掃 → 完整才切片取代」。
+            fullReindexPreservedProviderIds = enabled.subtracting(rescan)   // 不可用者個別保留歷史
         }
         var transitions: [LimitTransition] = []
         var inserted = 0
 
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
             guard adapter.detectAvailability().available else { continue }
+            let pid = adapter.providerId
             do {
-                let state = scanStates[adapter.providerId] ?? ScanState()
-                let (result, newState) = try adapter.refreshUsage(state: state)
-                scanStates[adapter.providerId] = newState
-                inserted += ledger.append(result.events)
-                transitions += limits.ingest(readings: result.rateLimits, settings: settings,
-                                             fullReindex: fullReindex, now: now)
-                parseErrorCounts[adapter.providerId] = result.parseErrors
-                refreshErrors[adapter.providerId] = nil
+                if fullReindex && adapter.historyModel == .rebuildableHistory {
+                    // 契約 F:從零重掃 → 只有「完整」掃描才切片取代(set-replace);不完整則保留舊切片、
+                    // 舊 scanState、不刪歷史(契約 E / codex C8)。
+                    // 注意:僅 rebuildableHistory 走此路;cumulativeSnapshotOnly(OpenCode)落到 else 走增量、
+                    // 保留既有切片,絕不把累計總量塌成「現在的一筆」(codex MF2)。
+                    let (result, newState) = try adapter.refreshUsage(state: ScanState())
+                    switch result.completeness {
+                    case .complete:
+                        // C-MF2 安全排序:先把此 provider 的 watermark 持久化為空,再 replace,最後才提交 newState。
+                        // 崩潰/寫失敗於任一步 → 磁碟留「空 watermark」→ 下輪安全重掃(id 去重),絕不 skip-and-miss。
+                        scanStates[pid] = ScanState()
+                        try persistScanState()   // checked;失敗即 throw → catch → 保留舊切片(不 replace)
+                        // C-MF6:重掃切片套用與 compact 同一保留期 cutoff,不重新引入超過保留期的過期事件。
+                        let cutoff = now.addingTimeInterval(-Double(settings.retentionDays) * 86400)
+                        let freshKept = result.events.filter { $0.timestamp >= cutoff }
+                        inserted += try ledger.replaceProviderSlice(pid, with: freshKept)   // 交易式 set-replace,回傳採納數
+                        scanStates[pid] = newState
+                        transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: true, now: now)
+                        parseErrorCounts[pid] = result.parseErrors
+                        refreshErrors[pid] = nil
+                    case .incomplete:
+                        fullReindexPreservedProviderIds.insert(pid)   // 保留舊切片,不刪歷史
+                        refreshQualityNotes.append("\(pid): reindex incomplete — history preserved")   // 誠實通知(非 error)
+                    }
+                } else {
+                    let state = scanStates[pid] ?? ScanState()
+                    let (result, newState) = try adapter.refreshUsage(state: state)
+                    inserted += ledger.append(result.events)         // 交易式落盤(記憶體僅落盤成功才提交)
+                    if let we = ledger.writeError { throw we }        // 落盤失敗 → 不提交下面(契約 B/M5)
+                    scanStates[pid] = newState                        // 落盤成功才推進 watermark
+                    transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: false, now: now)
+                    parseErrorCounts[pid] = result.parseErrors
+                    refreshErrors[pid] = nil
+                    if fullReindex {
+                        // 走到 else 且 fullReindex → 必為 cumulativeSnapshotOnly(OpenCode):保留累計歷史、僅增量(不重建)。
+                        refreshQualityNotes.append("\(pid): reindex kept cumulative history — not rebuildable")
+                    }
+                }
             } catch {
-                refreshErrors[adapter.providerId] = String(describing: error)
+                refreshErrors[pid] = String(describing: error)
+                // C-MF4:帳本落盤失敗 → 停止後續 provider 的 append,避免下一個成功寫入把指紋更新到「含半寫位元組」
+                // 的磁碟、遮蔽未採用的批次(load/append 已設 expectedFingerprint=nil 強制下輪對帳)。
+                if ledger.writeError != nil { break }
             }
         }
 
@@ -323,7 +386,11 @@ public actor UsageCoordinator {
         // 官方與估算同窗撞 reset → 留官方(估算不得蓋掉官方歸因)。
         transitions = LimitEngine.preferOfficialResets(transitions)
 
-        try? AtomicJSON.write(scanStates, to: scanStateURL)
+        do {
+            try AtomicJSON.write(scanStates, to: scanStateURL)   // C-MF8:寫失敗不再靜默
+        } catch {
+            refreshQualityNotes.append("scan-state write failed — will re-scan next refresh")
+        }
         lastRefreshAt = now
         return RefreshOutcome(transitions: transitions, dashboard: dashboard(now: now), insertedEvents: inserted)
     }
@@ -389,6 +456,11 @@ public actor UsageCoordinator {
         let burnCost = hourEvents.isEmpty ? 0 : pricing.cost(of: hourEvents).knownUSD
 
         var quality: [String] = []
+        // C-MF8:狀態檔 poison 由 loadError 中央推導 → report/diag/status 重算 dashboard 時也看得到
+        //(不只 refresh 當下的暫時 dash);兩個 sink 皆辨識為誠實、無路徑的固定模板。
+        if ledger.loadError != nil || limits.loadError != nil || scanStateLoadError != nil {
+            quality.append("state read failed — refresh skipped; data preserved")
+        }
         for (pid, err) in refreshErrors {
             quality.append("\(pid): refresh error — \(err)")
         }
@@ -418,6 +490,7 @@ public actor UsageCoordinator {
             // idle(閒置)不是資料問題,不列入 data-quality 警告(cross-model round-2)。
             quality.append("claude-code: percent unavailable — run `aipet install-hook` for official limits (or see the README), or set a token budget in Settings for an estimate")
         }
+        quality.append(contentsOf: refreshQualityNotes)   // reindex 誠實通知(#44 step 8:兩個 sink 皆辨識)
 
         return DashboardState(
             generatedAt: now,

@@ -24,6 +24,13 @@ public enum JSONCodecError: Error {
     case notADictionary
 }
 
+/// 權威狀態檔(ledger / scan-state / limits)讀取結果分類:區分「不存在(可建新)」與
+/// 「存在但讀不到 / 解不開(絕不可當空資料覆寫)」。對照 #44 契約 A。
+public enum StateReadError: Error {
+    case unreadable(underlying: Error)   // 檔案存在但 I/O 讀取失敗(EACCES/EIO…)
+    case malformed(underlying: Error)    // 內容無法解碼 / schema 不支援
+}
+
 public enum AtomicJSON {
     public static func encoder() -> JSONEncoder {
         let e = JSONEncoder()
@@ -48,6 +55,32 @@ public enum AtomicJSON {
     public static func read<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? decoder().decode(type, from: data)
+    }
+
+    /// Tri-state 讀取(權威狀態檔用):`nil` **只**代表檔案不存在(可建新);存在但讀不到 / 解不開
+    /// 一律 throw,呼叫端據此**中止寫入**,絕不以空資料覆寫使用者仍可救回的檔案(#44 契約 A)。
+    public static func readOrThrow<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            if pathIsGenuinelyMissing(url.path) { return nil }
+            throw StateReadError.unreadable(underlying: error)
+        }
+        do {
+            return try decoder().decode(type, from: data)
+        } catch {
+            throw StateReadError.malformed(underlying: error)
+        }
+    }
+
+    /// 讀取失敗後,以 `lstat`/errno 分辨「真的不存在(可建新)」與「存在但讀不到 / 斷掉的 symlink
+    /// (不可當 missing、不可覆寫)」。只有 ENOENT/ENOTDIR 視為 missing;lstat 不跟隨 symlink,
+    /// 故斷掉的 symlink(連結本身存在)不會被誤判為 missing(#44 契約 A / codex C-MF7)。
+    static func pathIsGenuinelyMissing(_ path: String) -> Bool {
+        var st = stat()
+        if lstat(path, &st) == 0 { return false }
+        return errno == ENOENT || errno == ENOTDIR
     }
 }
 

@@ -65,6 +65,10 @@ public enum QualityCode: String, Codable, Sendable {
     case correctedRecently
     case staleReading
     case percentUnavailable
+    case stateReadFailed
+    case stateWriteFailed
+    case reindexIncomplete
+    case reindexKeptCumulative
     case other
 }
 
@@ -211,6 +215,10 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .correctedRecently: return "usage percent corrected downward recently"
         case .staleReading: return "rate-limit reading older than 6h; percent may lag"
         case .percentUnavailable: return "percent unavailable — run aipet install-hook or set a token budget"
+        case .stateReadFailed: return "a state file could not be read — refresh skipped; existing data preserved"
+        case .stateWriteFailed: return "a state file could not be written — a rescan will reconcile next refresh"
+        case .reindexIncomplete: return "reindex incomplete — provider history preserved"
+        case .reindexKeptCumulative: return "reindex kept cumulative history — source is not fully rebuildable"
         case .other: return "other data-quality note (details withheld)"
         }
     }
@@ -313,7 +321,13 @@ public extension DiagnosticReport {
 
     /// 只認 app 自撰的固定樣板;比對後只留 enum + 選填整數 count + 選填已知 provider,**丟棄樣板以外的任何文字**。
     private static func classifyQuality(_ s: String) -> Quality {
-        // 無 pid 前綴的兩種 refresh-skipped
+        // 無 pid 前綴:state-read 失敗 / 兩種 refresh-skipped
+        if s.hasPrefix("state read failed") {
+            return Quality(code: QualityCode.stateReadFailed.rawValue, provider: nil, count: nil)
+        }
+        if s.hasPrefix("scan-state write failed") {
+            return Quality(code: QualityCode.stateWriteFailed.rawValue, provider: nil, count: nil)
+        }
         if s.hasPrefix("refresh skipped") {
             if s.contains("already in progress") { return Quality(code: QualityCode.refreshSkippedInFlight.rawValue, provider: nil, count: nil) }
             if s.contains("lock") { return Quality(code: QualityCode.refreshSkippedLock.rawValue, provider: nil, count: nil) }
@@ -334,6 +348,12 @@ public extension DiagnosticReport {
         }
         if rest.hasPrefix("history kept") {
             return Quality(code: QualityCode.historyKeptUnavailable.rawValue, provider: provider, count: nil)
+        }
+        if rest.hasPrefix("reindex incomplete") {
+            return Quality(code: QualityCode.reindexIncomplete.rawValue, provider: provider, count: nil)
+        }
+        if rest.hasPrefix("reindex kept cumulative") {
+            return Quality(code: QualityCode.reindexKeptCumulative.rawValue, provider: provider, count: nil)
         }
         if rest.hasPrefix("percent unavailable") {
             return Quality(code: QualityCode.percentUnavailable.rawValue, provider: provider, count: nil)
