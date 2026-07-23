@@ -524,10 +524,12 @@ struct TodayView: View {
                     .frame(width: 320)
                 }
 
-                if !dash.dataQuality.isEmpty {
+                if !dash.shareSafeDataQuality.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Data quality").font(Theme.FontScale.cardTitle)
-                        ForEach(dash.dataQuality, id: \.self) { note in
+                        // 分享安全:只渲染去識別後的投影(原文僅 CLI `aipet status --full`)。
+                        // 以列舉索引為身分:去識別後多筆可能塌成同字串,`id: \.self` 會產生重複身分。
+                        ForEach(Array(dash.shareSafeDataQuality.enumerated()), id: \.offset) { _, note in
                             Label(note, systemImage: "exclamationmark.triangle")
                                 .font(Theme.FontScale.note)
                                 .foregroundStyle(Theme.textSecondary)
@@ -662,7 +664,7 @@ struct AgentCard: View {
                 .font(Theme.FontScale.secondaryInfo)
                 .foregroundStyle(Theme.textSecondary)
                 .help(limit?.fiveHour.idle == true ? "No active 5h window found in local Claude logs." : "")
-            if let err = snapshot.errorMessage {
+            if let err = snapshot.shareSafeError {
                 Text(err).font(.caption2).foregroundStyle(.red).lineLimit(2)
             }
             Text("in \(tk(snapshot.tokenInput ?? 0)) · out \(tk(snapshot.tokenOutput ?? 0)) · cache \(tk(snapshot.tokenCache ?? 0))")
