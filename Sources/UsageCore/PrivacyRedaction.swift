@@ -50,6 +50,10 @@ public enum PrivacyRedaction {
                 ?? "unparsable line(s) skipped on last scan")
         }
         if lower.contains("history kept") { return prefixed("history kept (provider unavailable during reindex)") }
+        if lower.hasPrefix("state read failed") { return "State file unreadable — refresh skipped; existing data preserved" }
+        if lower.hasPrefix("scan-state write failed") { return "State write failed — a rescan will reconcile next refresh" }
+        if lower.contains("reindex incomplete") { return prefixed("reindex incomplete — history preserved") }
+        if lower.contains("reindex kept cumulative") { return prefixed("reindex kept cumulative history (not rebuildable)") }
         if lower.contains("percent unavailable") {
             return prefixed("usage percent unavailable (run aipet install-hook or set a token budget)")
         }

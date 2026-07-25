@@ -24,6 +24,8 @@ import SQLite3
 //     credential 變更不觸發 refresh(grok G3/codex C5)。
 public struct OpenCodeAdapter: ProviderAdapter {
     public let providerId = "opencode"
+    // db 只存目前累計(非可重播歷史)→ 不可重掃重建;reindex 保留既有切片、只走增量(codex MF2)。
+    public var historyModel: ProviderHistoryModel { .cumulativeSnapshotOnly }
     public let displayName = "OpenCode"
 
     private let dbURL: URL
@@ -225,7 +227,8 @@ public struct OpenCodeAdapter: ProviderAdapter {
         // highWater 與全部基準同存於**同一** FileScanMark → 原子同進退(G2)。
         newState.files[key] = FileScanMark(offset: maxSeen, size: size, context: context)
         return (AdapterRefreshResult(events: events, rateLimits: [],
-                                     scannedFiles: rows.isEmpty ? 0 : 1, parseErrors: parseErrors),
+                                     scannedFiles: rows.isEmpty ? 0 : 1, parseErrors: parseErrors,
+                                     completeness: .complete),   // 整輪讀取成功才走到這(任何 sqlite 錯誤已在上游 throw)
                 newState)
     }
 

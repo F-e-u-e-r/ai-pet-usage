@@ -488,24 +488,46 @@ public struct ScanState: Codable, Sendable {
     }
 }
 
+/// 掃描完整性(契約 E / codex MF5):不得是預設 true 的 Bool。只有 `.complete` 能進入切片取代(reindex);
+/// `.incomplete` 表示部分來源列舉/讀取失敗——可用部分仍可增量 append,但**不得取代既有切片**
+///(否則暫時 I/O 失敗會把好資料刪成部分)。
+public enum ScanCompleteness: Sendable, Equatable {
+    case complete
+    case incomplete(String)
+}
+
 public struct AdapterRefreshResult: Sendable {
     public var events: [UsageEvent]
     public var rateLimits: [RateLimitReading]
     public var scannedFiles: Int
     public var parseErrors: Int
+    public var completeness: ScanCompleteness
 
     public init(events: [UsageEvent] = [], rateLimits: [RateLimitReading] = [],
-                scannedFiles: Int = 0, parseErrors: Int = 0) {
+                scannedFiles: Int = 0, parseErrors: Int = 0, completeness: ScanCompleteness) {
         self.events = events
         self.rateLimits = rateLimits
         self.scannedFiles = scannedFiles
         self.parseErrors = parseErrors
+        self.completeness = completeness
     }
+}
+
+/// provider 歷史模型(codex MF2):決定 reindex 能否「從零重掃重建」。
+/// - `.rebuildableHistory`:來源是完整可重播歷史(JSONL 逐事件)→ 可安全重掃 set-replace。
+/// - `.cumulativeSnapshotOnly`:來源只有目前累計(如 OpenCode db)→ **不可**重掃重建
+///   (會把整段歷史塌成「現在的一筆」),只能增量追蹤;reindex 時保留既有切片。
+public enum ProviderHistoryModel: Sendable, Equatable {
+    case rebuildableHistory
+    case cumulativeSnapshotOnly
 }
 
 public protocol ProviderAdapter: Sendable {
     var providerId: String { get }
     var displayName: String { get }
+    /// 見 ProviderHistoryModel。**必須**列為 protocol 要求(否則對 existential 會靜態派發到預設)。
+    /// 預設 fail-closed 為 `.cumulativeSnapshotOnly`——未明確宣告可重建者一律不做摧毀式重建。
+    var historyModel: ProviderHistoryModel { get }
     /// 本機資料來源目錄(已即時存在性過濾);供 FSEvents 檔案監看列出要看的路徑。
     var roots: [URL] { get }
     /// 額外要監看的獨立檔(如 Claude statusline 落地檔):其父目錄會被監看,
@@ -520,6 +542,11 @@ public protocol ProviderAdapter: Sendable {
     /// 存在/可讀/mtime——只回報固定 id + 狀態,絕不外洩實際 URL/路徑。預設空。
     /// **必須**列為 protocol 要求(而非僅 extension),否則對 existential 會靜態派發到預設空實作。
     func diagnosticSources() -> [DiagnosticSourceDescriptor]
+}
+
+public extension ProviderAdapter {
+    /// fail-closed 預設:未宣告者視為累計快照,不做摧毀式重建(避免誤把此類來源接回 generic reindex)。
+    var historyModel: ProviderHistoryModel { .cumulativeSnapshotOnly }
 }
 
 public extension ProviderAdapter {

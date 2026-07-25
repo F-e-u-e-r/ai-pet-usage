@@ -91,7 +91,7 @@ Task {
             dash = outcome.dashboard
             let elapsed = String(format: "%.2fs", Date().timeIntervalSince(start))
             headline = outcome.skipped
-                ? "refresh skipped — another AI Pet Usage process holds the data lock; showing cached data"
+                ? "refresh skipped — showing cached data (see notes below for why)"   // 具體原因(鎖/進行中/狀態讀取失敗)在 dataQuality;不再一律謊稱持鎖(codex C-MF8)
                 : "refresh \(elapsed), +\(outcome.insertedEvents) events"
         } else {
             dash = await coordinator.dashboard()

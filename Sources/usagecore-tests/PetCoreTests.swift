@@ -548,9 +548,11 @@ final class CoordinatorIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(ledger.append([unavailableEvent, staleCodexEvent]), 2)
 
+        var reindexSettings = CoreSettings()
+        reindexSettings.retentionDays = 100_000   // 固定舊 fixture(2026-01-15)不被保留期修剪(codex C-MF6:reindex 現套用保留期 cutoff)
         let coordinator = UsageCoordinator(
             dataDir: dataDir,
-            settings: CoreSettings(),
+            settings: reindexSettings,
             adapters: [
                 CodexAdapter(roots: [codexRoot]),
                 ClaudeCodeAdapter(roots: [missingClaudeRoot], statuslineFiles: [], planConfigFiles: [])

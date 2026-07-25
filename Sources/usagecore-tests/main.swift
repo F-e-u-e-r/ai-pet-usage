@@ -626,4 +626,39 @@ runSuite("OpenRouterCreditsTests", [
     ("testBubbleComposeDataPageBudget", openRouter.testBubbleComposeDataPageBudget),
 ])
 
+let dataIntegrityRead = DataIntegrityReadTests()
+runSuite("DataIntegrityReadTests", [
+    ("testUnreadableLedgerIsPoisonedNotEmpty", dataIntegrityRead.testUnreadableLedgerIsPoisonedNotEmpty),
+    ("testMalformedLedgerPoisonedAndPreserved", dataIntegrityRead.testMalformedLedgerPoisonedAndPreserved),
+    ("testValidLedgerWithTornTailNotPoisoned", dataIntegrityRead.testValidLedgerWithTornTailNotPoisoned),
+    ("testScanStateReadOrThrowTriState", dataIntegrityRead.testScanStateReadOrThrowTriState),
+    ("testUnreadableLimitsStateIsPoisoned", dataIntegrityRead.testUnreadableLimitsStateIsPoisoned),
+    ("testAppendWriteFailureRollsBackMemory", dataIntegrityRead.testAppendWriteFailureRollsBackMemory),
+    ("testCompactWriteFailurePreservesOldFileAndMemory", dataIntegrityRead.testCompactWriteFailurePreservesOldFileAndMemory),
+])
+
+let diReindex = DataIntegrityReindexTests()
+runSuite("DataIntegrityReindexTests", [
+    ("testIncompleteReindexPreservesOldSlice", diReindex.testIncompleteReindexPreservesOldSlice),
+    ("testCompleteZeroResultEmptiesRebuildableSlice", diReindex.testCompleteZeroResultEmptiesRebuildableSlice),
+    ("testCumulativeSnapshotReindexPreservesHistory", diReindex.testCumulativeSnapshotReindexPreservesHistory),
+    ("testStrictDiskAdoptionOfScanState", diReindex.testStrictDiskAdoptionOfScanState),
+    ("testDeletedScanStateAdoptedAsEmpty", diReindex.testDeletedScanStateAdoptedAsEmpty),
+    ("testReindexAppliesRetentionCutoff", diReindex.testReindexAppliesRetentionCutoff),
+    ("testCumulativeBaselinePreservedWhenScanStateMissing", diReindex.testCumulativeBaselinePreservedWhenScanStateMissing),
+    ("testCumulativeBaselinePreservedWhenDiskHasDifferentMark", diReindex.testCumulativeBaselinePreservedWhenDiskHasDifferentMark),
+])
+
+let diLedger = DataIntegrityLedgerTests()
+runSuite("DataIntegrityLedgerTests", [
+    ("testSameSizeDifferentContentReloads", diLedger.testSameSizeDifferentContentReloads),
+    ("testReplaceProviderSliceWriteFailurePreservesDiskAndMemory", diLedger.testReplaceProviderSliceWriteFailurePreservesDiskAndMemory),
+    ("testQualityNotesShareSafeAndHonest", diLedger.testQualityNotesShareSafeAndHonest),
+    ("testListFilesFlagsIncompleteOnUnreadableSubtree", diLedger.testListFilesFlagsIncompleteOnUnreadableSubtree),
+    ("testNewlineOnlyLedgerIsPoisoned", diLedger.testNewlineOnlyLedgerIsPoisoned),
+    ("testValidRowsWithCorruptMiddleRowStayHealthy", diLedger.testValidRowsWithCorruptMiddleRowStayHealthy),
+    ("testStatFailurePreservesExistingLedgerFailClosed", diLedger.testStatFailurePreservesExistingLedgerFailClosed),
+    ("testEmptyLedgerFirstWriteFailurePreservesFile", diLedger.testEmptyLedgerFirstWriteFailurePreservesFile),
+])
+
 finishTestRun()
