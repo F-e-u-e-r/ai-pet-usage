@@ -33,6 +33,12 @@ public struct DashboardState: Sendable {
     public var dataQuality: [String]
     public var lastRefreshAt: Date?
 
+    /// 分享安全:GUI「Data quality」清單顯示用。每則過 fail-closed allowlist(`safeDataQuality`),
+    /// 絕不外洩路徑/原始錯誤/絕對時間。原文 `dataQuality` 保留給 CLI `aipet status --full` 與報告 sink。
+    public var shareSafeDataQuality: [String] {
+        dataQuality.map(PrivacyRedaction.safeDataQuality)
+    }
+
     public static let empty = DashboardState(
         generatedAt: .distantPast, snapshots: [], limitStates: [], todayTotals: .zero,
         todayCost: .zero, todayByProvider: [], burnRateTokensPerHour: 0, burnCostPerHour: 0,
