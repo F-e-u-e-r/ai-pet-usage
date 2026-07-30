@@ -750,4 +750,31 @@ runSuite("DataIntegrityLedgerTests", [
     ("testEmptyLedgerFirstWriteFailurePreservesFile", diLedger.testEmptyLedgerFirstWriteFailurePreservesFile),
 ])
 
+// #48 Option C binding matrix(pivot comment 5120184667 §6)。SPEC 測試:依 mapping 文件,
+// 現階段(gate 未實作)預期 12 案例紅燈——紅燈為本輪證明目標,實作落地後必須全綠。
+let mxMatrix = MonotonicMatrixTests()
+runSuite("MonotonicMatrixTests", [
+    ("testMX01_candidateMissingHistoricalEvent_preserves", mxMatrix.testMX01_candidateMissingHistoricalEvent_preserves),
+    ("testMX02_cleanTruncationDirectReindex_preserves", mxMatrix.testMX02_cleanTruncationDirectReindex_preserves),
+    ("testMX03_truncationThenIncrementalThenReindex_preserves", mxMatrix.testMX03_truncationThenIncrementalThenReindex_preserves),
+    ("testMX04_scanStateLossThenReindex_preserves", mxMatrix.testMX04_scanStateLossThenReindex_preserves),
+    ("testMX05_nilSourcePathBaselineCandidateMissing_preserves", mxMatrix.testMX05_nilSourcePathBaselineCandidateMissing_preserves),
+    ("testMX06_nilSourcePathIdenticalCandidate_passesGate", mxMatrix.testMX06_nilSourcePathIdenticalCandidate_passesGate),
+    ("testMX07_completeZeroResultNonEmptyBaseline_preserves", mxMatrix.testMX07_completeZeroResultNonEmptyBaseline_preserves),
+    ("testMX08_completeZeroResultEmptyBaseline_staysEmpty", mxMatrix.testMX08_completeZeroResultEmptyBaseline_staysEmpty),
+    ("testMX09_supersetWithNewEvents_replaces", mxMatrix.testMX09_supersetWithNewEvents_replaces),
+    ("testMX10_allowlistedModelEnrichment_replaces", mxMatrix.testMX10_allowlistedModelEnrichment_replaces),
+    ("testMX11_nonMonotonicChanges_preserve", mxMatrix.testMX11_nonMonotonicChanges_preserve),
+    ("testMX12_duplicateCandidateIDs_preserves", mxMatrix.testMX12_duplicateCandidateIDs_preserves),
+    ("testMX13_staleBaselineRace_noStaleOverwrite", mxMatrix.testMX13_staleBaselineRace_noStaleOverwrite),
+    ("testMX14_providerIsolation_mismatchDoesNotBlockOther", mxMatrix.testMX14_providerIsolation_mismatchDoesNotBlockOther),
+    ("testMX15_unknownRawFieldFailsClosed", mxMatrix.testMX15_unknownRawFieldFailsClosed),
+    ("testMX16_reducedNearMissFixture_preserves", mxMatrix.testMX16_reducedNearMissFixture_preserves),
+    ("testMX16b_frozenIsolatedCopyEntryPoint", mxMatrix.testMX16b_frozenIsolatedCopyEntryPoint),
+    ("testMX17_codexEnrichmentTokenFieldsUnchanged_replaces", mxMatrix.testMX17_codexEnrichmentTokenFieldsUnchanged_replaces),
+    ("testMX18_replacementFailureNoPartialSlice", mxMatrix.testMX18_replacementFailureNoPartialSlice),
+    ("testMX19_rawDuplicateBaselineID_failsClosed", mxMatrix.testMX19_rawDuplicateBaselineID_failsClosed),
+    ("testMX20_emptyBaselineCompleteCandidate_initializes", mxMatrix.testMX20_emptyBaselineCompleteCandidate_initializes),
+])
+
 finishTestRun()
