@@ -777,4 +777,20 @@ runSuite("MonotonicMatrixTests", [
     ("testMX20_emptyBaselineCompleteCandidate_initializes", mxMatrix.testMX20_emptyBaselineCompleteCandidate_initializes),
 ])
 
+// CanonicalLedgerV1 stage acceptance(#48 pivot §2;gate 未接線,矩陣 RED 案例維持紅燈)。
+let clTests = CanonicalLedgerTests()
+runSuite("CanonicalLedgerTests", [
+    ("testSchemaValidLineAndMissingRequiredKeys", clTests.testSchemaValidLineAndMissingRequiredKeys),
+    ("testAbsentNullZeroNormalization", clTests.testAbsentNullZeroNormalization),
+    ("testDuplicateIDsFailBothSidesBeforeAnyOverwrite", clTests.testDuplicateIDsFailBothSidesBeforeAnyOverwrite),
+    ("testUnknownKeysFailClosed", clTests.testUnknownKeysFailClosed),
+    ("testNumberBackingAndRangeFailClosed", clTests.testNumberBackingAndRangeFailClosed),
+    ("testImmutableFieldMutationsFail", clTests.testImmutableFieldMutationsFail),
+    ("testOptionalFieldMutationsFail", clTests.testOptionalFieldMutationsFail),
+    ("testAllowlistedModelEnrichmentPasses", clTests.testAllowlistedModelEnrichmentPasses),
+    ("testCandidatePersistedByteCanonicalization", clTests.testCandidatePersistedByteCanonicalization),
+    ("testVersionAndSpecConstantsFrozen", clTests.testVersionAndSpecConstantsFrozen),
+    ("testEncodingDomainGate", clTests.testEncodingDomainGate),
+])
+
 finishTestRun()
