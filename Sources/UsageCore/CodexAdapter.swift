@@ -183,7 +183,7 @@ public struct CodexAdapter: ProviderAdapter {
         guard let type = line.type else { return }
         let payload = line.payload
         // 與舊碼同義的逐欄後援:外層 timestamp 缺/壞 → 用 payload.timestamp(皆經 ISO8601.parse)。
-        let timestamp = line.timestamp.flatMap(ISO8601.parse) ?? payload?.timestamp.flatMap(ISO8601.parse)
+        let timestamp = line.timestamp.flatMap { ISO8601.parse($0) } ?? payload?.timestamp.flatMap { ISO8601.parse($0) }
 
         switch type {
         case "session_meta":

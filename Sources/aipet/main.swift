@@ -86,8 +86,10 @@ Task {
         var headline: String
 
         let dash: DashboardState
+        var outcomeForExit: RefreshOutcome?   // #48 §7:reindex exit-code 判定用
         if mutating {
             let outcome = await coordinator.refresh(fullReindex: command == "reindex")
+            outcomeForExit = outcome
             dash = outcome.dashboard
             let elapsed = String(format: "%.2fs", Date().timeIntervalSince(start))
             headline = outcome.skipped
@@ -136,6 +138,19 @@ Task {
 
         // 渲染邏輯(含 sink 隱私政策)集中在 StatusRenderer(純函式、可測試)。
         print(StatusRenderer.statusText(dashboard: dash, headline: headline, full: wantsFull))
+
+        // #48 §7:reindex 因 monotonic gate 阻擋而 preserve 任一 requested provider 時,
+        // 回傳**文件化、可區分**的非零狀態(exit 3;1=export 失敗、2=install-hook 用法)。
+        // 輸出僅 count-only(細節在 data-quality notes 的固定樣板)。
+        if command == "reindex", mutating {
+            let blocked = outcomeForExit?.providerOutcomes.values.filter {
+                if case .preservedHistoryMismatch = $0 { return true } else { return false }
+            }.count ?? 0
+            if blocked > 0 {
+                print("reindex blocked for \(blocked) provider(s) — history preserved (exit 3; see data-quality notes)")
+                exit(3)
+            }
+        }
 
     case "diag":
         // 唯讀、無網路、無寫入(除非 --out)。輸出為封閉詞彙的 redacted 診斷,可安全貼進 issue。

@@ -2,9 +2,10 @@ import Foundation
 
 // #48 Option C(pivot:issue #48 comment 5120184667 §2)——版本化 raw-ledger canonicalizer。
 //
-// 本階段邊界(owner 2026-07-30 裁決):只提供 canonicalization 與 monotonic comparison 的
-// 資料表示與判定;**不**實作 final-lock/CAS replacement gate、**不**改變任何 reindex outcome、
-// **不**接線到 UsageCoordinator——矩陣的 history-loss RED 案例在 gate 落地前必須維持紅燈。
+// 角色:canonicalization 與 monotonic comparison 的單一真相(資料表示與判定)。
+// 歷程:canonicalizer 階段(2026-07-30)本型別獨立驗收、未接線;gate 階段(2026-08-01,
+// commit 3ae3676 起)由 UsageCoordinator.fullReindex 的 final 判定區呼叫(monotonicGateDecision)。
+// 本型別自身仍不做任何 I/O 決策——replace/preserve 由 coordinator 依 verdict 執行。
 //
 // v1 規格(顯式、封閉):
 // - `canonicalizerVersion = 1`;`ledgerSchemaAssumption = "usage-event-jsonl/current"`。
@@ -206,7 +207,13 @@ public enum CanonicalLedgerV1 {
                 case 0x5C: escaped = true; sawEscapeInCurrent = true    // backslash
                 case 0x22:                                       // closing quote
                     inString = false
-                    lastString = String(decoding: buf, as: UTF8.self)
+                    // sol follow-up(字面對齊):嚴格轉換取代 lossy String(decoding:as:)——
+                    // 整份 Data 已過嚴格 UTF-8 gate,此處 nil 不可達;仍以 fail-closed 對待。
+                    guard let s = String(data: Data(buf), encoding: .utf8) else {
+                        result.hasEscapedKey = true
+                        return result
+                    }
+                    lastString = s
                     lastStringHadEscape = sawEscapeInCurrent
                     buf.removeAll(keepingCapacity: true)
                     sawEscapeInCurrent = false

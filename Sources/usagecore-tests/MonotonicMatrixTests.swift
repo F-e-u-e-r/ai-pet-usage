@@ -3,12 +3,13 @@ import UsageCore
 
 // #48 Option C binding matrix(pivot:issue #48 comment 5120184667 §6)。
 // 這是 SPEC 測試:斷言「ledger-authoritative monotonic compare-and-replace gate」的契約行為。
-// 現行實作尚無此 gate,因此依 mapping 文件預期 12 案例紅燈(MX01–05,07,11–16)、6 案例綠燈
-// (MX06,08,09,10,17,18)——紅燈是本輪的證明目標,不得為轉綠而弱化斷言(gate 變更屬 owner)。
+// 歷史:gate 落地前(commit 80eeb02 時點)13 案例紅燈(MX01–05,07,11–16,19;26 個失敗斷言)
+// 為「gate 缺席」的紅燈優先證明;gate 於 2026-08-01 接線(commit 3ae3676 起)後全數轉綠。
+// 斷言即契約 oracle,不得為任何實作方便而弱化(gate/oracle 變更屬 owner 裁決)。
 // 比較 oracle 為「測試側最小版」:直接比 UsageEvent 欄位 + MX15 檢查 raw JSONL key;
-// 刻意不是 production canonicalizer(後者於下一階段依契約 §2 另行實作與驗收)。
-// 預期 outcome 詞彙(preserved-history-mismatch 等)之 production enum 尚不存在;
-// 本輪只斷言 ledger 層行為(preserve / replace / 不留 partial)。
+// 刻意不是 production canonicalizer(CanonicalLedgerV1 已另行實作與驗收,本檔 oracle 保持獨立)。
+// production outcome enum(ProviderDataAction.preservedHistoryMismatch 等)已存在並由
+// DataIntegrityTests 斷言;本檔維持 ledger 層行為斷言(preserve / replace / 不留 partial)。
 
 // MARK: - 本檔專用 helpers(既有 diEvent/runRefresh 為 DataIntegrityTests 私有,此處自帶)
 

@@ -566,10 +566,16 @@ final class CoordinatorIntegrationTests: XCTestCase {
 
             XCTAssertTrue(reloaded.events.contains { $0.id == unavailableEvent.id },
                           "unavailable provider history must survive a full reindex")
-            XCTAssertFalse(reloaded.events.contains { $0.id == staleCodexEvent.id },
-                           "available provider history should be cleared before reimport")
-            XCTAssertTrue(reloaded.events.contains { $0.providerId == "codex" && $0.sourceKind == "codex-rollout" },
-                          "available provider events should be rebuilt")
+            // #48 pivot 遷移(必要性揭露:舊斷言「stale event 於 reimport 前被清掉」= 被作廢的
+            // 破壞性語意):baseline 內非 fixture 來源的 codex 事件會令 candidate 缺史 ⇒
+            // monotonic gate 阻擋、codex slice 全量 preserve;「合法 rebuild」情境由 MX09/MX20 鎖。
+            XCTAssertTrue(reloaded.events.contains { $0.id == staleCodexEvent.id },
+                          "candidate 缺 baseline 事件 ⇒ gate preserve,stale 事件必須存活")
+            XCTAssertFalse(reloaded.events.contains { $0.providerId == "codex" && $0.sourceKind == "codex-rollout" },
+                           "gate 阻擋 ⇒ fixture 事件不得半途混入(無 partial replacement)")
+            if case .preservedHistoryMismatch? = outcome.providerOutcomes["codex"] {} else {
+                XCTAssertTrue(false, "codex outcome 必須為 preservedHistoryMismatch")
+            }
             XCTAssertTrue(outcome.dashboard.dataQuality.contains {
                 $0 == "claude-code: history kept — provider unavailable during full reindex"
             })

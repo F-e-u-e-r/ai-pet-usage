@@ -445,6 +445,15 @@ final class CanonicalLedgerTests: XCTestCase {
         // 7) UTF-8 BOM 前綴。
         var u8bom = Data([0xEF, 0xBB, 0xBF]); u8bom.append(clLine("e1"))
         expectEncodingReject(u8bom, bom: 1, nul: 0, inv: 0, "UTF-8 BOM")
+        // 7b) sol follow-up:UTF-32BE 有 BOM 與 UTF-32LE 無 BOM 兩角落。
+        var u32beBOM = Data([0x00, 0x00, 0xFE, 0xFF]); u32beBOM.append(aliasJSON.data(using: .utf32BigEndian)!)
+        expectEncodingReject(u32beBOM, bom: 1, nul: 0, inv: 0, "UTF-32BE 有 BOM")
+        expectEncodingReject(aliasJSON.data(using: .utf32LittleEndian)!, bom: 0, nul: 1, inv: 0, "UTF-32LE 無 BOM")
+        // 7c) sol follow-up:NUL 與 invalid UTF-8 並存 ⇒ NUL 優先(單一分類,優先序測試鎖定)。
+        var nulAndInvalid = clLine("e1")
+        nulAndInvalid.insert(0x00, at: 5)
+        nulAndInvalid.append(contentsOf: [0xC3])   // truncated UTF-8 尾巴
+        expectEncodingReject(nulAndInvalid, bom: 0, nul: 1, inv: 0, "NUL+invalid 並存(NUL 優先)")
         // 8) 合法 BOM-less UTF-8 的 escaped-key 攻擊仍由既有規則攔截(schema test (a) 已鎖;此處覆核)。
         guard case .failure(let f8) = CanonicalLedgerV1.canonicalizeRawLines(Data((aliasJSON + "\n").utf8)),
               f8.escapedKeyNames == 1, f8.bomCount + f8.nulByteCount + f8.invalidEncodingCount == 0 else {

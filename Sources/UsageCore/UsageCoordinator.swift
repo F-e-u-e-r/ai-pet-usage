@@ -66,18 +66,35 @@ public struct DashboardState: Sendable {
     }
 }
 
+/// #48 pivot §7:per-provider data action(fullReindex 時逐 provider 如實揭示)。
+/// counts 僅供固定 count-only 呈現——絕不攜帶 event ID、unknown key、path 或 payload。
+public enum ProviderDataAction: Equatable, Sendable {
+    case replaced
+    case appendedCumulative
+    case preservedHistoryMismatch(retained: Int, missing: Int, changed: Int,
+                                  duplicates: Int, canonicalizationErrors: Int)
+    case preservedIncomplete
+    case preservedUnavailable
+    case notAttempted
+    case failedBeforeCommit
+}
+
 public struct RefreshOutcome: Sendable {
     public var transitions: [LimitTransition]
     public var dashboard: DashboardState
     public var insertedEvents: Int
     /// 另一個行程(app ↔ CLI)正持有資料鎖,本次刷新未執行寫入。
     public var skipped: Bool
+    /// #48 §7:fullReindex 時逐 requested provider 的 data action(增量刷新為空)。
+    public var providerOutcomes: [String: ProviderDataAction]
 
-    public init(transitions: [LimitTransition], dashboard: DashboardState, insertedEvents: Int, skipped: Bool = false) {
+    public init(transitions: [LimitTransition], dashboard: DashboardState, insertedEvents: Int,
+                skipped: Bool = false, providerOutcomes: [String: ProviderDataAction] = [:]) {
         self.transitions = transitions
         self.dashboard = dashboard
         self.insertedEvents = insertedEvents
         self.skipped = skipped
+        self.providerOutcomes = providerOutcomes
     }
 }
 
@@ -173,6 +190,53 @@ public actor UsageCoordinator {
     private var providerStaleFlags: [String: Bool] = [:]
 
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
+    private var ledgerURL: URL { dataDir.appendingPathComponent("ledger.jsonl") }
+    /// #48 §7:本次 refresh 的逐 provider data action(每輪 refresh 重置;僅 fullReindex 填寫)。
+    private var providerOutcomes: [String: ProviderDataAction] = [:]
+
+    /// #48 gate 判定(純函式,可測):whole-file raw canonicalization → per-provider baseline 切片 →
+    /// candidate 以實際持久化 bytes canonicalize → compareMonotonic。任一 raw/canonicalization
+    /// failure ⇒ preserve(count-only;檔級失敗無法歸屬 provider,對本 provider 一律 fail closed)。
+    public enum MonotonicGateDecision: Equatable, Sendable {
+        case pass
+        case preserve(retained: Int, missing: Int, changed: Int, duplicates: Int, canonicalizationErrors: Int)
+    }
+    public static func monotonicGateDecision(baselineRaw: Data, providerId: String,
+                                      candidate: [UsageEvent]) -> MonotonicGateDecision {
+        func canonErrors(_ f: CanonicalLedgerV1.FailureSummary) -> Int {
+            f.malformedLines + f.missingRequiredKeys + f.unknownTopLevelKeys + f.unknownTokenKeys
+                + f.duplicateJSONMembers + f.escapedKeyNames + f.bomCount + f.nulByteCount
+                + f.invalidEncodingCount + f.invalidTypes
+        }
+        switch CanonicalLedgerV1.canonicalizeRawLines(baselineRaw) {
+        case .failure(let f):
+            return .preserve(retained: 0, missing: 0, changed: 0,
+                             duplicates: f.duplicateIDs, canonicalizationErrors: canonErrors(f))
+        case .success(let whole):
+            let b = CanonicalLedgerV1.Slice(events: whole.events.filter {
+                $0.value.fields["providerId"] == .string(providerId)
+            })
+            // gate-r1 luna L4:candidate 只准含本 provider 的事件——壞 adapter 夾帶他 provider
+            // 事件會在 replace 時被整批注入(污染而非遺失,但同屬未授權寫入)⇒ fail closed。
+            guard candidate.allSatisfy({ $0.providerId == providerId }) else {
+                return .preserve(retained: b.count, missing: 0, changed: 0,
+                                 duplicates: 0, canonicalizationErrors: 1)
+            }
+            switch CanonicalLedgerV1.canonicalizePersistedBytes(of: candidate) {
+            case .failure(let f):
+                return .preserve(retained: b.count, missing: 0, changed: 0,
+                                 duplicates: f.duplicateIDs, canonicalizationErrors: canonErrors(f))
+            case .success(let c):
+                switch CanonicalLedgerV1.compareMonotonic(baseline: b, candidate: c) {
+                case .pass:
+                    return .pass
+                case .fail(let missing, let changed):
+                    return .preserve(retained: b.count, missing: missing, changed: changed,
+                                     duplicates: 0, canonicalizationErrors: 0)
+                }
+            }
+        }
+    }
     /// 持久化 scan-state(checked;供 reindex 前置「安全排序」用——失敗即 throw,呼叫端據此不 replace)。
     private func persistScanState() throws {
         try AtomicJSON.write(scanStates, to: scanStateURL)
@@ -278,6 +342,17 @@ public actor UsageCoordinator {
                          allEnabledRootsWatched: anyEnabled)
     }
 
+    /// #48 gate-r1 luna L6:run-level skip(in-flight/lock/state-poison)時,fullReindex 的
+    /// requested providers 如實標 not-attempted(增量刷新維持空 map)。
+    private func notAttemptedOutcomes(fullReindex: Bool) -> [String: ProviderDataAction] {
+        guard fullReindex else { return [:] }
+        var m: [String: ProviderDataAction] = [:]
+        for a in adapters where settings.enabledProviders.contains(a.providerId) {
+            m[a.providerId] = .notAttempted
+        }
+        return m
+    }
+
     // MARK: 刷新
 
     public func refresh(fullReindex: Bool = false) async -> RefreshOutcome {
@@ -285,7 +360,8 @@ public actor UsageCoordinator {
         if refreshInFlight {
             var dash = dashboard(now: now)
             dash.dataQuality.append("refresh skipped — a refresh is already in progress")
-            return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true)
+            return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true,
+                                  providerOutcomes: notAttemptedOutcomes(fullReindex: fullReindex))
         }
         refreshInFlight = true
         defer { refreshInFlight = false }
@@ -294,10 +370,12 @@ public actor UsageCoordinator {
         guard await refreshLock.acquireAsync(timeout: refreshLockTimeout) else {
             var dash = dashboard(now: now)
             dash.dataQuality.append("refresh skipped — another AI Pet Usage process (app or CLI) holds the data lock")
-            return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true)
+            return RefreshOutcome(transitions: [], dashboard: dash, insertedEvents: 0, skipped: true,
+                                  providerOutcomes: notAttemptedOutcomes(fullReindex: fullReindex))
         }
         defer { refreshLock.release() }
         refreshQualityNotes = []
+        providerOutcomes = [:]
         ledger.clearWriteError()   // R2-NIT:清除上一輪殘留的落盤失敗旗標,避免誤觸本輪的 break
 
         // 其他行程可能已推進帳本/掃描進度/限額狀態:先收斂再增量掃描,
@@ -315,7 +393,8 @@ public actor UsageCoordinator {
         }
         if ledger.loadError != nil || limits.loadError != nil || scanStateLoadError != nil {
             // 通知由 dashboard() 從 loadError 中央推導(C-MF8),此處不再手動 append。
-            return RefreshOutcome(transitions: [], dashboard: dashboard(now: now), insertedEvents: 0, skipped: true)
+            return RefreshOutcome(transitions: [], dashboard: dashboard(now: now), insertedEvents: 0, skipped: true,
+                                  providerOutcomes: notAttemptedOutcomes(fullReindex: fullReindex))
         }
         // #44 契約 C:持鎖後磁碟為唯一真相——**rebuildable** provider 整份採用磁碟狀態(取代陳舊記憶體、防止復活;
         // 重讀去重安全)。**cumulativeSnapshotOnly** provider(如 OpenCode)則整段保留記憶體 scan-state、不參與此磁碟
@@ -329,7 +408,31 @@ public actor UsageCoordinator {
             }
         scanStates = diskStates ?? [:]
         for (pid, s) in cumulativeInMemory { scanStates[pid] = s }   // cumulative 整段保留記憶體(忽略磁碟採用)
-        ledger.compact(retentionDays: settings.retentionDays, now: now) // 僅在持鎖時壓縮
+        // #48 gate-r1(luna L1/L2):compact 前的 raw 完整性 precheck + 失敗訊號。
+        // (a) typed 重寫會消滅 malformed/duplicate/unknown-key raw 行——compact「將動作」且 raw 層
+        //     可疑時跳過本輪 compact(證據保留;destructive gate 稍後對同一 raw 自然 fail closed)。
+        // (b) compact 落盤失敗 ⇒ 契約 step 4:本輪不得比較或 replacement(旗標令 gate 短路 preserve)。
+        var compactBlockedReason: String? = nil   // nil = compact 正常(applied/noop);非 nil = gate 必須 preserve
+        if ledger.compactWouldAct(retentionDays: settings.retentionDays, now: now) {
+            // gate-r2 luna L1-殘餘:讀不到 raw 或 canonicalization 失敗**一律**跳過 compact(fail closed)
+            // ——typed 重寫會消滅 malformed/duplicate/unknown-key raw 證據,不得在可疑/不可驗檔上發生。
+            if let raw = try? Data(contentsOf: ledgerURL),
+               case .success = CanonicalLedgerV1.canonicalizeRawLines(raw) {
+                // sol r3 MF3:raw 保存式 compact——只丟可解析且確定過期的行,其餘逐位元組保留
+                // (不經 typed round-trip,不改寫任何 provider 的 raw 表示)。
+                switch ledger.compactRawPreserving(retentionDays: settings.retentionDays, now: now, raw: raw) {
+                case .noop, .applied: break
+                case .failed, .poisoned, .skippedSuspectRaw: compactBlockedReason = "compact-failed"
+                }
+            } else {
+                compactBlockedReason = "raw-suspect"
+            }
+        } else {
+            switch ledger.compact(retentionDays: settings.retentionDays, now: now) {   // no-op 快速路徑(保留 poisoned 回報)
+            case .noop, .applied: break
+            case .failed, .poisoned, .skippedSuspectRaw: compactBlockedReason = "compact-failed"
+            }
+        }
 
         if fullReindex {
             let enabled = Set(adapters.filter { settings.enabledProviders.contains($0.providerId) }.map { $0.providerId })
@@ -338,6 +441,7 @@ public actor UsageCoordinator {
             }.map { $0.providerId })
             // 契約 F:不再「先清空再 append」(會變無操作/刪歷史);改為迴圈中「從零重掃 → 完整才切片取代」。
             fullReindexPreservedProviderIds = enabled.subtracting(rescan)   // 不可用者個別保留歷史
+            for pid in fullReindexPreservedProviderIds { providerOutcomes[pid] = .preservedUnavailable }   // #48 §7
         }
         var transitions: [LimitTransition] = []
         var inserted = 0
@@ -356,21 +460,92 @@ public actor UsageCoordinator {
                     let (result, newState) = try adapter.refreshUsage(state: ScanState())
                     switch result.completeness {
                     case .complete:
-                        // C-MF2 安全排序:先把此 provider 的 watermark 持久化為空,再 replace,最後才提交 newState。
-                        // 崩潰/寫失敗於任一步 → 磁碟留「空 watermark」→ 下輪安全重掃(id 去重),絕不 skip-and-miss。
-                        scanStates[pid] = ScanState()
-                        try persistScanState()   // checked;失敗即 throw → catch → 保留舊切片(不 replace)
-                        // C-MF6:重掃切片套用與 compact 同一保留期 cutoff,不重新引入超過保留期的過期事件。
+                        // #48 Option C gate(pivot §1/§3,owner 交易順序):
+                        // candidate 已於 final 判定區「外」由 adapter scan 建立(上一行);
+                        // 單一 retention cutoff——與 refresh 起點的 compact 用同一 `now`(C-MF6);
+                        // 以下為 final 判定區:重讀最新 raw baseline → 兩側 CanonicalLedgerV1 →
+                        // compareMonotonic → 同一 revision 邊界內 CAS replace;任何不通過/漂移/不可讀
+                        // ⇒ 全量 preserve(不 partial、不覆寫較新帳本)。UI 呈現一律在鎖外(回傳後)。
+                        // F17:scan 完整回讀 = 成功「觀測」(契約 §3 observation freshness)——
+                        // gate 稍後 preserve 與否是帳本側保護決策,不改變源觀測成功的事實
+                        //(源故障走 .incomplete / catch,該兩路不記 lastOk,維持 #74 語義)。
+                        providerLastOkAt[pid] = now
                         let cutoff = now.addingTimeInterval(-Double(settings.retentionDays) * 86400)
                         let freshKept = result.events.filter { $0.timestamp >= cutoff }
-                        inserted += try ledger.replaceProviderSlice(pid, with: freshKept)   // 交易式 set-replace,回傳採納數
-                        scanStates[pid] = newState
-                        transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: true, now: now)
-                        parseErrorCounts[pid] = result.parseErrors
-                        refreshErrors[pid] = nil
-                        providerLastOkAt[pid] = now   // F17:成功觀測(契約 §3 observation freshness)
+                        if let reason = compactBlockedReason {
+                            // 契約 step 4(luna L2)/luna L1:compact 失敗或 raw 可疑 ⇒ 不得比較,全量 preserve。
+                            fullReindexPreservedProviderIds.insert(pid)
+                            providerOutcomes[pid] = reason == "compact-failed"
+                                ? .failedBeforeCommit
+                                : .preservedHistoryMismatch(retained: 0, missing: 0, changed: 0,
+                                                            duplicates: 0, canonicalizationErrors: 1)
+                            refreshQualityNotes.append("\(pid): reindex blocked — compaction unavailable; history preserved")
+                            continue
+                        }
+                        ledger.reloadIfChanged()
+                        if ledger.hasUnreconciledSnapshot {
+                            // gate-r2 luna L3b-殘餘:unstable snapshot ⇒ 記憶體不可信,fail closed preserve。
+                            fullReindexPreservedProviderIds.insert(pid)
+                            providerOutcomes[pid] = .preservedHistoryMismatch(
+                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0)
+                            refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
+                            continue
+                        }
+                        // luna L3(b):expected revision = 記憶體「載入時」指紋(loadedRevision),
+                        // 使「typed 記憶體 == revision」為不變量;reload 後任何他人落盤都會令 CAS 失敗。
+                        let revision = ledger.loadedRevision()
+                        let baselineRaw: Data
+                        if let d = try? Data(contentsOf: ledgerURL) {
+                            baselineRaw = d
+                        } else if AtomicJSON.pathIsGenuinelyMissing(ledgerURL.path) {
+                            baselineRaw = Data()   // 合法空 baseline(初始化情境,pivot §5)
+                        } else {
+                            // 檔存在但不可讀 ⇒ fail closed preserve(count-only)。
+                            fullReindexPreservedProviderIds.insert(pid)
+                            providerOutcomes[pid] = .preservedHistoryMismatch(
+                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 1)
+                            refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 1)")
+                            continue
+                        }
+                        guard ledger.currentRevision().fp == revision.fp else {
+                            // 讀取與 stat 之間 baseline 已漂移 ⇒ 放棄並 preserve(owner §3:不覆寫,v1 不 retry)。
+                            fullReindexPreservedProviderIds.insert(pid)
+                            providerOutcomes[pid] = .preservedHistoryMismatch(
+                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0)
+                            refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
+                            continue
+                        }
+                        switch Self.monotonicGateDecision(baselineRaw: baselineRaw, providerId: pid, candidate: freshKept) {
+                        case .pass:
+                            // C-MF2 安全排序:先把此 provider 的 watermark 持久化為空,再 replace,最後才提交 newState。
+                            scanStates[pid] = ScanState()
+                            try persistScanState()   // checked;失敗即 throw → catch → 保留舊切片(不 replace)
+                            do {
+                                inserted += try ledger.replaceProviderSlice(pid, with: freshKept, expectedRevision: revision,
+                                                                            preservingRaw: baselineRaw)
+                                scanStates[pid] = newState
+                                transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: true, now: now)
+                                parseErrorCounts[pid] = result.parseErrors
+                                refreshErrors[pid] = nil
+                                providerOutcomes[pid] = .replaced
+                            } catch UsageLedger.CASError.revisionChanged {
+                                // compare 後、replace 前另一寫入落盤 ⇒ CAS 放棄,全量 preserve。
+                                fullReindexPreservedProviderIds.insert(pid)
+                                providerOutcomes[pid] = .preservedHistoryMismatch(
+                                    retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0)
+                                refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
+                            }
+                        case .preserve(let r, let m, let c, let d, let e):
+                            fullReindexPreservedProviderIds.insert(pid)   // 保留舊切片,不刪歷史
+                            providerOutcomes[pid] = .preservedHistoryMismatch(
+                                retained: r, missing: m, changed: c, duplicates: d, canonicalizationErrors: e)
+                            refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained \(r), missing \(m), changed \(c), duplicate \(d), canonicalization \(e))")
+                            parseErrorCounts[pid] = result.parseErrors
+                            refreshErrors[pid] = nil
+                        }
                     case .incomplete:
                         fullReindexPreservedProviderIds.insert(pid)   // 保留舊切片,不刪歷史
+                        providerOutcomes[pid] = .preservedIncomplete
                         refreshQualityNotes.append("\(pid): reindex incomplete — history preserved")   // 誠實通知(非 error)
                     }
                 } else {
@@ -385,15 +560,22 @@ public actor UsageCoordinator {
                     providerLastOkAt[pid] = now   // F17:成功觀測
                     if fullReindex {
                         // 走到 else 且 fullReindex → 必為 cumulativeSnapshotOnly(OpenCode):保留累計歷史、僅增量(不重建)。
+                        providerOutcomes[pid] = .appendedCumulative   // #48 §7:成功 append,非 preserved
                         refreshQualityNotes.append("\(pid): reindex kept cumulative history — not rebuildable")
                     }
                 }
             } catch {
                 refreshErrors[pid] = String(describing: error)
+                if fullReindex { providerOutcomes[pid] = .failedBeforeCommit }   // #48 §7:commit 前失敗如實
                 // C-MF4:帳本落盤失敗 → 停止後續 provider 的 append,避免下一個成功寫入把指紋更新到「含半寫位元組」
                 // 的磁碟、遮蔽未採用的批次(load/append 已設 expectedFingerprint=nil 強制下輪對帳)。
                 if ledger.writeError != nil { break }
             }
+        }
+        if fullReindex {
+            // #48 §7:mid-loop 中斷後未嘗試(或被 skip)的 requested provider 如實標 not-attempted。
+            let requested = Set(adapters.filter { settings.enabledProviders.contains($0.providerId) }.map(\.providerId))
+            for pid in requested where providerOutcomes[pid] == nil { providerOutcomes[pid] = .notAttempted }
         }
 
         transitions += limits.sweepExpiredWindows(now: now)
@@ -417,7 +599,8 @@ public actor UsageCoordinator {
             refreshQualityNotes.append("scan-state write failed — will re-scan next refresh")
         }
         lastRefreshAt = now
-        return RefreshOutcome(transitions: transitions, dashboard: dashboard(now: now), insertedEvents: inserted)
+        return RefreshOutcome(transitions: transitions, dashboard: dashboard(now: now),
+                              insertedEvents: inserted, providerOutcomes: providerOutcomes)
     }
 
     // MARK: Dashboard 組裝

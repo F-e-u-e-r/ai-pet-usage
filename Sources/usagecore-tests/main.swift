@@ -5,6 +5,7 @@ import Foundation
 let iso = ISO8601Tests()
 runSuite("ISO8601Tests", [
     ("testParseVariants", iso.testParseVariants),
+    ("testStrictParseRequiresFullConsumption", iso.testStrictParseRequiresFullConsumption),
 ])
 
 let scanner = JSONLScannerTests()
@@ -729,10 +730,22 @@ runSuite("DataIntegrityReadTests", [
 let diReindex = DataIntegrityReindexTests()
 runSuite("DataIntegrityReindexTests", [
     ("testIncompleteReindexPreservesOldSlice", diReindex.testIncompleteReindexPreservesOldSlice),
-    ("testCompleteZeroResultEmptiesRebuildableSlice", diReindex.testCompleteZeroResultEmptiesRebuildableSlice),
+    ("testCompleteZeroResultPreservesNonEmptyBaseline", diReindex.testCompleteZeroResultPreservesNonEmptyBaseline),
     ("testCumulativeSnapshotReindexPreservesHistory", diReindex.testCumulativeSnapshotReindexPreservesHistory),
     ("testStrictDiskAdoptionOfScanState", diReindex.testStrictDiskAdoptionOfScanState),
     ("testDeletedScanStateAdoptedAsEmpty", diReindex.testDeletedScanStateAdoptedAsEmpty),
+    ("testCASRejectsStaleMemoryReplace", diReindex.testCASRejectsStaleMemoryReplace),
+    ("testGateRejectsForeignProviderCandidateEvents", diReindex.testGateRejectsForeignProviderCandidateEvents),
+    ("testCompactPrecheckPreservesSuspectRawOnMixedAgeFile", diReindex.testCompactPrecheckPreservesSuspectRawOnMixedAgeFile),
+    ("testCASRefusesUnreconciledSnapshot", diReindex.testCASRefusesUnreconciledSnapshot),
+    ("testCompactSkippedWhenRawUnreadable", diReindex.testCompactSkippedWhenRawUnreadable),
+    ("testCompactRefusesStaleFingerprint", diReindex.testCompactRefusesStaleFingerprint),
+    ("testCompactRefusesUnreconciledSnapshot", diReindex.testCompactRefusesUnreconciledSnapshot),
+    ("testReplacePreservesForeignRawRepresentation", diReindex.testReplacePreservesForeignRawRepresentation),
+    ("testCASRefusesUnstattableLedgerPath", diReindex.testCASRefusesUnstattableLedgerPath),
+    ("testCompactPreservesForeignRawOnWiredPath", diReindex.testCompactPreservesForeignRawOnWiredPath),
+    ("testCompactRawPreservingKeepsGarbageSuffixTimestamp", diReindex.testCompactRawPreservingKeepsGarbageSuffixTimestamp),
+    ("testReplaceRefusesRawOnlyIDCollision", diReindex.testReplaceRefusesRawOnlyIDCollision),
     ("testReindexAppliesRetentionCutoff", diReindex.testReindexAppliesRetentionCutoff),
     ("testCumulativeBaselinePreservedWhenScanStateMissing", diReindex.testCumulativeBaselinePreservedWhenScanStateMissing),
     ("testCumulativeBaselinePreservedWhenDiskHasDifferentMark", diReindex.testCumulativeBaselinePreservedWhenDiskHasDifferentMark),
@@ -750,8 +763,8 @@ runSuite("DataIntegrityLedgerTests", [
     ("testEmptyLedgerFirstWriteFailurePreservesFile", diLedger.testEmptyLedgerFirstWriteFailurePreservesFile),
 ])
 
-// #48 Option C binding matrix(pivot comment 5120184667 §6)。SPEC 測試:依 mapping 文件,
-// 現階段(gate 未實作)預期 12 案例紅燈——紅燈為本輪證明目標,實作落地後必須全綠。
+// #48 Option C binding matrix(pivot comment 5120184667 §6)。SPEC 測試:gate 已於
+// 2026-08-01 接線,全數案例必須綠燈(歷史:落地前 13 案例紅燈為紅燈優先證明)。
 let mxMatrix = MonotonicMatrixTests()
 runSuite("MonotonicMatrixTests", [
     ("testMX01_candidateMissingHistoricalEvent_preserves", mxMatrix.testMX01_candidateMissingHistoricalEvent_preserves),
@@ -777,7 +790,7 @@ runSuite("MonotonicMatrixTests", [
     ("testMX20_emptyBaselineCompleteCandidate_initializes", mxMatrix.testMX20_emptyBaselineCompleteCandidate_initializes),
 ])
 
-// CanonicalLedgerV1 stage acceptance(#48 pivot §2;gate 未接線,矩陣 RED 案例維持紅燈)。
+// CanonicalLedgerV1 stage acceptance(#48 pivot §2;gate 已接線,由 coordinator 消費)。
 let clTests = CanonicalLedgerTests()
 runSuite("CanonicalLedgerTests", [
     ("testSchemaValidLineAndMissingRequiredKeys", clTests.testSchemaValidLineAndMissingRequiredKeys),

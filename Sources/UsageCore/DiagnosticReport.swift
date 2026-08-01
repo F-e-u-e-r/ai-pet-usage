@@ -69,6 +69,10 @@ public enum QualityCode: String, Codable, Sendable {
     case stateWriteFailed
     case reindexIncomplete
     case reindexKeptCumulative
+    /// #48 §7:monotonic gate 阻擋(count-only;count 取 missing 主計數,五計數在 mismatch 欄)。
+    case reindexHistoryMismatch
+    /// #48 gate-r1 luna L2/L1:compact 失敗或 raw 可疑而跳過 ⇒ 本輪不得比較,history preserved。
+    case reindexCompactionUnavailable
     case other
 }
 
@@ -176,10 +180,20 @@ public struct DiagnosticReport: Encodable, Sendable {
         public var state: String
         public var modifiedAge: String?
     }
+    /// #48 §7(gate-r1 luna L5):history-mismatch 的固定五計數(僅計數,無任何 payload/key/path)。
+    public struct MismatchCounts: Encodable, Sendable {
+        public var retained: Int
+        public var missing: Int
+        public var changed: Int
+        public var duplicate: Int
+        public var canonicalization: Int
+    }
     public struct Quality: Encodable, Sendable {
         public var code: String
         public var provider: String?
         public var count: Int?
+        /// 僅 `reindexHistoryMismatch` 使用;其餘 code 為 nil(additive optional,診斷 schema 相容)。
+        public var mismatch: MismatchCounts? = nil
     }
 
     // MARK: 固定標籤表(我方字面量,無執行期資料)
@@ -219,6 +233,8 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .stateWriteFailed: return "a state file could not be written — a rescan will reconcile next refresh"
         case .reindexIncomplete: return "reindex incomplete — provider history preserved"
         case .reindexKeptCumulative: return "reindex kept cumulative history — source is not fully rebuildable"
+        case .reindexHistoryMismatch: return "reindex blocked — candidate would lose or alter retained history; slice preserved"
+        case .reindexCompactionUnavailable: return "reindex blocked — compaction unavailable this refresh; history preserved"
         case .other: return "other data-quality note (details withheld)"
         }
     }
@@ -349,6 +365,18 @@ public extension DiagnosticReport {
         if rest.hasPrefix("history kept") {
             return Quality(code: QualityCode.historyKeptUnavailable.rawValue, provider: provider, count: nil)
         }
+        if rest.hasPrefix("reindex blocked — history mismatch (retained ") {
+            // gate-r1 luna L5/L7:錨定完整樣板頭;五計數全數保留(count 維持 missing 主計數以相容)。
+            let c = PrivacyRedaction.historyMismatchCounts(rest)
+            return Quality(code: QualityCode.reindexHistoryMismatch.rawValue, provider: provider,
+                           count: c?.1,
+                           mismatch: c.map { DiagnosticReport.MismatchCounts(
+                               retained: $0.0, missing: $0.1, changed: $0.2,
+                               duplicate: $0.3, canonicalization: $0.4) })
+        }
+        if rest.hasPrefix("reindex blocked — compaction unavailable") {
+            return Quality(code: QualityCode.reindexCompactionUnavailable.rawValue, provider: provider, count: nil)
+        }
         if rest.hasPrefix("reindex incomplete") {
             return Quality(code: QualityCode.reindexIncomplete.rawValue, provider: provider, count: nil)
         }
@@ -445,7 +473,11 @@ public extension DiagnosticReport {
             for q in quality {
                 var line = "  \(DiagnosticReport.qualityText(QualityCode(rawValue: q.code) ?? .other))"
                 if let pr = q.provider { line += " [\(pr)]" }
-                if let c = q.count { line += " ×\(c)" }
+                if let m = q.mismatch {
+                    // gate-r2 luna L5-殘餘:text 報告同樣呈現固定五計數(count-only,無 payload/key/path),
+                    // 與 JSON/share-safe 路徑一致——單一 count 不足以區分 missing/changed/duplicate。
+                    line += " (retained \(m.retained), missing \(m.missing), changed \(m.changed), duplicate \(m.duplicate), canonicalization \(m.canonicalization))"
+                } else if let c = q.count { line += " ×\(c)" }
                 L.append(line)
             }
         }

@@ -28,6 +28,21 @@ final class ISO8601Tests: XCTestCase {
         XCTAssertNil(ISO8601.parse("not a date"))
         XCTAssertNil(ISO8601.parse("2026-01-15"))
     }
+
+    // #48 gate-r4 sol MF2:strict 模式 = 整串消耗 + 明確時區(compact 丟棄判定用);lenient 不變。
+    func testStrictParseRequiresFullConsumption() {
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T10:00:00Z", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T10:00:00.500Z", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T18:00:00+08:00", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T18:00:00+0800", strict: true))
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00garbage", strict: true), "垃圾後綴")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00Zgarbage", strict: true), "Z 後殘字")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00", strict: true), "無時區 ⇒ 不明確")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00.Z", strict: true), "小數點後無數字")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+08:", strict: true), "半形式 offset")
+        // lenient 行為維持:垃圾後綴照樣解析(既有呼叫端相容)
+        XCTAssertNotNil(ISO8601.parse("2020-01-01T00:00:00garbage"))
+    }
 }
 
 // MARK: - JSONL scanner
