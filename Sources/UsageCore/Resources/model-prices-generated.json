@@ -300,24 +300,24 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.12,
-    "outputPerMillion": 0.35,
+    "inputPerMillion": 0.07,
+    "outputPerMillion": 0.34,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
+    "userOverride": false
   },
   {
     "providerId": "antigravity",
     "modelId": "gemma-4-31b-it",
     "displayName": "Gemma 4 31B",
-    "inputPerMillion": 0.14,
-    "outputPerMillion": 0.4,
+    "inputPerMillion": 0.1,
+    "outputPerMillion": 0.34,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.1
   },
   {
     "providerId": "claude-code",
@@ -743,54 +743,8 @@
   },
   {
     "providerId": "codex",
-    "modelId": "gpt-4o-mini-search-preview",
-    "displayName": "GPT-4o-mini Search Preview",
-    "inputPerMillion": 0.15,
-    "outputPerMillion": 0.6,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
-    "modelId": "gpt-4o-search-preview",
-    "displayName": "GPT-4o Search Preview",
-    "inputPerMillion": 2.5,
-    "outputPerMillion": 10.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
     "modelId": "gpt-5",
     "displayName": "GPT-5",
-    "inputPerMillion": 1.25,
-    "outputPerMillion": 10.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.125
-  },
-  {
-    "providerId": "codex",
-    "modelId": "gpt-5-chat",
-    "displayName": "GPT-5 Chat",
-    "inputPerMillion": 1.25,
-    "outputPerMillion": 10.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.125
-  },
-  {
-    "providerId": "codex",
-    "modelId": "gpt-5-codex",
-    "displayName": "GPT-5 Codex",
     "inputPerMillion": 1.25,
     "outputPerMillion": 10.0,
     "currency": "USD",
@@ -872,27 +826,15 @@
   },
   {
     "providerId": "codex",
-    "modelId": "gpt-5.1-chat",
-    "displayName": "GPT-5.1 Chat",
-    "inputPerMillion": 1.25,
-    "outputPerMillion": 10.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.125
-  },
-  {
-    "providerId": "codex",
     "modelId": "gpt-5.1-codex",
     "displayName": "GPT-5.1-Codex",
     "inputPerMillion": 1.25,
     "outputPerMillion": 10.0,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.125
+    "cacheReadPerMillion": 0.13
   },
   {
     "providerId": "codex",
@@ -913,10 +855,10 @@
     "inputPerMillion": 0.25,
     "outputPerMillion": 2.0,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.025
+    "cacheReadPerMillion": 0.03
   },
   {
     "providerId": "codex",
@@ -1075,27 +1017,27 @@
     "providerId": "codex",
     "modelId": "gpt-5.6-luna",
     "displayName": "GPT-5.6 Luna",
-    "inputPerMillion": 1.0,
-    "outputPerMillion": 6.0,
+    "inputPerMillion": 0.1,
+    "outputPerMillion": 0.6,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.1,
-    "cacheWrite5mPerMillion": 1.25
+    "cacheReadPerMillion": 0.01,
+    "cacheWrite5mPerMillion": 0.125
   },
   {
     "providerId": "codex",
     "modelId": "gpt-5.6-luna-pro",
     "displayName": "GPT-5.6 Luna Pro",
-    "inputPerMillion": 1.0,
-    "outputPerMillion": 6.0,
+    "inputPerMillion": 0.1,
+    "outputPerMillion": 0.6,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.1,
-    "cacheWrite5mPerMillion": 1.25
+    "cacheReadPerMillion": 0.01,
+    "cacheWrite5mPerMillion": 0.125
   },
   {
     "providerId": "codex",
@@ -1127,27 +1069,27 @@
     "providerId": "codex",
     "modelId": "gpt-5.6-terra",
     "displayName": "GPT-5.6 Terra",
-    "inputPerMillion": 2.5,
-    "outputPerMillion": 15.0,
+    "inputPerMillion": 1.0,
+    "outputPerMillion": 6.0,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.25,
-    "cacheWrite5mPerMillion": 3.125
+    "cacheReadPerMillion": 0.1,
+    "cacheWrite5mPerMillion": 1.25
   },
   {
     "providerId": "codex",
     "modelId": "gpt-5.6-terra-pro",
     "displayName": "GPT-5.6 Terra Pro",
-    "inputPerMillion": 2.5,
-    "outputPerMillion": 15.0,
+    "inputPerMillion": 1.0,
+    "outputPerMillion": 6.0,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-05)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.25,
-    "cacheWrite5mPerMillion": 3.125
+    "cacheReadPerMillion": 0.1,
+    "cacheWrite5mPerMillion": 1.25
   },
   {
     "providerId": "codex",
@@ -1255,18 +1197,6 @@
   },
   {
     "providerId": "codex",
-    "modelId": "o3-deep-research",
-    "displayName": "o3 Deep Research",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 40.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 2.5
-  },
-  {
-    "providerId": "codex",
     "modelId": "o3-mini",
     "displayName": "o3 Mini",
     "inputPerMillion": 1.1,
@@ -1311,18 +1241,6 @@
     "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
     "userOverride": false,
     "cacheReadPerMillion": 0.275
-  },
-  {
-    "providerId": "codex",
-    "modelId": "o4-mini-deep-research",
-    "displayName": "o4 Mini Deep Research",
-    "inputPerMillion": 2.0,
-    "outputPerMillion": 8.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.5
   },
   {
     "providerId": "codex",
