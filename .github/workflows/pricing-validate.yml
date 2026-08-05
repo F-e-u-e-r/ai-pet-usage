@@ -16,12 +16,14 @@ on:
     paths:
       - 'Sources/UsageCore/Resources/model-prices*.json'
       - 'Scripts/validate-price-list.py'
+      - 'Scripts/pricing-drift-allowlist.json'
       - '.github/workflows/pricing-validate.yml'
   push:
     branches: [main]
     paths:
       - 'Sources/UsageCore/Resources/model-prices*.json'
       - 'Scripts/validate-price-list.py'
+      - 'Scripts/pricing-drift-allowlist.json'
       - '.github/workflows/pricing-validate.yml'
 
 jobs:

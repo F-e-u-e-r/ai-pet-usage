@@ -6,9 +6,14 @@
 #   - 每日 01:00 UTC(= 09:00 Asia/Taipei,UTC+8 無 DST,與原 routine 同時段)+ 手動 dispatch;
 #   - 重用既有、已驗證的 Scripts/update-price-list.py(僅收 anthropic/openai/x-ai/google,
 #     規則見該檔),不改資料來源與 schema;
-#   - 開 PR 前先跑 Scripts/validate-price-list.py(schema + 對 HEAD 的漂移閘門),
+#   - 開 PR 前先跑 Scripts/validate-price-list.py(schema + 對 HEAD 的漂移閘門;
+#     真實 >5× 變價的唯一合法通道是已合併進 baseline 的
+#     Scripts/pricing-drift-allowlist.json,見該檔與驗證器檔頭),
 #     不過即讓 job 紅字並不開 PR —— 壞資料永遠進不了 PR;
-#   - 無變更即結束(不開空 PR);
+#   - 無變更即結束(不開空 PR;updater 對未變價條目沿用舊 effectiveFrom/source,
+#     所以「無變更」是真的零 diff,不會被日期噪音撐開);
+#   - 分支固定 chore/pricing-auto:單一 evergreen PR 每日原地更新(force-with-lease),
+#     不再逐日開新 PR 堆積;owner 合併後次日有變更會重建分支與 PR;
 #   - 合併永遠是 owner 的事(此 workflow 只開 PR,永不 auto-merge)。
 #
 # 已知殘餘限制:GITHUB_TOKEN 開的 PR 不會再觸發 pricing-validate.yml / swift-tests
@@ -31,6 +36,12 @@ on:
     - cron: '0 1 * * *'   # 09:00 Asia/Taipei
   workflow_dispatch: {}
 
+# 同一時間只跑一份(evergreen 分支的 force-with-lease 在並行 run 下會 stale-info
+# 紅掉後手;排隊而非取消,保留每次觸發的重新產生)。
+concurrency:
+  group: pricing-refresh
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -43,6 +54,42 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # 漂移閘門需要 HEAD 的 generated 舊檔比對
+
+      - name: Sync to live origin/main
+        run: |
+          # 排程/dispatch 的 checkout 釘在「觸發當下」的 main sha;若 run 在佇列中
+          # 等待時 evergreen PR 恰被合併,舊 sha 會重新產生已合併的變更,收斂失敗
+          # (r2 sol S2)。一律改以執行當下的 origin/main 為基準。
+          git fetch -q origin main
+          git reset --hard origin/main
+
+      - name: Seed generated state from open evergreen branch
+        id: seed
+        run: |
+          # 保留「首見日」語意:evergreen PR 未合併期間,若以 main 的舊檔為沿用
+          # 基準,已變價條目會每日被重標 effectiveFrom/source + 無意義 force-push
+          # (r2 luna-max L1)。以分支上的最新檔為 updater 的沿用基準;漂移閘門
+          # 的 --base 仍是 main,不受影響。main 現值另存快照給 updater 做「徹回
+          # 歸零 diff」的 provenance 正規化(r3 三審)。
+          # 「分支不存在」(ls-remote rc=2)才允許退回 main 基準;fetch/restore 的
+          # 暫時性失敗一律紅 —— 靜默退回會在綠燈下重標日期(r3 luna-max #3)。
+          GEN="Sources/UsageCore/Resources/model-prices-generated.json"
+          cp "$GEN" "$RUNNER_TEMP/gen-main.json"
+          echo "PRICING_MAIN_SNAPSHOT=$RUNNER_TEMP/gen-main.json" >> "$GITHUB_ENV"
+          if git ls-remote --exit-code -q origin refs/heads/chore/pricing-auto >/dev/null 2>&1; then
+            git fetch -q origin chore/pricing-auto
+            git restore --worktree --source FETCH_HEAD -- "$GEN"
+            echo "branch_sha=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+            echo "seeded from evergreen $(git rev-parse --short FETCH_HEAD)"
+          else
+            rc=$?
+            if [ "$rc" -ne 2 ]; then
+              echo "::error::git ls-remote 失敗(rc=${rc},非『分支不存在』);不靜默退回 main 基準"
+              exit "$rc"
+            fi
+            echo "branch_sha=" >> "$GITHUB_OUTPUT"
+            echo "no evergreen branch; main state is the baseline"
+          fi
 
       - name: Regenerate generated price list from OpenRouter
         run: python3 Scripts/update-price-list.py
@@ -60,6 +107,7 @@ jobs:
           fi
 
       - name: Validate (schema + drift vs HEAD)
+        id: validate
         if: steps.diff.outputs.changed == 'true'
         run: python3 Scripts/validate-price-list.py --base HEAD
 
@@ -70,22 +118,47 @@ jobs:
         run: |
           set -euo pipefail
           DATE="$(date -u +%Y-%m-%d)"
-          BRANCH="chore/pricing-auto-${DATE}"
+          # 固定分支名 = 單一 evergreen PR:已開就原地更新,不逐日堆積。
+          BRANCH="chore/pricing-auto"
           GEN="Sources/UsageCore/Resources/model-prices-generated.json"
+          # push 前重驗 main 未移動:sync 與此處之間 owner 可能恰好合併 evergreen
+          # (r3 luna-ultra #5)。視窗縮到秒級但無法歸零 —— GitHub 沒有「以 main
+          # 未動為前提」的原子推送;移動即明確紅,下次排程以新基準收斂。
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+            echo "::error::origin/main 在本 run 期間移動(可能剛合併 evergreen PR);中止本次推送,下次排程重跑"
+            exit 1
+          fi
+          # 所有 evergreen PR 查詢一律限定 same-repo(非 cross-repository)+ base=main:
+          # fork 也能開出同名 head 分支的 PR,--head 只比對 headRefName,誤認會讓
+          # bot 永遠跳過建 PR(silent-green 死鎖)或 reconcile 關到別人的 PR(r4 sol #1)。
+          evergreen_pr() {
+            gh pr list --head "$BRANCH" --base main --state open \
+              --json number,isCrossRepository \
+              -q '[.[] | select(.isCrossRepository | not)][0].number // empty'
+          }
+          # 內容與分支現狀完全一致且 PR 已開 → 無事可做,不做每日空 force-push
+          # (r2 luna-max L1 的後半:昨日已推的變更今日重推只剩 commit 時戳差)。
+          if [ -n "${{ steps.seed.outputs.branch_sha }}" ] \
+             && git diff --quiet "${{ steps.seed.outputs.branch_sha }}" -- "$GEN" \
+             && [ -n "$(evergreen_pr)" ]; then
+            echo "Evergreen PR already holds exactly this content; nothing to push."
+            exit 0
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add "$GEN"
           git commit -m "chore(pricing): refresh generated price list (${DATE})"
           git push --force-with-lease origin "$BRANCH"
-          if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
+          if [ -n "$(evergreen_pr)" ]; then
             echo "PR already open for $BRANCH; branch updated in place."
           else
             # PR 建立失敗維持致命(exit 原始 rc);僅在既有 stderr 之外「加註」診斷,
             # 不吞錯、不改 exit code —— 見檔頭「前置 repo 設定」。
             if gh pr create --base main --head "$BRANCH" \
-              --title "chore(pricing): auto price refresh ${DATE}" \
-              --body $'Automated regeneration of `model-prices-generated.json` from the OpenRouter public API.\n\nRuns in GitHub Actions where egress is unrestricted (the retired cloud routine could not reach openrouter.ai — CONNECT 403). Schema + drift gates passed in-job. Merge after reviewing the diff.'; then
+              --title "chore(pricing): auto price refresh (evergreen)" \
+              --body $'Automated regeneration of `model-prices-generated.json` from the OpenRouter public API.\n\nEvergreen PR: the fixed branch `chore/pricing-auto` is force-updated in place on each scheduled run until merged, so price changes accumulate here instead of piling up as dated PRs. Merging moves the drift baseline. Entries whose prices did not change keep their previous `effectiveFrom`/`source`, so the diff shows real price movement only.\n\nRuns in GitHub Actions where egress is unrestricted (the retired cloud routine could not reach openrouter.ai — CONNECT 403). Schema + drift gates passed in-job. Merge after reviewing the diff.'; then
               :
             else
               rc=$?
@@ -95,4 +168,33 @@ jobs:
               echo "  (API: PUT /repos/{owner}/{repo}/actions/permissions/workflow  can_approve_pull_request_reviews=true)"
               exit "${rc}"
             fi
+          fi
+
+      - name: Reconcile stale evergreen PR
+        if: always() && (steps.validate.outcome == 'failure' || steps.diff.outputs.changed == 'false')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 驗證紅(例:allowlist 到期後的 10× 內容)或 diff 歸零(上游回徹)時,
+          # 懸掛的 evergreen PR 不應繼續掛著可合併(r2 luna-ultra U1)。關 PR 附註,
+          # 分支保留;之後任何通過驗證的變更會重開。精準觸發條件:validate 真失敗
+          # 或 changed=false —— update 步驟自身的暫時性失敗(網路等)不會誤關。
+          # gh 查詢失敗必須讓本步驟紅(預設 bash -e):吞掉會在綠燈下留著
+          # 該關未關的 stale PR(r3 三審同見,前版 || true 是錯的)。
+          # same-repo + base=main 過濾:絕不誤關 fork 的同名分支 PR(r4 sol #1)。
+          BRANCH="chore/pricing-auto"
+          NUM=$(gh pr list --head "$BRANCH" --base main --state open \
+                --json number,isCrossRepository \
+                -q '[.[] | select(.isCrossRepository | not)][0].number // empty')
+          if [ -n "$NUM" ]; then
+            if [ "${{ steps.validate.outcome }}" = "failure" ]; then
+              REASON="current validation rejects this content (e.g. an expired drift-allowlist entry)"
+            else
+              REASON="the regenerated catalog now matches main (upstream reverted)"
+            fi
+            gh pr comment "$NUM" --body "Auto-closing: ${REASON}. A future run with valid changes will reopen an evergreen PR."
+            gh pr close "$NUM"
+            echo "closed stale evergreen PR #${NUM}"
+          else
+            echo "no open evergreen PR to reconcile"
           fi
