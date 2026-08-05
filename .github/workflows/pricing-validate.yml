@@ -6,9 +6,13 @@
 #   2. PR 上一律執行「base ref 的驗證器副本」—— 同一 PR 無法先改驗證器再夾帶壞資料
 #      (base 尚無腳本時 = 首次引入,才退回使用 head 版本)。
 # 已知且「接受」的殘餘限制:pull_request 執行的是 head 的 workflow 本體,同一 PR
-# 仍可改寫本檔的執行步驟讓綠勾失去意義。目前所有合併皆由 owner 人工執行(diff 可見),
-# 此閘門定位為合併前的機械訊號;若未來啟用任何 auto-merge,必須先以
-# ruleset / CODEOWNERS(.github/workflows/**)或 base-ref 執行模式封死這條路。
+# 仍可改寫本檔的執行步驟讓綠勾失去意義。此閘門定位為合併前的機械訊號。
+# auto-merge 現況(owner 決策 2026-08-05):僅存在一條「窄通道」—— 排程 routine
+# 對 bot evergreen PR 的 approve→普通 merge,且該通道以「diff 恰為
+# model-prices-generated.json 單一檔」為硬性前提,動到本檔/腳本/curated 的 PR
+# 一律不入通道、回到 owner 人工 —— 上述 workflow-rewrite 殘餘對窄通道因此封閉。
+# 若未來要把 auto-merge 擴大到任意 PR,原前置條件不變:必須先以 ruleset /
+# CODEOWNERS(.github/workflows/**)或 base-ref 執行模式封死 workflow-rewrite 這條路。
 name: pricing-validate
 
 on:
