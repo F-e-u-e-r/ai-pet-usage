@@ -71,6 +71,11 @@ struct DashboardRoot: View {
             // 深色下膠囊幾乎不可見(2026-08-08 使用者回報)。改為:文字退出膠囊
             // (sharedBackgroundVisibility(.hidden)),兩鈕之間以固定 spacer 斷開
             // → 各自獨立氣泡。macOS <26 沿用原本的群組(無此問題)。
+            // `#if compiler(>=6.2)`:`#available` 只是 runtime 分支,編譯期仍要 SDK 含
+            // ToolbarSpacer / sharedBackgroundVisibility 符號 —— 舊工具鏈(CI macos-15
+            // = Swift 6.1 / macOS 15 SDK)必須整段排除,否則 cannot find in scope
+            // (CI 紅字 2026-08-09)。Xcode 26(Swift ≥6.2)起才編 26-only 分支。
+            #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 ToolbarItem { refreshedLabel }
                     .sharedBackgroundVisibility(.hidden)
@@ -78,12 +83,20 @@ struct DashboardRoot: View {
                 ToolbarSpacer(.fixed)
                 ToolbarItem { exportButton }
             } else {
-                ToolbarItemGroup {
-                    refreshedLabel
-                    refreshButton
-                    exportButton
-                }
+                legacyToolbarGroup
             }
+            #else
+            legacyToolbarGroup
+            #endif
+        }
+    }
+
+    /// macOS <26(或舊 SDK 編譯)的原始工具列群組。
+    @ToolbarContentBuilder private var legacyToolbarGroup: some ToolbarContent {
+        ToolbarItemGroup {
+            refreshedLabel
+            refreshButton
+            exportButton
         }
     }
 
