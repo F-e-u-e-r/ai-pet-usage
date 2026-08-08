@@ -103,6 +103,25 @@ let ledger = LedgerTests()
 runSuite("LedgerTests", [
     ("testDedupeAndPersistence", ledger.testDedupeAndPersistence),
     ("testQueries", ledger.testQueries),
+    ("testForEachParityAndHalfOpenInterval", ledger.testForEachParityAndHalfOpenInterval),
+    ("testMissingThenRestoredLedgerReloads", ledger.testMissingThenRestoredLedgerReloads),
+    ("testInternPoolBoundedAfterRemovalAndFailedAppend", ledger.testInternPoolBoundedAfterRemovalAndFailedAppend),
+    ("testForEachEventReentrantMutationIsSafe", ledger.testForEachEventReentrantMutationIsSafe),
+    ("testRevisionAdvancesOnCommitsOnly", ledger.testRevisionAdvancesOnCommitsOnly),
+])
+
+let percentShares = PercentSharesTests()
+runSuite("PercentSharesTests", [
+    ("testSharesSumToExactly100", percentShares.testSharesSumToExactly100),
+    ("testSharesExtremeScaledAndRowQuota", percentShares.testSharesExtremeScaledAndRowQuota),
+    ("testReportProjectShareColumnUsesGroupQuota", percentShares.testReportProjectShareColumnUsesGroupQuota),
+])
+
+let aggCache = AggregationCacheTests()
+runSuite("AggregationCacheTests", [
+    ("testProjectPageCacheHitAndInvalidation", aggCache.testProjectPageCacheHitAndInvalidation),
+    ("testTrendsInvalidatesOnNewEvents", aggCache.testTrendsInvalidatesOnNewEvents),
+    ("testTrendsSeesFutureTimestampedEventAsNowAdvances", aggCache.testTrendsSeesFutureTimestampedEventAsNowAdvances),
 ])
 
 let limits = LimitEngineTests()
@@ -171,6 +190,8 @@ runSuite("PricingTests", [
     ("testUnknownModelIsNotSilentlyPriced", pricing.testUnknownModelIsNotSilentlyPriced),
     ("testUserOverrideBeatsBuiltin", pricing.testUserOverrideBeatsBuiltin),
     ("testBundledPriceListCoversCurrentModels", pricing.testBundledPriceListCoversCurrentModels),
+    ("testPriceIndexSemantics", pricing.testPriceIndexSemantics),
+    ("testPriceKeyCollisionAndExactVsWildcardOverrideParity", pricing.testPriceKeyCollisionAndExactVsWildcardOverrideParity),
 ])
 
 let updateModel = UpdateModelTests()

@@ -43,6 +43,11 @@ final class AppModel {
     var trendsRangeDays: Int = 30
     private(set) var trends: TrendsData?
 
+    /// Dashboard 視窗是否開啟(DashboardRoot onAppear/onDisappear 維護)。
+    /// 關閉時 refreshNow 不重算 Projects/Trends 聚合 —— FSEvents 高頻刷新下,
+    /// 沒人看的 All-time 聚合是 CPU / RSS 高水位的主要來源(2026-08-08 效能修正)。
+    private(set) var dashboardWindowOpen = false
+
     // 內部
     let coordinator: UsageCoordinator
     /// OpenRouter credits 監控(opt-in;獨立 15 分鐘節奏,刻意不掛 FSEvents 刷新風暴)。
@@ -167,9 +172,34 @@ final class AppModel {
             syncPetAfterDashboard()
 
             // 任何範圍(含 custom)都要跟著刷新,否則專案表會停留在舊資料。
-            await reloadProjectPage()
-            await reloadTrends()
+            // 視窗關閉時跳過(重開時 dashboardOpened() + 各分頁 .task 會補載)。
+            if dashboardWindowOpen {
+                await reloadProjectPage()
+                await reloadTrends()
+            }
         } while refreshPending
+    }
+
+    /// 重載寫回競態防護(xcheck r2 luna-ultra 提出、r3 luna-ultra 補強):任何兩條
+    /// in-flight 重載鏈(close→reopen 的越代殘鏈、refresh 鏈 vs reopen 鏈、range 快速
+    /// 切換)在 MainActor 上的 continuation **resume 順序不保證等於 actor 完成順序**,
+    /// 舊結果可能後寫覆蓋新結果並 stale 到下一輪 refresh。防護:每個 surface 一個單調
+    /// 發起序號,寫回時「只有最新發起者」落地 —— 舊 continuation 無論何時 resume,
+    /// 序號必不匹配而被丟棄(比 r2 的 per-generation 方案強:同代交錯也涵蓋)。
+    private var projectPageLoadSeq: UInt64 = 0
+    private var trendsLoadSeq: UInt64 = 0
+
+    /// DashboardRoot onAppear:恢復分頁聚合並立即補一次(關窗期間的變更)。
+    func dashboardOpened() {
+        dashboardWindowOpen = true
+        Task { [weak self] in
+            await self?.reloadProjectPage()
+            await self?.reloadTrends()
+        }
+    }
+
+    func dashboardClosed() {
+        dashboardWindowOpen = false
     }
 
     func fullReindex() async {
@@ -182,8 +212,10 @@ final class AppModel {
         // 重建前的舊值直到下次排程刷新(codex SEV2 round-2)。轉變(transitions)刻意
         // 不處理:重建是重放,不該觸發慶祝/通知。
         syncPetAfterDashboard()
-        await reloadProjectPage()
-        await reloadTrends()
+        if dashboardWindowOpen {
+            await reloadProjectPage()
+            await reloadTrends()
+        }
     }
 
     /// dashboard 更新後同步寵物側(tick / warning / treats / mood)。monitor-only 無寵物 → no-op。
@@ -412,11 +444,17 @@ final class AppModel {
     }
 
     func reloadProjectPage() async {
-        projectPage = await coordinator.projectPage(range: currentRange())
+        projectPageLoadSeq &+= 1
+        let seq = projectPageLoadSeq
+        let data = await coordinator.projectPage(range: currentRange())
+        if seq == projectPageLoadSeq { projectPage = data }   // 只有最新發起者可寫(見 seq 註解)
     }
 
     func reloadTrends() async {
-        trends = await coordinator.trendsData(days: trendsRangeDays)
+        trendsLoadSeq &+= 1
+        let seq = trendsLoadSeq
+        let data = await coordinator.trendsData(days: trendsRangeDays)
+        if seq == trendsLoadSeq { trends = data }
     }
 
     // MARK: - 匯出

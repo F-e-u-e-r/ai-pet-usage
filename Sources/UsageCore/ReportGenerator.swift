@@ -109,13 +109,16 @@ public enum ReportGenerator {
         }
         html += "</section>"
 
-        // 專案表
+        // 專案表。Share 欄整組配額(largest-remainder ‰):逐列獨立捨入的和可到 100.2%
+        // (6 個等量專案各 16.7%),與 in/out/cache >100% 同類(xcheck r1)。
         html += "<section><h2>Projects</h2><table><thead><tr><th>Project</th><th>Tokens</th><th>Est. cost</th><th>Agents</th><th>Top model</th><th>Last active</th><th>Share</th></tr></thead><tbody>"
-        for p in data.projects {
+        let projectMille = rowShares(rows: data.projects.map { $0.tokens.total },
+                                     periodTotal: data.totals.total, scale: 1000)
+        for (i, p) in data.projects.enumerated() {
             let last = p.lastActive.map { df.string(from: $0) } ?? "—"
             let projName = PrivacyRedaction.displayProjectName(projectName: p.projectName, projectId: p.projectId)
             // topModel 同樣過 sink 防護:絕對路徑形狀的模型 ID(損壞日誌/覆寫檔)不外洩(codex SEV1)。
-            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel.map(PrivacyRedaction.displayModelId) ?? "—"))</td><td>\(last)</td><td>\(pct(p.shareOfPeriod * 100))</td></tr>"
+            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel.map(PrivacyRedaction.displayModelId) ?? "—"))</td><td>\(last)</td><td>\(milleLabel(projectMille[i], nonZero: p.tokens.total > 0))</td></tr>"
         }
         if data.projects.isEmpty { html += "<tr><td colspan=\"7\">No usage in this period.</td></tr>" }
         html += "</tbody></table><p class=\"note\">Project names shown; full local paths are redacted by default.</p></section>"
@@ -287,6 +290,74 @@ public enum ReportGenerator {
 
     static func money(_ v: Double) -> String { fmtUSD(v, decimals: 3) }
     static func pct(_ v: Double) -> String { String(format: "%.1f%%", v) }
+
+    /// 各部分 → 合計**恰為 100** 的整數百分比(largest-remainder)。逐項四捨五入會出現
+    /// 1%+1%+99% = 101%(in/out/cache 列的 >100% 回報);此處先取地板,再按小數餘數
+    /// 由大到小補 1(平手取前者 → 決定性)。合計 ≤ 0 → 全 0;負數部分視為 0。
+    public static func integerPercentShares(_ parts: [Int]) -> [Int] {
+        integerShares(parts, scale: 100)
+    }
+
+    /// 一般化 largest-remainder:合計恰為 `scale`(100 = 整數百分比;1000 = 千分比,
+    /// 供一位小數的 share 欄)。合計累加走 Double —— Int 累加對合法的極端輸入
+    /// ([Int.max, 1])會 overflow trap(xcheck r1);Double 對現實 token 量(< 2^53)
+    /// 精確,超出後僅比例微差,決定性(floor + 餘數排序 + index 平手)不變。
+    /// `scale` 為顯示解析度,上限 10^6:再大無顯示意義,且單元素時 raw == Double(scale)
+    /// 在 scale 接近 Int.max 時會因浮點上舍讓 Int(...) 轉換越界 trap(xcheck r2 sol)。
+    public static func integerShares(_ parts: [Int], scale rawScale: Int) -> [Int] {
+        let scale = min(rawScale, 1_000_000)
+        let clamped = parts.map { max(0, $0) }
+        let total = clamped.reduce(0.0) { $0 + Double($1) }
+        guard total > 0, scale > 0 else { return clamped.map { _ in 0 } }
+        let raw: [Double] = clamped.map { Double($0) * Double(scale) / total }
+        var shares: [Int] = raw.map { Int($0.rounded(.down)) }
+        let remainders: [Double] = raw.map { $0 - $0.rounded(.down) }
+        var leftover = scale - shares.reduce(0, +)
+        var order = Array(raw.indices)
+        order.sort { a, b in
+            if remainders[a] == remainders[b] { return a < b }
+            return remainders[a] > remainders[b]
+        }
+        for i in order {
+            guard leftover > 0 else { break }
+            shares[i] += 1
+            leftover -= 1
+        }
+        return shares
+    }
+
+    /// 份額「列」的配額(largest-remainder):對**同分母的一組列**呼叫一次。`rows` 為
+    /// 顯示列的 token 數;`periodTotal` 為期間全量(顯示列可能是截斷子集,如 top-N ——
+    /// 差額作為隱藏的「其餘」一起參與配額,顯示列的和才恆 ≤ scale 且與全量分母一致;
+    /// 逐列獨立捨入是 in/out/cache >100% 的同類缺陷,xcheck r1 三鏡指出)。
+    /// 回傳與 rows 等長,並已做平手一致化(tieNormalizedShares)。
+    public static func rowShares(rows: [Int], periodTotal: Int, scale: Int) -> [Int] {
+        var parts = rows.map { max(0, $0) }
+        let shownSum = parts.reduce(0.0) { $0 + Double($1) }
+        let rest = max(0.0, Double(periodTotal) - shownSum)
+        parts.append(rest >= 9.2e18 ? Int.max : Int(rest.rounded()))
+        let shown = Array(integerShares(parts, scale: scale).dropLast())
+        return tieNormalizedShares(parts: rows, shares: shown)
+    }
+
+    /// 平手一致化:largest-remainder 的 index 決勝必然給「相同 part 值」不同配額
+    /// ([6,6,988] → [1,0,99]),label 直接用配額會讓同值段一個 "1%" 一個 "<1%"
+    /// (xcheck r2 三鏡)。把同值 part 的 share 齊到組內最小 —— 同值同標、決定性、
+    /// 合計只減不增(恆 ≤ scale)。連續視覺(bar 寬度)仍可用原始配額或 raw 佔比。
+    public static func tieNormalizedShares(parts: [Int], shares: [Int]) -> [Int] {
+        var minByPart: [Int: Int] = [:]
+        for (p, s) in zip(parts, shares) {
+            let k = max(0, p)
+            minByPart[k] = min(minByPart[k] ?? s, s)
+        }
+        return zip(parts, shares).map { minByPart[max(0, $0.0)] ?? $0.1 }
+    }
+
+    /// 千分比 → 一位小數百分比字串;非零但配不到 0.1% 顯示 "<0.1%"(絕不把非零顯示成 0)。
+    public static func milleLabel(_ mille: Int, nonZero: Bool) -> String {
+        if nonZero && mille == 0 { return "<0.1%" }
+        return "\(mille / 10).\(mille % 10)%"
+    }
 
     private static let css = """
     :root { color-scheme: light dark; --fg:#1d2129; --bg:#ffffff; --muted:#667085; --line:#e5e8ee;
