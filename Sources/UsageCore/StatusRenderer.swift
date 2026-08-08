@@ -80,16 +80,21 @@ public enum StatusRenderer {
                      (dash.todayCost.unknownModelTokens > 0 ? " (+\(ReportGenerator.fmtTokens(dash.todayCost.unknownModelTokens)) tokens unpriced)" : ""))
         if !dash.topProjects.isEmpty {
             lines.append("top projects:")
-            for p in dash.topProjects.prefix(5) {
+            // Share 欄整組配額(‰;top-5 是截斷子集,「其餘」納入分母 —— 逐列獨立捨入
+            // 的和可超過 100%,與 in/out/cache 同類缺陷;xcheck r1 twin)。
+            let shown = Array(dash.topProjects.prefix(5))
+            let mille = ReportGenerator.rowShares(rows: shown.map { $0.tokens.total },
+                                                  periodTotal: dash.todayTotals.total, scale: 1000)
+            for (i, p) in shown.enumerated() {
                 // sink 端 fail-closed:即使上游已 basename,顯示前仍過 displayProjectName。
                 // projectId 也必須先剝控制字元:name 不可用時 fallback 取其 basename,
                 // raw ID 夾帶換行可偽造輸出行(codex impl-review SEV1)。
                 let name = PrivacyRedaction.displayProjectName(
                     projectName: stripTerminalControls(p.projectName),
                     projectId: stripTerminalControls(p.projectId))
-                lines.append(String(format: "  %-32s %10s  %5.1f%%", (name as NSString).utf8String!,
+                lines.append(String(format: "  %-32s %10s  %6s", (name as NSString).utf8String!,
                                     (ReportGenerator.fmtTokens(p.tokens.total) as NSString).utf8String!,
-                                    p.shareOfPeriod * 100))
+                                    (ReportGenerator.milleLabel(mille[i], nonZero: p.tokens.total > 0) as NSString).utf8String!))
             }
         }
         if !dash.dataQuality.isEmpty {

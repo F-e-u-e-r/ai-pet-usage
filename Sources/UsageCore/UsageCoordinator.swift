@@ -156,6 +156,14 @@ public actor UsageCoordinator {
     private let refreshLock: FileLock
     private let refreshLockTimeout: TimeInterval
     private var refreshInFlight = false
+    /// 聚合快取(2026-08-08 效能修正):鍵 = 帳本世代 + 價目世代 + 範圍。FSEvents 觸發的
+    /// 高頻 refresh 會在事件集完全未變時重算 All-time 專案頁/趨勢(實測 92 天 12.4s),
+    /// 快取讓「無新事件的刷新」變 O(1)。世代任一推進即失效,絕不回傳過期聚合。
+    private var cachedProjectPage: (revision: UInt64, pricingStamp: UInt64, start: Date, end: Date, data: ProjectPageData)?
+    private var cachedTrends: (revision: UInt64, pricingStamp: UInt64, days: Int, day: Date,
+                               computedAt: Date, timeZoneID: String, data: TrendsData)?
+    /// 價目世代:使用者覆寫寫入時 +1(價目影響所有成本聚合)。
+    private var pricingStamp: UInt64 = 0
 
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
     /// 持久化 scan-state(checked;供 reindex 前置「安全排序」用——失敗即 throw,呼叫端據此不 replace)。
@@ -405,9 +413,21 @@ public actor UsageCoordinator {
 
     public func dashboard(now: Date = Date()) -> DashboardState {
         let today = DateInterval.today(now: now)
-        let todayEvents = ledger.events(in: today)
-        let todayTotals = todayEvents.reduce(TokenBreakdown.zero) { $0 + $1.tokens }
-        let todayCost = pricing.cost(of: todayEvents)
+        // 單趟累加今日總量 / 成本 / 逐 provider 分量(原本 materialize 全日事件陣列後
+        // 再逐 provider filter + 重複計價;成本逐筆累加 ≡ cost(of: [events]))。
+        struct ProviderAcc { var tokens = TokenBreakdown.zero; var cost = CostResult.zero }
+        var todayTotals = TokenBreakdown.zero
+        var todayCost = CostResult.zero
+        var todayByProviderAcc: [String: ProviderAcc] = [:]
+        ledger.forEachEvent(in: today) { e in
+            let c = self.pricing.cost(of: e)
+            todayTotals = todayTotals + e.tokens
+            todayCost = todayCost + c
+            var acc = todayByProviderAcc[e.providerId] ?? ProviderAcc()
+            acc.tokens = acc.tokens + e.tokens
+            acc.cost = acc.cost + c
+            todayByProviderAcc[e.providerId] = acc
+        }
 
         var limitStates: [ProviderLimitState] = []
         var snapshots: [UsageSnapshot] = []
@@ -419,10 +439,10 @@ public actor UsageCoordinator {
             let limit = limits.limitState(providerId: pid, ledger: ledger, settings: settings, now: now)
             limitStates.append(limit)
 
-            let providerEvents = todayEvents.filter { $0.providerId == pid }
-            let tokens = providerEvents.reduce(TokenBreakdown.zero) { $0 + $1.tokens }
+            let acc = todayByProviderAcc[pid] ?? ProviderAcc()
+            let tokens = acc.tokens
             byProvider.append(ProviderDaySummary(providerId: pid, displayName: adapter.displayName,
-                                                 tokens: tokens, cost: pricing.cost(of: providerEvents)))
+                                                 tokens: tokens, cost: acc.cost))
 
             let status: ProviderStatus
             if !availability.available {
@@ -452,14 +472,17 @@ public actor UsageCoordinator {
                 tokenInput: tokens.input,
                 tokenOutput: tokens.output,
                 tokenCache: tokens.cacheRead + tokens.cacheWrite,
-                estimatedCost: pricing.cost(of: providerEvents).knownUSD,
+                estimatedCost: acc.cost.knownUSD,
                 sourceDescription: availability.detail,
                 errorMessage: refreshErrors[pid]
             ))
         }
 
-        let hourEvents = ledger.events(in: DateInterval(start: now.addingTimeInterval(-3600), end: now))
-        let burnCost = hourEvents.isEmpty ? 0 : pricing.cost(of: hourEvents).knownUSD
+        var burnCostAcc = CostResult.zero
+        ledger.forEachEvent(in: DateInterval(start: now.addingTimeInterval(-3600), end: now)) {
+            burnCostAcc = burnCostAcc + self.pricing.cost(of: $0)
+        }
+        let burnCost = burnCostAcc.knownUSD
 
         var quality: [String] = []
         // C-MF8:狀態檔 poison 由 loadError 中央推導 → report/diag/status 重算 dashboard 時也看得到
@@ -516,20 +539,53 @@ public actor UsageCoordinator {
     }
 
     public func projectPage(range: DateInterval) -> ProjectPageData {
-        let events = ledger.events(in: range)
-        return ProjectPageData(
+        // 快取命中:世代未變 + 同起點 + 終點等價(兩終點都嚴格晚於最新事件 ⇒ 事件集相同;
+        // events(in:) 對終點半開)。today/All-time 的 end=now 每次呼叫都不同,故不能只比 end。
+        let rev = ledger.revision
+        let newest = ledger.newestEvent()?.timestamp
+        if let c = cachedProjectPage, c.revision == rev, c.pricingStamp == pricingStamp,
+           c.start == range.start,
+           c.end == range.end || (newest.map { c.end > $0 && range.end > $0 } ?? true) {
+            var data = c.data
+            data.range = range
+            return data
+        }
+        var totals = TokenBreakdown.zero
+        var cost = CostResult.zero
+        ledger.forEachEvent(in: range) { e in
+            totals = totals + e.tokens
+            cost = cost + self.pricing.cost(of: e)
+        }
+        let data = ProjectPageData(
             range: range,
             projects: ledger.projectSummaries(in: range, pricing: pricing),
             models: ledger.modelSummaries(in: range, pricing: pricing),
-            totals: events.reduce(.zero) { $0 + $1.tokens },
-            cost: pricing.cost(of: events)
+            totals: totals,
+            cost: cost
         )
+        cachedProjectPage = (rev, pricingStamp, range.start, range.end, data)
+        return data
     }
 
     /// Trends 分頁資料:近 `days` 天的日聚合 + 使用連續天數 + 週對比。純本機、零新依賴。
     public func trendsData(days: Int, now: Date = Date()) -> TrendsData {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
+        // 快取:世代 + 天數 + 本地日未變 ⇒ 事件集與日界皆相同(end=now 前移但無新事件)。
+        // xcheck r1(三鏡收斂)再加三個維度,任何一個不成立就重算:
+        // (1) newest **嚴格早於** computedAt:帳本若含「時間戳 ≥ 上次計算時刻」的事件
+        //     (來源日誌時鐘偏移),end=now 前移會把它納入 —— revision 不變也必須失效
+        //     (projectPage 的 newest 條件同思想)。等號不可命中:區間半開,ts == end
+        //     的事件被當時的計算排除,等號命中會讓它同日內永遠隱形(xcheck r2 三鏡)。
+        // (2) computedAt ≤ now:系統時鐘回撥後,舊快取的 end 反而比現在寬 —— 不得沿用;
+        // (3) 時區身分:同一 `today` 瞬間在歷史 offset 不同的時區下,日桶邊界不同。
+        if let c = cachedTrends, c.revision == ledger.revision, c.pricingStamp == pricingStamp,
+           c.days == days, c.day == today,
+           c.computedAt <= now,
+           (ledger.newestEvent()?.timestamp ?? .distantPast) < c.computedAt,
+           c.timeZoneID == TimeZone.current.identifier {
+            return c.data
+        }
         let start = cal.date(byAdding: .day, value: -(max(1, days) - 1), to: today) ?? today
         let daily = ledger.dailyBuckets(in: DateInterval(start: start, end: now), pricing: pricing)
         let streak = ledger.usageStreak(now: now)
@@ -537,8 +593,10 @@ public actor UsageCoordinator {
         let lastWeekStart = cal.date(byAdding: .day, value: -13, to: today) ?? today
         let thisWeek = ledger.totals(in: DateInterval(start: thisWeekStart, end: now)).total
         let lastWeek = ledger.totals(in: DateInterval(start: lastWeekStart, end: thisWeekStart)).total
-        return TrendsData(rangeDays: days, startDay: start, endDay: today, daily: daily,
-                          streak: streak, thisWeekTokens: thisWeek, lastWeekTokens: lastWeek)
+        let data = TrendsData(rangeDays: days, startDay: start, endDay: today, daily: daily,
+                              streak: streak, thisWeekTokens: thisWeek, lastWeekTokens: lastWeek)
+        cachedTrends = (ledger.revision, pricingStamp, days, today, now, TimeZone.current.identifier, data)
+        return data
     }
 
     // MARK: 報告
@@ -554,28 +612,43 @@ public actor UsageCoordinator {
             period = r
             title = t
         }
-        let events = ledger.events(in: period)
         let dash = dashboard(now: now)
+
+        // 單趟累加期間總量 / 成本 / 逐 provider 分量 / 日總量(原本 materialize 期間事件
+        // 陣列後做多趟 filter+reduce;92 天期間為實測熱點)。
+        struct ProviderAcc { var tokens = TokenBreakdown.zero; var cost = CostResult.zero }
+        let cal = Calendar.current
+        var totals = TokenBreakdown.zero
+        var cost = CostResult.zero
+        var perProvider: [String: ProviderAcc] = [:]
+        var dayTotals: [Date: Int] = [:]
+        let wantsDayBuckets = period.duration > 48 * 3600
+        ledger.forEachEvent(in: period) { e in
+            let c = self.pricing.cost(of: e)
+            totals = totals + e.tokens
+            cost = cost + c
+            var acc = perProvider[e.providerId] ?? ProviderAcc()
+            acc.tokens = acc.tokens + e.tokens
+            acc.cost = acc.cost + c
+            perProvider[e.providerId] = acc
+            if wantsDayBuckets {
+                dayTotals[cal.startOfDay(for: e.timestamp), default: 0] += e.tokens.total
+            }
+        }
 
         var providerRows: [ProviderDaySummary] = []
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
-            let evs = events.filter { $0.providerId == adapter.providerId }
+            let acc = perProvider[adapter.providerId] ?? ProviderAcc()
             providerRows.append(ProviderDaySummary(providerId: adapter.providerId, displayName: adapter.displayName,
-                                                   tokens: evs.reduce(.zero) { $0 + $1.tokens },
-                                                   cost: pricing.cost(of: evs)))
+                                                   tokens: acc.tokens, cost: acc.cost))
         }
 
         // 期間 ≤ 48 小時用小時刻度,否則用日刻度。
         var buckets: [(String, Int)] = []
-        let cal = Calendar.current
-        if period.duration <= 48 * 3600 {
+        if !wantsDayBuckets {
             let df = DateFormatter(); df.dateFormat = "MM-dd HH:00"
             buckets = ledger.hourlyBuckets(in: period, calendar: cal).map { (df.string(from: $0.start), $0.tokens) }
         } else {
-            var dayTotals: [Date: Int] = [:]
-            for e in events {
-                dayTotals[cal.startOfDay(for: e.timestamp), default: 0] += e.tokens.total
-            }
             let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
             buckets = dayTotals.keys.sorted().map { (df.string(from: $0), dayTotals[$0]!) }
         }
@@ -598,8 +671,8 @@ public actor UsageCoordinator {
             period: period,
             generatedAt: now,
             timezoneName: TimeZone.current.identifier,
-            totals: events.reduce(.zero) { $0 + $1.tokens },
-            cost: pricing.cost(of: events),
+            totals: totals,
+            cost: cost,
             byProvider: providerRows,
             limitStates: dash.limitStates,
             projects: ledger.projectSummaries(in: period, pricing: pricing),
@@ -622,10 +695,9 @@ public actor UsageCoordinator {
 
     /// 今日有 AI 活動的分鐘數(以 5 分鐘桶粗估),供互動引擎計算點心券。
     public func activeMinutesToday(now: Date = Date()) -> Double {
-        let events = ledger.events(in: .today(now: now))
         var buckets = Set<Int>()
-        for e in events {
-            buckets.insert(Int(e.timestamp.timeIntervalSince1970 / 300))
+        ledger.forEachEvent(in: .today(now: now)) {
+            buckets.insert(Int($0.timestamp.timeIntervalSince1970 / 300))
         }
         return Double(buckets.count) * 5
     }
@@ -648,5 +720,6 @@ public actor UsageCoordinator {
         overrides.append(p)
         try? AtomicJSON.write(overrides, to: pricingOverridesURL)
         pricing = PricingRegistry.loadDefault(overridesURL: pricingOverridesURL)
+        pricingStamp &+= 1   // 價目變動 → 聚合快取全部失效
     }
 }

@@ -205,35 +205,60 @@ private struct OpenRouterCreditsRow: View {
 
     var body: some View {
         let p = status.presentation(now: now)
-        HStack(spacing: 8) {
-            Circle().fill(Self.teal).frame(width: 8, height: 8)
-            Text("OpenRouter")
-                .font(.callout.weight(.medium))
-                .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            VStack(alignment: .trailing, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(p.primary)
-                        .font(.callout.weight(.semibold)).monospacedDigit()
-                        .foregroundStyle(p.barFraction == nil ? Color.secondary : .primary)
-                        .lineLimit(1).minimumScaleFactor(0.85)
-                    if let fraction = p.barFraction {
-                        CreditsRemainingBar(fraction: fraction, tint: Self.teal)
+        Group {
+            if p.barFraction == nil {
+                // 狀態/錯誤句(no key / key rejected / unreachable…):右欄擠壓會把
+                // 「key rejected — re-log in with opencode」截成「key rejected - re-l…」
+                // (2026-08-08 使用者回報)。改整寬第二行,完整句永遠可讀、可換行。
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Circle().fill(Self.teal).frame(width: 8, height: 8)
+                        Text("OpenRouter")
+                            .font(.callout.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let age = p.age {
+                            Text(age)
+                                .font(.caption).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
-                if let detail = p.detail {
-                    // 「· stale」只補在成功形式(of $…)上;失敗形式的 detail 已是
-                    // 「last $X · 2h」,再疊 stale 是重複標示(R2 grok P3-6)。
-                    Text(p.stale && p.barFraction != nil ? "\(detail) · stale" : detail)
-                        .font(.caption2).monospacedDigit()
+                    Text(p.detail.map { "\(p.primary) · \($0)" } ?? p.primary)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1).minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 16)   // 對齊 dot 後的文字欄
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Circle().fill(Self.teal).frame(width: 8, height: 8)
+                    Text("OpenRouter")
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(p.primary)
+                                .font(.callout.weight(.semibold)).monospacedDigit()
+                                .lineLimit(1).minimumScaleFactor(0.85)
+                            if let fraction = p.barFraction {
+                                CreditsRemainingBar(fraction: fraction, tint: Self.teal)
+                            }
+                        }
+                        if let detail = p.detail {
+                            // 「· stale」只補在成功形式(of $…)上;失敗形式的 detail 已是
+                            // 「last $X · 2h」,再疊 stale 是重複標示(R2 grok P3-6)。
+                            Text(p.stale ? "\(detail) · stale" : detail)
+                                .font(.caption2).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1).minimumScaleFactor(0.85)
+                        }
+                    }
+                    Text(p.age.map { "\($0)" } ?? "")
+                        .font(.caption).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
                 }
             }
-            Text(p.age.map { "\($0)" } ?? "")
-                .font(.caption).monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .trailing)
         }
         .help(p.tooltip)
         .accessibilityElement(children: .ignore)

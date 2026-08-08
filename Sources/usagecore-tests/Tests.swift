@@ -714,6 +714,113 @@ final class LedgerTests: XCTestCase {
         let burn = ledger.burnRatePerHour(window: 3600, now: date("2026-01-15T11:45:00Z"))
         XCTAssertEqual(burn, 900, accuracy: 0.1)
     }
+
+    func testForEachParityAndHalfOpenInterval() {
+        let ledger = UsageLedger(fileURL: nil)
+        ledger.append([
+            event("a", "2026-01-15T10:00:00Z"),
+            event("b", "2026-01-15T11:00:00Z", provider: "claude-code"),
+            event("c", "2026-01-16T00:00:00Z"),   // timestamp == end → 半開區間必須排除
+        ])
+        let day = DateInterval(start: date("2026-01-15T00:00:00Z"), end: date("2026-01-16T00:00:00Z"))
+        var walked: [String] = []
+        ledger.forEachEvent(in: day) { walked.append($0.id) }
+        XCTAssertEqual(walked, ["a", "b"], "forEachEvent 與 events(in:) 同語意(半開)")
+        XCTAssertEqual(ledger.events(in: day).map(\.id), ["a", "b"])
+        var claudeOnly: [String] = []
+        ledger.forEachEvent(in: day, providerId: "claude-code") { claudeOnly.append($0.id) }
+        XCTAssertEqual(claudeOnly, ["b"])
+        XCTAssertEqual(ledger.events(in: day, providerId: "claude-code").map(\.id), ["b"])
+        // 空範圍(end < 首事件)
+        var none: [String] = []
+        ledger.forEachEvent(in: DateInterval(start: date("2026-01-01T00:00:00Z"),
+                                             end: date("2026-01-02T00:00:00Z"))) { none.append($0.id) }
+        XCTAssertEqual(none, [])
+    }
+
+    func testMissingThenRestoredLedgerReloads() {
+        // xcheck r1(sol MF1):檔案被暫時移走(備份工具 / 使用者搬動)→ 空帳本(合法);
+        // 同一 inode 原樣移回(rename 不改 dev/ino/size/mtime,指紋不變)→ 必須重載,
+        // 不得因「指紋相同」永遠跳過而讓帳本從此永空。
+        let dir = makeTempDir()
+        let file = dir.appendingPathComponent("ledger.jsonl")
+        let aside = dir.appendingPathComponent("ledger.aside")
+        let ledger = UsageLedger(fileURL: file)
+        XCTAssertEqual(ledger.append([event("a", "2026-01-15T10:00:00Z")]), 1)
+        try! FileManager.default.moveItem(at: file, to: aside)
+        ledger.reloadIfChanged()
+        XCTAssertEqual(ledger.events.count, 0, "檔案缺失 → 空帳本(合法)")
+        XCTAssertNil(ledger.loadError, "缺檔不是 poisoned")
+        try! FileManager.default.moveItem(at: aside, to: file)
+        ledger.reloadIfChanged()
+        XCTAssertEqual(ledger.events.map(\.id), ["a"], "檔案回歸(同指紋)必須重載,不得永空")
+    }
+
+    func testInternPoolBoundedAfterRemovalAndFailedAppend() {
+        // xcheck r1(三鏡):池不隨事件移除收縮會把已淘汰字串永駐;失敗 append 不得污染池。
+        let dir = makeTempDir()
+        let file = dir.appendingPathComponent("ledger.jsonl")
+        let ledger = UsageLedger(fileURL: file)
+        ledger.append([event("old", "2026-01-01T00:00:00Z", project: "/p/very-old-project"),
+                       event("new", "2026-03-01T00:00:00Z", project: "/p/current")])
+        let before = ledger.internedStringCount
+        XCTAssertTrue(before > 0)
+        ledger.compact(retentionDays: 30, now: date("2026-03-05T00:00:00Z"))
+        XCTAssertEqual(ledger.events.map(\.id), ["new"])
+        XCTAssertTrue(ledger.internedStringCount < before, "compact 淘汰事件後池必須重建收縮")
+        let beforeReplace = ledger.internedStringCount
+        try! ledger.replaceProviderSlice("codex", with: [event("r1", "2026-03-02T00:00:00Z", project: "/p/replaced")])
+        XCTAssertEqual(ledger.internedStringCount, beforeReplace,
+                       "切片取代(同構事件)後池大小不變 —— 舊切片字串不殘留")
+        // 失敗的 append:把帳本檔換成同名目錄 → FileHandle 開檔必失敗 → 交易不提交
+        let count0 = ledger.internedStringCount
+        try! FileManager.default.removeItem(at: file)
+        try! FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        XCTAssertEqual(ledger.append([event("fail", "2026-03-03T00:00:00Z", project: "/p/poison")]), 0)
+        XCTAssertNotNil(ledger.writeError)
+        XCTAssertEqual(ledger.internedStringCount, count0, "失敗的 append 不得污染駐留池")
+        // xcheck r2:失敗的 replaceProviderSlice(落盤 throw、記憶體不變)同樣不得污染
+        var replaceThrew = false
+        do {
+            _ = try ledger.replaceProviderSlice(
+                "codex", with: [event("pf", "2026-03-04T00:00:00Z", project: "/p/replace-poison")])
+        } catch { replaceThrew = true }
+        XCTAssertTrue(replaceThrew, "落盤必失敗(路徑是目錄)")
+        XCTAssertEqual(ledger.internedStringCount, count0, "失敗的 replaceProviderSlice 不得污染駐留池")
+    }
+
+    func testForEachEventReentrantMutationIsSafe() {
+        // xcheck r1(三鏡):visitor 重入變異 ledger 不得越界 trap;走訪「進入時快照」。
+        let ledger = UsageLedger(fileURL: nil)
+        ledger.append([event("a", "2026-01-15T10:00:00Z"), event("b", "2026-01-15T11:00:00Z")])
+        let day = DateInterval(start: date("2026-01-15T00:00:00Z"), end: date("2026-01-16T00:00:00Z"))
+        var walked: [String] = []
+        ledger.forEachEvent(in: day) { e in
+            walked.append(e.id)
+            if e.id == "a" { ledger.reset() }
+        }
+        XCTAssertEqual(walked, ["a", "b"], "重入 mutation 下仍完整走訪進入時快照")
+        XCTAssertEqual(ledger.events.count, 0, "重入的 reset 本身生效")
+    }
+
+    func testRevisionAdvancesOnCommitsOnly() {
+        let dir = makeTempDir()
+        let ledger = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
+        let r0 = ledger.revision
+        XCTAssertEqual(ledger.append([event("a", "2026-01-15T10:00:00Z")]), 1)
+        XCTAssertTrue(ledger.revision > r0, "append 提交必須推進世代")
+        let r1 = ledger.revision
+        XCTAssertEqual(ledger.append([event("a", "2026-01-15T10:00:00Z")]), 0)
+        XCTAssertEqual(ledger.revision, r1, "全去重(無新事件)不推進世代")
+        ledger.compact(retentionDays: 3650, now: date("2026-01-20T00:00:00Z"))
+        XCTAssertEqual(ledger.revision, r1, "無事可壓縮不推進世代")
+        try! ledger.replaceProviderSlice("codex", with: [event("z", "2026-01-15T09:00:00Z")])
+        XCTAssertTrue(ledger.revision > r1, "切片取代提交必須推進世代")
+        // 駐留不改內容:重載後欄位值一致
+        let reloaded = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
+        XCTAssertEqual(reloaded.events.map(\.id), ledger.events.map(\.id))
+        XCTAssertEqual(reloaded.events.map(\.projectName), ledger.events.map(\.projectName))
+    }
 }
 
 // MARK: - LimitEngine
@@ -1922,6 +2029,65 @@ final class PricingTests: XCTestCase {
         XCTAssertTrue(p!.userOverride)
         XCTAssertEqual(p!.inputPerMillion, 2)
     }
+
+    func testPriceIndexSemantics() {
+        // 2026-08-08 效能修正:price() 改走 init 預建索引;此測試釘住選擇語意
+        // (精確 > 前綴、最長前綴優先、同鍵覆寫優先、provider 隔離)。
+        let entries = [
+            ModelPrice(providerId: "p", modelId: "m-1*", displayName: "wild-short",
+                       inputPerMillion: 1, outputPerMillion: 1, effectiveFrom: "", source: ""),
+            ModelPrice(providerId: "p", modelId: "m-1-pro*", displayName: "wild-long",
+                       inputPerMillion: 2, outputPerMillion: 2, effectiveFrom: "", source: ""),
+            ModelPrice(providerId: "p", modelId: "m-1-pro", displayName: "exact",
+                       inputPerMillion: 3, outputPerMillion: 3, effectiveFrom: "", source: ""),
+            ModelPrice(providerId: "q", modelId: "m-1*", displayName: "other-provider",
+                       inputPerMillion: 9, outputPerMillion: 9, effectiveFrom: "", source: ""),
+        ]
+        let r = PricingRegistry(entries: entries)
+        XCTAssertEqual(r.price(providerId: "p", modelId: "m-1-pro")?.displayName, "exact", "精確 > 前綴")
+        XCTAssertEqual(r.price(providerId: "p", modelId: "m-1-pro-max")?.displayName, "wild-long", "最長前綴優先")
+        XCTAssertEqual(r.price(providerId: "p", modelId: "m-1-x")?.displayName, "wild-short")
+        XCTAssertNil(r.price(providerId: "p", modelId: "zz"))
+        XCTAssertNil(r.price(providerId: "z", modelId: "m-1-pro"), "provider 隔離")
+        XCTAssertNil(r.price(providerId: "p", modelId: nil))
+        XCTAssertNil(r.price(providerId: "p", modelId: ""))
+        XCTAssertEqual(r.price(providerId: "q", modelId: "m-1-abc")?.displayName, "other-provider")
+
+        // 同鍵雙條目:userOverride 優先(舊排序語意)
+        let dup = PricingRegistry(entries: [
+            ModelPrice(providerId: "p", modelId: "m", displayName: "plain",
+                       inputPerMillion: 1, outputPerMillion: 1, effectiveFrom: "", source: ""),
+            ModelPrice(providerId: "p", modelId: "m", displayName: "override",
+                       inputPerMillion: 2, outputPerMillion: 2, effectiveFrom: "", source: "", userOverride: true),
+        ])
+        XCTAssertEqual(dup.price(providerId: "p", modelId: "m")?.displayName, "override")
+    }
+
+    func testPriceKeyCollisionAndExactVsWildcardOverrideParity() {
+        // xcheck r1(三鏡):串接鍵 ("a|b","c") 與 ("a","b|c") 同串 —— 分欄鍵不得互撞。
+        let ab_c = ModelPrice(providerId: "a|b", modelId: "c", displayName: "AB-C",
+                              inputPerMillion: 1, outputPerMillion: 1, effectiveFrom: "", source: "t")
+        let a_bc = ModelPrice(providerId: "a", modelId: "b|c", displayName: "A-BC",
+                              inputPerMillion: 9, outputPerMillion: 9, effectiveFrom: "", source: "t")
+        let reg = PricingRegistry(entries: [ab_c, a_bc])
+        XCTAssertEqual(reg.price(providerId: "a", modelId: "b|c")?.displayName, "A-BC")
+        XCTAssertEqual(reg.price(providerId: "a|b", modelId: "c")?.displayName, "AB-C")
+        XCTAssertNil(reg.price(providerId: "a|b|c", modelId: ""), "空 model 查詢回 nil")
+
+        // xcheck r1(luna-ultra #2 NOT REPRODUCED 的釘死):舊 filter+sort 實作第一趟先掃
+        // 全部 exact、第二趟才掃 wildcard —— 「內建 exact」恆勝「覆寫 wildcard」;
+        // 索引化不得改變此序(覆寫優先只在同層之內)。
+        let exact = ModelPrice(providerId: "p", modelId: "m1", displayName: "EXACT",
+                               inputPerMillion: 1, outputPerMillion: 1, effectiveFrom: "", source: "t")
+        let wildOverride = ModelPrice(providerId: "p", modelId: "m*", displayName: "WILD-OVR",
+                                      inputPerMillion: 5, outputPerMillion: 5, effectiveFrom: "", source: "t",
+                                      userOverride: true)
+        let reg2 = PricingRegistry(entries: [exact, wildOverride])
+        XCTAssertEqual(reg2.price(providerId: "p", modelId: "m1")?.displayName, "EXACT",
+                       "exact(任何來源)恆先於 wildcard(含覆寫)—— 與舊語義 parity")
+        XCTAssertEqual(reg2.price(providerId: "p", modelId: "m2")?.displayName, "WILD-OVR",
+                       "無 exact 時覆寫 wildcard 正常生效")
+    }
 }
 
 // MARK: - 報告
@@ -2312,6 +2478,196 @@ final class FmtUSDTests: XCTestCase {
         XCTAssertEqual(ReportGenerator.fmtTokens(999_999), "1.00M")
         XCTAssertEqual(ReportGenerator.fmtTokens(999_949), "999.9k")
         XCTAssertEqual(ReportGenerator.fmtTokens(-999_999_999), "-1.00B")
+    }
+}
+
+// MARK: - 百分比配額(largest remainder;2026-08-08 >100% 修正)
+
+final class PercentSharesTests: XCTestCase {
+    func testSharesSumToExactly100() {
+        // 使用者回報:in/out/cache 各自四捨五入 → 1%+1%+99% = 101%。
+        // largest-remainder 下有量時三段合計恆為 100。
+        XCTAssertEqual(ReportGenerator.integerPercentShares([5, 7, 988]), [0, 1, 99])
+        XCTAssertEqual(ReportGenerator.integerPercentShares([]), [])
+        XCTAssertEqual(ReportGenerator.integerPercentShares([0, 0, 0]), [0, 0, 0])
+        XCTAssertEqual(ReportGenerator.integerPercentShares([42]), [100])
+        XCTAssertEqual(ReportGenerator.integerPercentShares([1, 1, 1]), [34, 33, 33], "平手依索引補 1 → 決定性")
+        XCTAssertEqual(ReportGenerator.integerPercentShares([-5, 5]), [0, 100], "負值視為 0")
+        // 決定性擬隨機掃描:任意非負向量,有量時合計恆 100
+        var seed: UInt64 = 42
+        func rnd() -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 40) }
+        for _ in 0..<500 {
+            let parts = (0..<(1 + rnd() % 5)).map { _ in rnd() % 1_000_000 }
+            let shares = ReportGenerator.integerPercentShares(parts)
+            XCTAssertEqual(shares.count, parts.count)
+            if parts.reduce(0, +) > 0 {
+                XCTAssertEqual(shares.reduce(0, +), 100)
+            }
+        }
+    }
+
+    func testSharesExtremeScaledAndRowQuota() {
+        // xcheck r1(三鏡):合法極端輸入不得 overflow trap(Int 累加溢位)
+        XCTAssertEqual(ReportGenerator.integerPercentShares([Int.max, 1]).reduce(0, +), 100)
+        XCTAssertEqual(ReportGenerator.integerPercentShares([Int.max, Int.max, 1]).reduce(0, +), 100)
+        XCTAssertEqual(ReportGenerator.integerPercentShares([Int.max, 1]).first, 100, "極端比例仍決定性")
+        // scale 一般化(千分比,一位小數 share 欄)
+        XCTAssertEqual(ReportGenerator.integerShares([1, 1, 1], scale: 1000), [334, 333, 333])
+        // rowShares:截斷子集(top-N)把「其餘」納入分母 —— 顯示列對齊全量、和 ≤ scale
+        XCTAssertEqual(ReportGenerator.rowShares(rows: [500, 300], periodTotal: 1000, scale: 100), [50, 30])
+        XCTAssertEqual(ReportGenerator.rowShares(rows: [1, 1, 199], periodTotal: 201, scale: 1000), [5, 5, 990])
+        // 6 個等量專案:獨立捨入是 16.7%×6 = 100.2%(twin)。配額 [167×4, 166×2] 會讓
+        // 同值列顯示不同 —— 平手一致化(xcheck r2)齊到組內最小:16.6%×6 = 99.6%
+        // (恆 ≤100;一致性 > 恰和)。
+        let six = ReportGenerator.rowShares(rows: Array(repeating: 100, count: 6), periodTotal: 600, scale: 1000)
+        XCTAssertEqual(six, Array(repeating: 166, count: 6), "同值列必同 share(平手一致化)")
+        XCTAssertTrue(six.reduce(0, +) <= 1000)
+        // 平手一致化不動非平手列;scale 超界 clamp 不 trap(xcheck r2 sol)
+        XCTAssertEqual(ReportGenerator.tieNormalizedShares(parts: [6, 6, 988], shares: [1, 0, 99]), [0, 0, 99])
+        XCTAssertEqual(ReportGenerator.integerShares([1], scale: Int.max), [1_000_000], "scale clamp,不得 trap")
+        XCTAssertEqual(ReportGenerator.milleLabel(5, nonZero: true), "0.5%")
+        XCTAssertEqual(ReportGenerator.milleLabel(0, nonZero: true), "<0.1%")
+        XCTAssertEqual(ReportGenerator.milleLabel(0, nonZero: false), "0.0%")
+        XCTAssertEqual(ReportGenerator.milleLabel(1000, nonZero: true), "100.0%")
+    }
+
+    func testReportProjectShareColumnUsesGroupQuota() {
+        // xcheck r1 twin:報告 Projects 表 Share 欄不得逐列獨立捨入(6 等量 → 100.2%)。
+        let period = DateInterval(start: date("2026-01-15T00:00:00Z"), end: date("2026-01-15T23:00:00Z"))
+        let projects = (0..<6).map { i in
+            ProjectSummary(projectId: "/p/proj\(i)", projectName: "proj\(i)",
+                           tokens: TokenBreakdown(input: 100), cost: CostResult(knownUSD: 0.1),
+                           providers: ["codex"], topModel: "m", lastActive: date("2026-01-15T12:00:00Z"),
+                           shareOfPeriod: 100.0 / 600.0)
+        }
+        let data = ReportData(
+            title: "T", period: period, generatedAt: period.end, timezoneName: "UTC",
+            totals: TokenBreakdown(input: 600), cost: CostResult(knownUSD: 0.6),
+            byProvider: [], limitStates: [], projects: projects, models: [],
+            buckets: [], pricingRows: [], unknownModels: [], dataQuality: [], petSummary: nil)
+        let html = ReportGenerator.generateHTML(data)
+        // 獨立捨入是 6 列全 16.7%(和 100.2);配額 + 平手一致化(xcheck r2)為
+        // 6 列全 16.6%(和 99.6 ≤ 100,同值同標)。
+        XCTAssertEqual(html.components(separatedBy: "16.7%").count - 1, 0,
+                       "share 欄不得逐列獨立捨入")
+        XCTAssertEqual(html.components(separatedBy: "16.6%").count - 1, 6,
+                       "同值列必同 share(平手一致化)")
+    }
+}
+
+// MARK: - 聚合快取(coordinator;revision/pricing 失效鍵)
+
+final class AggregationCacheTests: XCTestCase {
+    private final class EventBox { var events: [UsageEvent] = [] }
+
+    private func runRefresh(_ coord: UsageCoordinator) {
+        let sem = DispatchSemaphore(value: 0)
+        Task { _ = await coord.refresh(); sem.signal() }
+        sem.wait()
+    }
+
+    private func projectPage(_ coord: UsageCoordinator, _ range: DateInterval) -> ProjectPageData {
+        let sem = DispatchSemaphore(value: 0)
+        var out: ProjectPageData?
+        Task { out = await coord.projectPage(range: range); sem.signal() }
+        sem.wait()
+        return out!
+    }
+
+    private func trends(_ coord: UsageCoordinator, days: Int, now: Date? = nil) -> TrendsData {
+        let sem = DispatchSemaphore(value: 0)
+        var out: TrendsData?
+        Task {
+            if let now { out = await coord.trendsData(days: days, now: now) }
+            else { out = await coord.trendsData(days: days) }
+            sem.signal()
+        }
+        sem.wait()
+        return out!
+    }
+
+    private func mkEvent(_ id: String, _ ts: Date, tokens: Int) -> UsageEvent {
+        UsageEvent(id: id, providerId: "mock", projectId: "/p/a", projectName: "a", modelId: "m",
+                   timestamp: ts, tokens: TokenBreakdown(input: tokens), sourceKind: "mock")
+    }
+
+    func testProjectPageCacheHitAndInvalidation() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        box.events = [mkEvent("e1", date("2026-02-01T10:00:00Z"), tokens: 100)]
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)
+
+        let start = date("2026-02-01T00:00:00Z")
+        let p1 = projectPage(coord, DateInterval(start: start, end: date("2026-02-01T12:00:00Z")))
+        XCTAssertEqual(p1.totals.total, 100)
+        // 同起點、兩終點皆晚於最新事件 → 事件集相同(快取等價);range 必須隨請求更新
+        let laterEnd = date("2026-02-01T13:00:00Z")
+        let p2 = projectPage(coord, DateInterval(start: start, end: laterEnd))
+        XCTAssertEqual(p2.totals.total, 100)
+        XCTAssertEqual(p2.range.end, laterEnd)
+        // 終點早於最新事件 → 事件集不同,不得回快取(過期資料是資料錯誤)
+        let p3 = projectPage(coord, DateInterval(start: start, end: date("2026-02-01T09:00:00Z")))
+        XCTAssertEqual(p3.totals.total, 0, "終點在最新事件前必須重算")
+        // 新事件落地(revision 推進)→ 失效重算
+        box.events.append(mkEvent("e2", date("2026-02-01T11:00:00Z"), tokens: 50))
+        runRefresh(coord)
+        let p4 = projectPage(coord, DateInterval(start: start, end: date("2026-02-01T12:00:00Z")))
+        XCTAssertEqual(p4.totals.total, 150)
+    }
+
+    func testTrendsInvalidatesOnNewEvents() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        let now = Date()
+        box.events = [mkEvent("e1", now.addingTimeInterval(-7200), tokens: 100)]
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)
+        let t1 = trends(coord, days: 30)
+        XCTAssertEqual(t1.daily.reduce(0) { $0 + $1.tokens }, 100)
+        _ = trends(coord, days: 30)   // 快取路徑也必須回同值(值相等即正確,不區分命中與否)
+        box.events.append(mkEvent("e2", now.addingTimeInterval(-3600), tokens: 50))
+        runRefresh(coord)
+        let t2 = trends(coord, days: 30)
+        XCTAssertEqual(t2.daily.reduce(0) { $0 + $1.tokens }, 150, "revision 推進後不得回過期趨勢")
+    }
+
+    func testTrendsSeesFutureTimestampedEventAsNowAdvances() {
+        // xcheck r1(三鏡收斂):帳本已含「時間戳晚於查詢時刻」的事件(來源日誌時鐘偏移)
+        // 時,same-day 快取(revision/day 皆未變)不得把它永遠排除 —— now 越過其時間戳後
+        // 必須重算納入(projectPage 的 newest 條件同思想,trends 原鍵漏了這層)。
+        let dir = makeTempDir()
+        let box = EventBox()
+        let cal = Calendar.current
+        let t10 = cal.startOfDay(for: Date()).addingTimeInterval(10 * 3600)   // 今天本地 10:00
+        box.events = [mkEvent("past", t10.addingTimeInterval(-3600), tokens: 100),
+                      mkEvent("skewed", t10.addingTimeInterval(1800), tokens: 50)]   // 10:30
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)
+        let q1 = trends(coord, days: 7, now: t10)
+        XCTAssertEqual(q1.daily.reduce(0) { $0 + $1.tokens }, 100, "10:00 查詢不含 10:30 的事件")
+        // 等號邊界(xcheck r2 三鏡):now == 事件 ts,半開區間排除;此結果進快取後,
+        // newest == computedAt 不得再命中,否則該事件同日內永遠隱形。
+        let qEq = trends(coord, days: 7, now: t10.addingTimeInterval(1800))
+        XCTAssertEqual(qEq.daily.reduce(0) { $0 + $1.tokens }, 100, "ts == end 半開排除")
+        let q2 = trends(coord, days: 7, now: t10.addingTimeInterval(3600))   // 11:00,revision 未變
+        XCTAssertEqual(q2.daily.reduce(0) { $0 + $1.tokens }, 150,
+                       "now 越過 skewed 事件後必須納入 —— same-day 快取(含等號快取)不得沿用")
     }
 }
 

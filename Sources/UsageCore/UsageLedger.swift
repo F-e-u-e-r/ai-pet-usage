@@ -16,6 +16,44 @@ public final class UsageLedger {
     public private(set) var events: [UsageEvent] = []
     private var ids: Set<String> = []
     private let fileURL: URL?
+    /// 記憶體事件集的單調世代號:load / append / compact / replace / reset 成功提交時 +1。
+    /// 供上層(coordinator)做聚合快取的失效鍵 —— 世代未變 ⇒ 事件集完全相同。
+    public private(set) var revision: UInt64 = 0
+    /// 字串駐留池:provider/model/project/sourceKind 等欄位在 9 萬+ 事件間大量重複,
+    /// 逐筆解碼各自持有一份會放大常駐記憶體;駐留讓相同值共用同一 String 緩衝。
+    /// 只駐留低基數欄位,id(唯一值)不駐留。
+    private var internPool: [String: String] = [:]
+
+    private func intern(_ s: String?) -> String? {
+        guard let s else { return nil }
+        if let hit = internPool[s] { return hit }
+        internPool[s] = s
+        return s
+    }
+
+    /// 事件欄位駐留(低基數欄位共用緩衝;id/timestamp/tokens 原樣)。
+    private func interned(_ e: UsageEvent) -> UsageEvent {
+        var e = e
+        e.providerId = intern(e.providerId) ?? e.providerId
+        e.accountId = intern(e.accountId)
+        e.projectId = intern(e.projectId)
+        e.projectName = intern(e.projectName)
+        e.modelId = intern(e.modelId)
+        e.sourceKind = intern(e.sourceKind) ?? e.sourceKind
+        e.sourcePath = intern(e.sourcePath)
+        return e
+    }
+
+    /// 池重建:清空後只重插現存事件仍引用的字串(原地重繫,無新配置)。
+    /// compact / replaceProviderSlice 移除事件後呼叫 —— 池的上界因此恆為
+    /// 「現存事件的 distinct 欄位值」,已被保留期淘汰的字串不再永駐(xcheck r1)。
+    private func rebuildInternPool() {
+        internPool = [:]
+        for i in events.indices { events[i] = interned(events[i]) }
+    }
+
+    /// 駐留池大小(diag / 測試觀察 boundedness 用;池為實作細節,勿據以編程)。
+    public var internedStringCount: Int { internPool.count }
     /// 我們上次讀寫後帳本檔的身分指紋(dev,ino,size,mtime);不符表示其他行程動過 → 重新載入。
     /// 只比大小會被「同大小內容替換」騙過(codex C4);故比完整指紋(#44 契約 D)。
     private var expectedFingerprint: FileFingerprint?
@@ -42,7 +80,8 @@ public final class UsageLedger {
         needsReload = false
         events = []
         ids = []
-        expectedFingerprint = nil
+        internPool = [:]
+        revision &+= 1   // 任何重建都推進世代(過度失效安全;失效不足才是 bug)
         guard let fileURL else { return }
         // C-MF3:讀資料與取指紋之間可能被併發(持鎖)寫入夾擊 → 記憶體配到過期位元組卻標成新指紋。
         // 讀前後各取指紋,重試取穩定快照;仍不穩則 expectedFingerprint=nil 強制下一輪重載對帳。
@@ -55,6 +94,12 @@ public final class UsageLedger {
             do {
                 d = try Data(contentsOf: fileURL)
             } catch {
+                // xcheck r1(sol MF1):讀不到時必須清掉舊指紋,否則「檔案被暫時移走→
+                // 空帳本→同一 inode 移回(指紋不變)」會讓 reloadIfChanged 永遠跳過重載,
+                // 帳本從此永空。清成 nil 後:檔案持續缺失 → nil==nil 穩態不重載(正確);
+                // 檔案再現(任何指紋)→ nil != fp 觸發重載恢復。unreadable 分支由
+                // reloadIfChanged 的 loadError 保護恢復 prior 指紋,不受影響。
+                expectedFingerprint = nil
                 if !AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
                     loadError = StateReadError.unreadable(underlying: error)   // 存在但讀不到/斷 symlink → poisoned
                 }
@@ -69,10 +114,13 @@ public final class UsageLedger {
         let decoder = AtomicJSON.decoder()
         var loaded: [UsageEvent] = []
         var firstDecodeError: Error?
-        for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+        loaded.reserveCapacity(lines.count)
+        ids.reserveCapacity(lines.count)
+        for line in lines {
             do {
                 let e = try decoder.decode(UsageEvent.self, from: Data(line))
-                if ids.insert(e.id).inserted { loaded.append(e) }
+                if ids.insert(e.id).inserted { loaded.append(interned(e)) }
             } catch {
                 // 零星無法解碼行(部分 append 的斷尾/斷頭)容忍——維持既有「斷尾→續寫復原」;僅記首錯。
                 if firstDecodeError == nil { firstDecodeError = error }
@@ -109,6 +157,7 @@ public final class UsageLedger {
             ids = priorIds
             expectedFingerprint = priorFingerprint
             needsReload = true   // 讀取失敗 → 保持強制重載,下輪再試
+            revision &+= 1       // 狀態又換回舊集 → 再推進一次世代(只多不少)
         }
     }
 
@@ -133,9 +182,14 @@ public final class UsageLedger {
             needsReload = true                    // C-MF4/R2-MF5:部分寫入可能已改磁碟 → 強制下一次 reloadIfChanged 對帳
             return 0
         }
-        for e in inserted { ids.insert(e.id) }    // 落盤成功才提交記憶體
-        events.append(contentsOf: inserted)
+        // 落盤成功才提交記憶體;駐留也在此時才做(xcheck r1:失敗的 append 不得污染池,
+        // 否則不可寫的帳本會讓連續失敗批次的字串無事件背書地永駐)。
+        for e in inserted {
+            ids.insert(e.id)
+            events.append(interned(e))
+        }
         events.sort { $0.timestamp < $1.timestamp }
+        revision &+= 1
         return inserted.count
     }
 
@@ -194,18 +248,25 @@ public final class UsageLedger {
     public func compact(retentionDays: Int, now: Date = Date()) {
         guard loadError == nil else { return }
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
+        // O(1) 短路:最舊事件仍在保留期內 → 無事可壓縮(原本每輪 refresh 都 filter
+        // 整個 9 萬+ 陣列,只為發現「沒東西可丟」)。
+        if let oldest = events.first, oldest.timestamp >= cutoff { return }
         let kept = events.filter { $0.timestamp >= cutoff }
         guard kept.count != events.count else { return }
         guard let fileURL else {   // 記憶體模式:直接套用
             events = kept
             ids = Set(kept.map(\.id))
+            rebuildInternPool()    // 事件被移除 → 池重建才有界(xcheck r1)
+            revision &+= 1
             return
         }
         do {
             _ = try Self.writeAllAtomic(kept, to: fileURL)   // 先落盤(可能 throw)
             events = kept                                     // 成功才提交記憶體
             ids = Set(kept.map(\.id))
+            rebuildInternPool()                               // 事件被移除 → 池重建才有界(xcheck r1)
             expectedFingerprint = currentFingerprint()
+            revision &+= 1
         } catch {
             // 落盤失敗 → 舊記憶體與舊檔案皆保留
         }
@@ -235,17 +296,24 @@ public final class UsageLedger {
         var merged = kept
         var seen = Set(kept.map(\.id))
         var accepted = 0   // 實際採納(去重後)數;供 coordinator 正確計數(codex NIT)
+        // 不預先 intern(xcheck r2):落盤失敗時 throw、記憶體不變,預駐留的字串卻會殘留
+        // 池中(反覆失敗的 reindex 會無事件背書地養大池)。提交後 rebuildInternPool()
+        // 統一駐留(append 的「成功才駐留」同一原則)。
         for e in freshEvents where seen.insert(e.id).inserted { merged.append(e); accepted += 1 }
         merged.sort { $0.timestamp < $1.timestamp }
         guard let fileURL else {   // 記憶體模式
             events = merged
             ids = seen
+            rebuildInternPool()    // 舊切片事件被移除 → 池重建才有界(xcheck r1)
+            revision &+= 1
             return accepted
         }
         _ = try Self.writeAllAtomic(merged, to: fileURL)   // 先落盤;throw → 記憶體不變(舊切片保留)
         events = merged
         ids = seen
+        rebuildInternPool()                                // 舊切片事件被移除 → 池重建才有界(xcheck r1)
         expectedFingerprint = currentFingerprint()
+        revision &+= 1
         return accepted
     }
 
@@ -253,32 +321,53 @@ public final class UsageLedger {
     public func reset() {
         events = []
         ids = []
+        internPool = [:]
         expectedFingerprint = nil
+        revision &+= 1
         if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
     }
 
     // MARK: - 查詢
 
-    public func events(in interval: DateInterval, providerId: String? = nil) -> [UsageEvent] {
-        // events 依時間排序,二分找下界。
-        var lo = 0, hi = events.count
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if events[mid].timestamp < interval.start { lo = mid + 1 } else { hi = mid }
-        }
-        var out: [UsageEvent] = []
-        var i = lo
-        while i < events.count, events[i].timestamp < interval.end {
-            if providerId == nil || events[i].providerId == providerId {
-                out.append(events[i])
+    /// 依時間排序的 events 中,timestamp ∈ [interval.start, interval.end) 的索引範圍(雙端二分)。
+    private func indexRange(of interval: DateInterval) -> Range<Int> {
+        func lowerBound(_ t: Date) -> Int {
+            var lo = 0, hi = events.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if events[mid].timestamp < t { lo = mid + 1 } else { hi = mid }
             }
-            i += 1
+            return lo
         }
-        return out
+        let lo = lowerBound(interval.start)
+        let hi = lowerBound(interval.end)
+        return lo..<max(lo, hi)
+    }
+
+    /// 免複製走訪:大範圍(如 All time 的 9 萬+ 筆)不再為每個聚合 materialize 子陣列
+    /// (2026-08-08 量測:重複的全陣列複製是 92 天查詢 12.4s / RSS 高水位的主因之一)。
+    /// 走訪的是「進入時的快照」:`snapshot` 是 COW 借用(無 mutation 時零複製),
+    /// 若 body 重入而變異 ledger(append/reset/…),self.events 換新緩衝、快照仍完整
+    /// 有效 —— 不會越界 trap,也不會走訪到混合狀態(xcheck r1)。
+    public func forEachEvent(in interval: DateInterval, providerId: String? = nil,
+                             _ body: (UsageEvent) -> Void) {
+        let snapshot = events
+        for i in indexRange(of: interval) {
+            let e = snapshot[i]
+            if providerId == nil || e.providerId == providerId { body(e) }
+        }
+    }
+
+    public func events(in interval: DateInterval, providerId: String? = nil) -> [UsageEvent] {
+        let range = indexRange(of: interval)
+        if providerId == nil { return Array(events[range]) }
+        return events[range].filter { $0.providerId == providerId }
     }
 
     public func totals(in interval: DateInterval, providerId: String? = nil) -> TokenBreakdown {
-        events(in: interval, providerId: providerId).reduce(.zero) { $0 + $1.tokens }
+        var acc = TokenBreakdown.zero
+        forEachEvent(in: interval, providerId: providerId) { acc = acc + $0.tokens }
+        return acc
     }
 
     public func newestEvent(providerId: String? = nil) -> UsageEvent? {
@@ -299,11 +388,10 @@ public final class UsageLedger {
             var byProvider: [String: Int] = [:]
             var byProject: [String: Int] = [:]
         }
-        let evs = events(in: interval)
         var buckets: [Date: Acc] = [:]
-        for e in evs {
+        forEachEvent(in: interval) { e in
             let comps = calendar.dateComponents([.year, .month, .day, .hour], from: e.timestamp)
-            guard let hourStart = calendar.date(from: comps) else { continue }
+            guard let hourStart = calendar.date(from: comps) else { return }
             var acc = buckets[hourStart] ?? Acc()
             acc.breakdown = acc.breakdown + e.tokens
             acc.byProvider[e.providerId, default: 0] += e.tokens.total
@@ -324,23 +412,22 @@ public final class UsageLedger {
     /// 熱圖需要含零用量的日,由呼叫端在日期範圍上逐日查表補零。
     public func dailyBuckets(in interval: DateInterval, calendar: Calendar = .current,
                              pricing: PricingRegistry? = nil) -> [DayBucket] {
-        let evs = events(in: interval)
         struct Acc {
             var tokens = 0
             var byProvider: [String: Int] = [:]
             var byProject: [String: Int] = [:]
             var byModel: [String: Int] = [:]
-            var events: [UsageEvent] = []
+            var cost = CostResult.zero
         }
         var buckets: [Date: Acc] = [:]
-        for e in evs {
+        forEachEvent(in: interval) { e in
             let day = calendar.startOfDay(for: e.timestamp)
             var acc = buckets[day] ?? Acc()
             acc.tokens += e.tokens.total
             acc.byProvider[e.providerId, default: 0] += e.tokens.total
             acc.byProject[e.projectName ?? "(unknown)", default: 0] += e.tokens.total
             acc.byModel[e.modelId ?? "unknown", default: 0] += e.tokens.total
-            if pricing != nil { acc.events.append(e) }   // 僅需計價時才留事件(省記憶體)
+            if let pricing { acc.cost = acc.cost + pricing.cost(of: e) }   // 逐筆累加 ≡ cost(of: [events])
             buckets[day] = acc
         }
         return buckets.keys.sorted().map { day in
@@ -348,14 +435,15 @@ public final class UsageLedger {
             return DayBucket(day: day, tokens: acc.tokens, byProvider: acc.byProvider,
                              topProject: acc.byProject.max { $0.value < $1.value }?.key,
                              topModel: acc.byModel.max { $0.value < $1.value }?.key,
-                             cost: pricing.map { $0.cost(of: acc.events) } ?? .zero)
+                             cost: acc.cost)
         }
     }
 
     /// 使用連續天數(current + longest)。以「有事件的本地日」集合計算;
     /// 相鄰判斷用日差(對 DST 安全),current 允許今天尚未使用時以昨天結尾。
     public func usageStreak(now: Date = Date(), calendar: Calendar = .current) -> UsageStreak {
-        let days = Set(events.map { calendar.startOfDay(for: $0.timestamp) })
+        var days = Set<Date>()
+        for e in events { days.insert(calendar.startOfDay(for: e.timestamp)) }   // 免中間陣列
         guard !days.isEmpty else { return UsageStreak(current: 0, longest: 0) }
 
         let sorted = days.sorted()
@@ -388,47 +476,64 @@ public final class UsageLedger {
     }
 
     public func projectSummaries(in interval: DateInterval, pricing: PricingRegistry) -> [ProjectSummary] {
-        let evs = events(in: interval)
-        let periodTotal = max(1, evs.reduce(0) { $0 + $1.tokens.total })
-        var groups: [String: [UsageEvent]] = [:]
-        for e in evs {
-            groups[e.projectId ?? "(unknown project)", default: []].append(e)
-        }
-        return groups.map { projectId, group in
-            let tokens = group.reduce(TokenBreakdown.zero) { $0 + $1.tokens }
+        // 單趟累加(取代「分組保留整組事件再各自 reduce」):All time 下不再把 9 萬+ 筆
+        // 複製進 per-project 陣列;成本逐筆累加 ≡ cost(of: [events])(定義即 reduce)。
+        struct Acc {
+            var tokens = TokenBreakdown.zero
+            var cost = CostResult.zero
             var modelTokens: [String: Int] = [:]
-            for e in group { modelTokens[e.modelId ?? "unknown", default: 0] += e.tokens.total }
-            let topModel = modelTokens.max { $0.value < $1.value }?.key
-            return ProjectSummary(
+            var providers: Set<String> = []
+            var lastActive: Date?
+            var lastProjectName: String??   // 語意同舊 group.last?.projectName(最後一筆,可為 nil)
+        }
+        var periodTotal = 0
+        var groups: [String: Acc] = [:]
+        forEachEvent(in: interval) { e in
+            periodTotal += e.tokens.total
+            var acc = groups[e.projectId ?? "(unknown project)"] ?? Acc()
+            acc.tokens = acc.tokens + e.tokens
+            acc.cost = acc.cost + pricing.cost(of: e)
+            acc.modelTokens[e.modelId ?? "unknown", default: 0] += e.tokens.total
+            acc.providers.insert(e.providerId)
+            acc.lastActive = max(acc.lastActive ?? .distantPast, e.timestamp)
+            acc.lastProjectName = .some(e.projectName)
+            groups[e.projectId ?? "(unknown project)"] = acc
+        }
+        let denom = max(1, periodTotal)
+        return groups.map { projectId, acc in
+            ProjectSummary(
                 projectId: projectId,
                 // 隱私:顯示名一律 basename 化(缺名或被塞入路徑時絕不外洩完整 cwd);
                 // projectId 仍保留完整值供穩定分組。UI 與 HTML 皆消費此已淨化的 projectName。
-                projectName: PrivacyRedaction.displayProjectName(projectName: group.last?.projectName, projectId: projectId),
-                tokens: tokens,
-                cost: pricing.cost(of: group),
-                providers: Array(Set(group.map(\.providerId))).sorted(),
-                topModel: topModel,
-                lastActive: group.map(\.timestamp).max(),
-                shareOfPeriod: Double(tokens.total) / Double(periodTotal)
+                projectName: PrivacyRedaction.displayProjectName(projectName: acc.lastProjectName ?? nil, projectId: projectId),
+                tokens: acc.tokens,
+                cost: acc.cost,
+                providers: acc.providers.sorted(),
+                topModel: acc.modelTokens.max { $0.value < $1.value }?.key,
+                lastActive: acc.lastActive,
+                shareOfPeriod: Double(acc.tokens.total) / Double(denom)
             )
         }
         .sorted { $0.tokens.total > $1.tokens.total }
     }
 
     public func modelSummaries(in interval: DateInterval, pricing: PricingRegistry) -> [ModelUsageSummary] {
-        let evs = events(in: interval)
-        var groups: [String: [UsageEvent]] = [:]
-        for e in evs {
-            let key = e.providerId + "/" + (e.modelId ?? "unknown")
-            groups[key, default: []].append(e)
+        struct Acc {
+            var providerId: String
+            var modelId: String
+            var tokens = TokenBreakdown.zero
+            var cost = CostResult.zero
         }
-        return groups.values.map { group in
-            ModelUsageSummary(
-                providerId: group[0].providerId,
-                modelId: group[0].modelId ?? "unknown",
-                tokens: group.reduce(.zero) { $0 + $1.tokens },
-                cost: pricing.cost(of: group)
-            )
+        var groups: [String: Acc] = [:]
+        forEachEvent(in: interval) { e in
+            let key = e.providerId + "/" + (e.modelId ?? "unknown")
+            var acc = groups[key] ?? Acc(providerId: e.providerId, modelId: e.modelId ?? "unknown")
+            acc.tokens = acc.tokens + e.tokens
+            acc.cost = acc.cost + pricing.cost(of: e)
+            groups[key] = acc
+        }
+        return groups.values.map {
+            ModelUsageSummary(providerId: $0.providerId, modelId: $0.modelId, tokens: $0.tokens, cost: $0.cost)
         }
         .sorted { $0.tokens.total > $1.tokens.total }
     }

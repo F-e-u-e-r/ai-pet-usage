@@ -63,33 +63,73 @@ struct DashboardRoot: View {
             TrendsView().tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }.tag(DashboardTab.trends)
         }
         .frame(minWidth: 860, minHeight: 600)
+        .onAppear { model.dashboardOpened() }
+        .onDisappear { model.dashboardClosed() }
         .toolbar {
-            ToolbarItemGroup {
-                if let last = model.dashboard.lastRefreshAt {
-                    Text("Refreshed \(timeAgo(last))")
-                        .font(Theme.FontScale.secondaryInfo)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Button {
-                    Task { await model.refreshNow() }
-                } label: {
-                    if model.refreshing { ProgressView().controlSize(.small) }
-                    else { Label("Refresh", systemImage: "arrow.clockwise") }
-                }
-                .keyboardShortcut("r")
-
-                Button {
-                    switch tab {
-                    case .today, .limits: model.exportToday()
-                    case .projects: model.exportCurrentRange()
-                    case .trends: model.exportTrends()
-                    }
-                } label: {
-                    Label(exportLabel, systemImage: "square.and.arrow.up")
-                }
-                .help("Export a self-contained local HTML report")
+            // macOS 26 玻璃工具列會把同一 ToolbarItemGroup 的項目合進一顆共用膠囊:
+            // 「Refreshed just now」溢出膠囊寬、刷新中 spinner 與分享鈕黏成一團、
+            // 深色下膠囊幾乎不可見(2026-08-08 使用者回報)。改為:文字退出膠囊
+            // (sharedBackgroundVisibility(.hidden)),兩鈕之間以固定 spacer 斷開
+            // → 各自獨立氣泡。macOS <26 沿用原本的群組(無此問題)。
+            // `#if compiler(>=6.2)`:`#available` 只是 runtime 分支,編譯期仍要 SDK 含
+            // ToolbarSpacer / sharedBackgroundVisibility 符號 —— 舊工具鏈(CI macos-15
+            // = Swift 6.1 / macOS 15 SDK)必須整段排除,否則 cannot find in scope
+            // (CI 紅字 2026-08-09)。Xcode 26(Swift ≥6.2)起才編 26-only 分支。
+            #if compiler(>=6.2)
+            if #available(macOS 26.0, *) {
+                ToolbarItem { refreshedLabel }
+                    .sharedBackgroundVisibility(.hidden)
+                ToolbarItem { refreshButton }
+                ToolbarSpacer(.fixed)
+                ToolbarItem { exportButton }
+            } else {
+                legacyToolbarGroup
             }
+            #else
+            legacyToolbarGroup
+            #endif
         }
+    }
+
+    /// macOS <26(或舊 SDK 編譯)的原始工具列群組。
+    @ToolbarContentBuilder private var legacyToolbarGroup: some ToolbarContent {
+        ToolbarItemGroup {
+            refreshedLabel
+            refreshButton
+            exportButton
+        }
+    }
+
+    @ViewBuilder private var refreshedLabel: some View {
+        if let last = model.dashboard.lastRefreshAt {
+            Text("Refreshed \(timeAgo(last))")
+                .font(Theme.FontScale.secondaryInfo)
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize()   // 完整呈現,不被工具列裁切
+        }
+    }
+
+    private var refreshButton: some View {
+        Button {
+            Task { await model.refreshNow() }
+        } label: {
+            if model.refreshing { ProgressView().controlSize(.small) }
+            else { Label("Refresh", systemImage: "arrow.clockwise") }
+        }
+        .keyboardShortcut("r")
+    }
+
+    private var exportButton: some View {
+        Button {
+            switch tab {
+            case .today, .limits: model.exportToday()
+            case .projects: model.exportCurrentRange()
+            case .trends: model.exportTrends()
+            }
+        } label: {
+            Label(exportLabel, systemImage: "square.and.arrow.up")
+        }
+        .help("Export a self-contained local HTML report")
     }
 
     private var exportLabel: String {
@@ -200,14 +240,28 @@ struct TokenMixBar: View {
                 }
             }
             .frame(height: 5)
-            Text("in \(pctLabel(input)) · out \(pctLabel(output)) · cache \(pctLabel(cache))")
+            Text(mixLabel)
                 .font(Theme.FontScale.secondaryInfo)
                 .foregroundStyle(Theme.textSecondary)
         }
     }
 
-    private func pctLabel(_ v: Double) -> String {
-        v < 0.005 && v > 0 ? "<1%" : "\(Int((v * 100).rounded()))%"
+    /// 三段合計恆 ≤100(largest-remainder)。"<1%" 判準用**實際占比 < 0.5%**,不是
+    /// 「配不到 1」:[1, 1, 199] 配額為 [1, 0, 99],兩個同值段若一個顯 1%、一個顯 <1%
+    /// 會自相矛盾(xcheck r1)—— 實際占比判準下兩者一致顯示 "<1%"。
+    private var mixLabel: String {
+        let cacheTokens = breakdown.cacheRead + breakdown.cacheWrite
+        let totalD = Double(max(1, breakdown.total))
+        let parts = [breakdown.input, breakdown.output, cacheTokens]
+        // 平手一致化:同值段不得一個 "1%" 一個 "<1%"(xcheck r2)。
+        let shares = ReportGenerator.tieNormalizedShares(
+            parts: parts, shares: ReportGenerator.integerPercentShares(parts))
+        func label(_ part: Int, _ share: Int) -> String {
+            guard part > 0 else { return "0%" }
+            if share == 0 || Double(part) / totalD < 0.005 { return "<1%" }
+            return "\(share)%"
+        }
+        return "in \(label(breakdown.input, shares[0])) · out \(label(breakdown.output, shares[1])) · cache \(label(cacheTokens, shares[2]))"
     }
 }
 
@@ -516,8 +570,14 @@ struct TodayView: View {
                                 .foregroundStyle(Theme.textSecondary)
                         }
                         VStack(spacing: 3) {
-                            ForEach(dash.topProjects.prefix(6)) { p in
-                                ProjectShareRow(project: p)
+                            // Share 欄整組配額(和恆 ≤100;top-N 是截斷子集,rowShares 把
+                            // 「其餘」納入分母,xcheck r1 twin)。
+                            let shownTop = Array(dash.topProjects.prefix(6))
+                            let topShares = ReportGenerator.rowShares(
+                                rows: shownTop.map { $0.tokens.total },
+                                periodTotal: dash.todayTotals.total, scale: 100)
+                            ForEach(Array(shownTop.enumerated()), id: \.element.id) { i, p in
+                                ProjectShareRow(project: p, sharePercent: topShares[i])
                             }
                         }
                     }
@@ -595,15 +655,18 @@ struct OnboardingCard: View {
 }
 
 /// Top projects 列:佔比以低對比背景條呈現(review #2),數字仍是主體。
+/// `sharePercent` 由父層對整組列一次配額(largest-remainder)—— 逐列獨立捨入
+/// 的和會超過 100%(xcheck r1 twin);背景條仍用連續的 raw 佔比。
 struct ProjectShareRow: View {
     let project: ProjectSummary
+    let sharePercent: Int
 
     var body: some View {
         HStack {
             Text(project.projectName).lineLimit(1).foregroundStyle(Theme.textPrimary)
             Spacer()
             Text(tk(project.tokens.total)).monospacedDigit().foregroundStyle(Theme.textSecondary)
-            Text(String(format: "%.0f%%", project.shareOfPeriod * 100))
+            Text(project.tokens.total > 0 && sharePercent == 0 ? "<1%" : "\(sharePercent)%")
                 .monospacedDigit()
                 .frame(width: 42, alignment: .trailing)
                 .foregroundStyle(Theme.textMuted)
@@ -836,8 +899,13 @@ struct ProjectTable: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        // Share 欄整組配額(‰,一位小數;和恆 ≤100%,xcheck r1 twin)。
+                        // 全集列 → 分母即列和。
+                        let mille = ReportGenerator.rowShares(
+                            rows: projects.map { $0.tokens.total },
+                            periodTotal: projects.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
                         ForEach(Array(projects.enumerated()), id: \.element.id) { index, p in
-                            row(p)
+                            row(p, shareMille: mille[index])
                                 .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
                         }
                     }
@@ -863,7 +931,7 @@ struct ProjectTable: View {
         .padding(.vertical, 7)
     }
 
-    private func row(_ p: ProjectSummary) -> some View {
+    private func row(_ p: ProjectSummary, shareMille: Int) -> some View {
         HStack(spacing: 8) {
             // 隱私:不在 tooltip 露出完整本機路徑(與報告的 redact 姿態一致)
             Text(p.projectName).lineLimit(1)
@@ -884,7 +952,7 @@ struct ProjectTable: View {
             Text(timeAgo(p.lastActive))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 78, alignment: .trailing)
-            Text(String(format: "%.1f%%", p.shareOfPeriod * 100)).monospacedDigit()
+            Text(ReportGenerator.milleLabel(shareMille, nonZero: p.tokens.total > 0)).monospacedDigit()
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 52, alignment: .trailing)
         }

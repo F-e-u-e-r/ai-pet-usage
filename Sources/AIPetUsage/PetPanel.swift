@@ -502,25 +502,51 @@ final class PetBubbleModel {
 }
 
 /// 泡泡子視窗的內容:只渲染 PixelBubble,錨在保留區底部(貼近寵物頂端)。所在視窗永遠
-/// `ignoresMouseEvents`,故永不吃點擊 —— 空白保留區的點擊穿透到後方 app。10Hz timeline 讓
-/// 泡泡於 `until` 過後自動淡出隱藏。
+/// `ignoresMouseEvents`,故永不吃點擊 —— 空白保留區的點擊穿透到後方 app。
+/// 到期隱藏改由「顯示時排程 sleep-until-expiry」驅動(2026-08-08 RAM/CPU 修正:
+/// 原本 `TimelineView(.animation(minimumInterval: 1/10, paused: false))` 讓這個常駐
+/// 子視窗在泡泡隱藏時也永久以 10Hz 重評與重繪)。排程規則(xcheck r1 三鏡):
+/// - 每次 `until` 變更先取消舊 sleeper 再排新的 → 同時至多一個,rapid show() 不堆積;
+/// - sleeper 醒來後**迴圈**檢查:未到期(時鐘回撥 / until 被延長)就以最新剩餘時間
+///   再入睡 —— 單次檢查後直接退出會在系統時鐘回撥時永遠失去「隱藏」喚醒(泡泡永顯);
+/// - machine sleep 跨越到期:醒後 remaining ≤ 0 → 立即隱藏(至多晚,不會丟)。
 struct PetBubbleView: View {
     @Environment(AppModel.self) private var model
     @Environment(PetBubbleModel.self) private var bubble
+    @State private var visibleNow = false
+    @State private var hideTask: Task<Void, Never>?
 
     var body: some View {
-        // 不隨 quietMode 暫停:否則到期後無 tick 觸發、泡泡不會自動消失。
-        TimelineView(.animation(minimumInterval: 1.0 / 10, paused: false)) { context in
-            GeometryReader { geo in
-                if context.date < bubble.until {
-                    PixelBubble(text: bubble.text, maxWidth: geo.size.width - 12)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
+        GeometryReader { geo in
+            if visibleNow {
+                PixelBubble(text: bubble.text, maxWidth: geo.size.width - 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
             }
         }
         .opacity(model.settings.petOpacity)
+        .onChange(of: bubble.until, initial: true) { _, until in
+            let showing = Date() < until
+            if showing != visibleNow {
+                withAnimation(.easeOut(duration: 0.2)) { visibleNow = showing }
+            }
+            hideTask?.cancel()
+            hideTask = nil
+            guard showing else { return }
+            hideTask = Task { @MainActor in
+                while !Task.isCancelled {
+                    let remaining = bubble.until.timeIntervalSinceNow
+                    if remaining <= 0 { break }
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(max(0.05, remaining) * 1_000_000_000))
+                    } catch { return }   // 已被較新的排程取消
+                }
+                if !Task.isCancelled, visibleNow, Date() >= bubble.until {
+                    withAnimation(.easeOut(duration: 0.2)) { visibleNow = false }
+                }
+            }
+        }
     }
 }
 

@@ -41,9 +41,43 @@ public struct ModelPrice: Codable, Sendable, Hashable, Identifiable {
 /// 而是回報 unknown,由 UI/報告明確標示(規格要求,避免默默算錯)。
 public struct PricingRegistry: Sendable {
     public private(set) var entries: [ModelPrice]
+    /// 精確鍵:provider 與 model 分欄成對雜湊。不得用分隔符串接 —— modelId 是外部
+    /// 字串,`("a|b","c")` 與 `("a","b|c")` 會在串接鍵下互撞(xcheck r1 三鏡一致)。
+    struct PriceKey: Hashable {
+        let provider: String
+        let model: String
+    }
+    /// 查價索引(entries 於 init 後不再變動):exact = (provider, modelId) → 條目(同鍵時
+    /// userOverride 優先,與舊排序語意一致);wildcards = provider → 依「覆寫 > 最長前綴 >
+    /// 載入序」排序的 `*` 條目(prefix 預先去掉 `*`)。原實作每次查價 filter+sort 全表,
+    /// 90k+ 事件 × 多趟聚合是實測熱點(2026-08-08:92 天報告 12.4s、38.9G instructions)。
+    private let exactIndex: [PriceKey: ModelPrice]
+    private let wildcardsByProvider: [String: [(prefix: String, entry: ModelPrice)]]
 
     public init(entries: [ModelPrice]) {
         self.entries = entries
+        var exact: [PriceKey: ModelPrice] = [:]
+        var wild: [String: [(offset: Int, entry: ModelPrice)]] = [:]
+        for (offset, e) in entries.enumerated() {
+            let key = PriceKey(provider: e.providerId, model: e.modelId)
+            if let existing = exact[key] {
+                if e.userOverride && !existing.userOverride { exact[key] = e }
+            } else {
+                exact[key] = e
+            }
+            if e.modelId.hasSuffix("*") {
+                wild[e.providerId, default: []].append((offset, e))
+            }
+        }
+        exactIndex = exact
+        wildcardsByProvider = wild.mapValues { list in
+            list.sorted { a, b in
+                if a.entry.userOverride != b.entry.userOverride { return a.entry.userOverride }
+                if a.entry.modelId.count != b.entry.modelId.count { return a.entry.modelId.count > b.entry.modelId.count }
+                return a.offset < b.offset   // 平手取載入序 → 決定性(舊 sort 不穩定,此為收斂)
+            }
+            .map { (String($0.entry.modelId.dropLast()), $0.entry) }
+        }
     }
 
     /// 四層載入:手動維護的價目 JSON(最可信)→ OpenRouter 生成的完整價目(長尾)
@@ -51,12 +85,12 @@ public struct PricingRegistry: Sendable {
     public static func loadDefault(overridesURL: URL?) -> PricingRegistry {
         var entries = bundledPrices(named: "model-prices") ?? builtInDefaults
         if let generated = bundledPrices(named: "model-prices-generated") {
-            let curatedKeys = Set(entries.map { $0.providerId + "|" + $0.modelId })
+            let curatedKeys = Set(entries.map { PriceKey(provider: $0.providerId, model: $0.modelId) })
             // grok-code 不從生成價目自動計價:其 token 為 context-growth 低估值,
             // 自動套價會把粗估偽裝成精確成本(v1 刻意 unpriced;見 docs/DATA_SOURCES.md)。
             // 手動維護價目與使用者覆寫仍可刻意定價。
             entries += generated.filter {
-                $0.providerId != "grok-code" && !curatedKeys.contains($0.providerId + "|" + $0.modelId)
+                $0.providerId != "grok-code" && !curatedKeys.contains(PriceKey(provider: $0.providerId, model: $0.modelId))
             }
         }
         if let overridesURL, let overrides = AtomicJSON.read([ModelPrice].self, from: overridesURL) {
@@ -95,18 +129,12 @@ public struct PricingRegistry: Sendable {
 
     public func price(providerId: String, modelId: String?) -> ModelPrice? {
         guard let modelId, !modelId.isEmpty else { return nil }
-        let candidates = entries.filter { $0.providerId == providerId }
-        // 覆寫 > 精確 > 最長前綴。
-        let ranked = candidates.sorted { a, b in
-            if a.userOverride != b.userOverride { return a.userOverride }
-            return a.modelId.count > b.modelId.count
-        }
-        for entry in ranked {
-            if entry.modelId == modelId { return entry }
-        }
-        for entry in ranked where entry.modelId.hasSuffix("*") {
-            let prefix = String(entry.modelId.dropLast())
-            if modelId.hasPrefix(prefix) { return entry }
+        // 精確 > 前綴;各層內覆寫優先(語意同原 filter+sort 實作 —— 舊實作第一趟先掃全部
+        // exact match、第二趟才掃 wildcard,故「覆寫的 wildcard」不勝過「內建的 exact」;
+        // xcheck r1 曾質疑此序,經舊碼對照確認一致,由 parity 測試釘死)。
+        if let hit = exactIndex[PriceKey(provider: providerId, model: modelId)] { return hit }
+        for (prefix, entry) in wildcardsByProvider[providerId] ?? [] where modelId.hasPrefix(prefix) {
+            return entry
         }
         return nil
     }
