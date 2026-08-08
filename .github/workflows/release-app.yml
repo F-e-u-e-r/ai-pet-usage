@@ -19,7 +19,7 @@ jobs:
   build-and-release:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build app bundle (ad-hoc signed, strict)
         run: |
@@ -53,7 +53,7 @@ jobs:
           ls -la *.zip
 
       - name: Upload artifact (always; the only output for workflow_dispatch)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: AI-Pet-Usage-${{ env.ZIP_LABEL }}-arm64
           path: dist/*.zip
