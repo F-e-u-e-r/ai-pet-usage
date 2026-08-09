@@ -110,6 +110,50 @@ runSuite("LedgerTests", [
     ("testRevisionAdvancesOnCommitsOnly", ledger.testRevisionAdvancesOnCommitsOnly),
 ])
 
+let trustMachine = TrustHealthMachineTests()
+runSuite("TrustHealthMachineTests", [
+    ("testEveryStateEntryAndExit", trustMachine.testEveryStateEntryAndExit),
+    ("testSchemaKillEscalationPathsAndAbsorbing", trustMachine.testSchemaKillEscalationPathsAndAbsorbing),
+    ("testReactivateSemantics", trustMachine.testReactivateSemantics),
+    ("testStaleOverlayAndRecoveryMapping", trustMachine.testStaleOverlayAndRecoveryMapping),
+])
+
+let trustFreshness = TrustFreshnessTests()
+runSuite("TrustFreshnessTests", [
+    ("testNilObservationNeverStale", trustFreshness.testNilObservationNeverStale),
+    ("testHysteresisBands", trustFreshness.testHysteresisBands),
+    ("testNegativeAgeIsClockChangedNotStale", trustFreshness.testNegativeAgeIsClockChangedNotStale),
+])
+
+let trustConflict = TrustConflictTests()
+runSuite("TrustConflictTests", [
+    ("testRaiseAfterThreeDivergentAndPairDedup", trustConflict.testRaiseAfterThreeDivergentAndPairDedup),
+    ("testIncomparableWhenObservedTooFarApart", trustConflict.testIncomparableWhenObservedTooFarApart),
+    ("testClearByConvergenceAndByWithdrawal", trustConflict.testClearByConvergenceAndByWithdrawal),
+    ("testPairDedupSurvivesNonAdjacencyAndReset", trustConflict.testPairDedupSurvivesNonAdjacencyAndReset),
+    ("testTwoStageExpiry", trustConflict.testTwoStageExpiry),
+])
+
+let trustOrdering = TrustOrderingTests()
+runSuite("TrustOrderingTests", [
+    ("testSameOrderedSequenceIsDeterministic", trustOrdering.testSameOrderedSequenceIsDeterministic),
+    ("testCrossSourcePermutationsSafetyInvariant", trustOrdering.testCrossSourcePermutationsSafetyInvariant),
+    ("testStabilizationConvergence", trustOrdering.testStabilizationConvergence),
+])
+
+let trustWiring = TrustWiringTests()
+runSuite("TrustWiringTests", [
+    ("testActiveOkAfterSuccessfulRefresh", trustWiring.testActiveOkAfterSuccessfulRefresh),
+    ("testDisabledBeatsEverything", trustWiring.testDisabledBeatsEverything),
+    ("testFailedRefreshIsTransientErrorNotStaleNotGeneric", trustWiring.testFailedRefreshIsTransientErrorNotStaleNotGeneric),
+    ("testStaleWhenObservationWindowExceededAndParseWarnings", trustWiring.testStaleWhenObservationWindowExceededAndParseWarnings),
+])
+
+let trustPlanLabel = TrustPlanLabelTests()
+runSuite("TrustPlanLabelTests", [
+    ("testDecisionTreeBranches", trustPlanLabel.testDecisionTreeBranches),
+])
+
 let percentShares = PercentSharesTests()
 runSuite("PercentSharesTests", [
     ("testSharesSumToExactly100", percentShares.testSharesSumToExactly100),
