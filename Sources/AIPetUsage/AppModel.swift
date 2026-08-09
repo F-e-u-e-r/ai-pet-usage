@@ -26,6 +26,8 @@ enum RangePreset: String, CaseIterable, Identifiable {
 final class AppModel {
     // 對 UI 暴露的狀態
     private(set) var dashboard: DashboardState = .empty
+    /// F17 信任層:各 provider local 源的健康狀態(Data Health 面板消費;refresh 後更新)。
+    private(set) var sourceStatuses: [DataSourceStatus] = []
     private(set) var settings: AppSettings
     private(set) var petState: PetStateData
     private(set) var mood = MoodEngine.Result(mood: .idle, animationSpeed: 1, summary: "starting…", reason: "Starting up…")
@@ -166,6 +168,7 @@ final class AppModel {
             let outcome = await coordinator.refresh()
             dashboard = outcome.dashboard
             activeMinutesToday = await coordinator.activeMinutesToday()
+            sourceStatuses = await coordinator.dataSourceStatuses()   // F17 信任層
 
             handleTransitions(outcome.transitions)
 
@@ -202,12 +205,18 @@ final class AppModel {
         dashboardWindowOpen = false
     }
 
+    /// F17:Data Health 面板開啟時主動拉一次(不等下一輪 refresh)。
+    func refreshSourceStatuses() async {
+        sourceStatuses = await coordinator.dataSourceStatuses()
+    }
+
     func fullReindex() async {
         reindexing = true
         defer { reindexing = false }
         let outcome = await coordinator.refresh(fullReindex: true)
         dashboard = outcome.dashboard
         activeMinutesToday = await coordinator.activeMinutesToday()
+        sourceStatuses = await coordinator.dataSourceStatuses()   // F17:reindex 也要刷新健康態(xcheck f17-r1)
         // 重建後同步寵物側,否則 Pet 卡/a11y/匯出的 mood(含 reason 裡的百分比)沿用
         // 重建前的舊值直到下次排程刷新(codex SEV2 round-2)。轉變(transitions)刻意
         // 不處理:重建是重放,不該觸發慶祝/通知。

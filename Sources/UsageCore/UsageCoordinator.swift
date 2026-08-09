@@ -164,6 +164,13 @@ public actor UsageCoordinator {
                                computedAt: Date, timeZoneID: String, data: TrendsData)?
     /// 價目世代:使用者覆寫寫入時 +1(價目影響所有成本聚合)。
     private var pricingStamp: UInt64 = 0
+    /// F17 信任層(契約 v5 §1/§3):per-provider local 源的觀測記錄與遲滯 stale 旗標。
+    /// attempt/lastAttempt 必須 per-provider 真實記錄(xcheck f17-r1:用全域時刻偽造會讓
+    /// 「被跳過的 provider」顯示成已嘗試,connecting 態判定失真)。
+    private var providerLastOkAt: [String: Date] = [:]
+    private var providerLastAttemptAt: [String: Date] = [:]
+    private var providerAttemptCounts: [String: Int] = [:]
+    private var providerStaleFlags: [String: Bool] = [:]
 
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
     /// 持久化 scan-state(checked;供 reindex 前置「安全排序」用——失敗即 throw,呼叫端據此不 replace)。
@@ -338,6 +345,8 @@ public actor UsageCoordinator {
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
             guard adapter.detectAvailability().available else { continue }
             let pid = adapter.providerId
+            providerLastAttemptAt[pid] = now                          // F17:per-provider 真實嘗試記錄
+            providerAttemptCounts[pid] = (providerAttemptCounts[pid] ?? 0) + 1
             do {
                 if fullReindex && adapter.historyModel == .rebuildableHistory {
                     // 契約 F:從零重掃 → 只有「完整」掃描才切片取代(set-replace);不完整則保留舊切片、
@@ -359,6 +368,7 @@ public actor UsageCoordinator {
                         transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: true, now: now)
                         parseErrorCounts[pid] = result.parseErrors
                         refreshErrors[pid] = nil
+                        providerLastOkAt[pid] = now   // F17:成功觀測(契約 §3 observation freshness)
                     case .incomplete:
                         fullReindexPreservedProviderIds.insert(pid)   // 保留舊切片,不刪歷史
                         refreshQualityNotes.append("\(pid): reindex incomplete — history preserved")   // 誠實通知(非 error)
@@ -372,6 +382,7 @@ public actor UsageCoordinator {
                     transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: false, now: now)
                     parseErrorCounts[pid] = result.parseErrors
                     refreshErrors[pid] = nil
+                    providerLastOkAt[pid] = now   // F17:成功觀測
                     if fullReindex {
                         // 走到 else 且 fullReindex → 必為 cumulativeSnapshotOnly(OpenCode):保留累計歷史、僅增量(不重建)。
                         refreshQualityNotes.append("\(pid): reindex kept cumulative history — not rebuildable")
@@ -709,6 +720,53 @@ public actor UsageCoordinator {
     public func modelsSeenWithPricing(days: Int = 30, now: Date = Date()) -> [(model: ModelUsageSummary, price: ModelPrice?)] {
         ledger.modelSummaries(in: .trailing(days: days, now: now), pricing: pricing).map {
             ($0, pricing.price(providerId: $0.providerId, modelId: $0.modelId))
+        }
+    }
+
+    // MARK: F17 信任層
+
+    /// 現有 local 源的 DataSourceStatus(契約 v5 §1:per-source 原子單位;officialAPI 源
+    /// 屬 F3+,#73 boundary 已核准、實作另行落地 —— 本方法零網路)。
+    /// local 源 health 只有 ok / stale / transientError 三態(契約 §5)。
+    public func dataSourceStatuses(now: Date = Date()) -> [DataSourceStatus] {
+        adapters.map { adapter in
+            let pid = adapter.providerId
+            let enabled = settings.enabledProviders.contains(pid)
+            let avail = adapter.detectAvailability()
+            // presence 優先序:disabled > unavailable > active(契約 §1)。
+            // unavailable 細分(xcheck f17-r1):adapter.roots 是 existence-filtered ——
+            // roots 非空表示來源目錄存在(裝了)→ noSourceFiles;全空 → notInstalled。
+            let presence: SourcePresence
+            if !enabled {
+                presence = .disabled
+            } else if avail.available {
+                presence = .active
+            } else {
+                presence = .unavailable(adapter.roots.isEmpty ? .notInstalled : .noSourceFiles)
+            }
+            let lastOk = providerLastOkAt[pid]
+            // local scan 的 observation window:app 的 refresh tick 為分鐘級,取 5 分鐘上限
+            // (契約 §3:「window = refresh 週期上限(預設 tick 分鐘級)」)。
+            let window: TimeInterval = 300
+            let assess = Freshness.assessObservation(lastObservedOk: lastOk, window: window,
+                                                     currentlyStale: providerStaleFlags[pid] ?? false,
+                                                     now: now)
+            providerStaleFlags[pid] = assess.isStale   // 遲滯記憶
+            let machine: SourceHealth = refreshErrors[pid] != nil ? .transientError : .ok
+            let health = HealthDisplay.effective(machine: machine, isStale: assess.isStale)
+            var note = assess.note
+            let newest = ledger.newestEvent(providerId: pid)?.timestamp
+            // 資料時戳超前(future event)也是時鐘異常(契約 §3「檔案時戳超前」;xcheck f17-r1)
+            if note == .none, let n = newest, n > now { note = .clockChanged }
+            if note == .none, (parseErrorCounts[pid] ?? 0) > 0 { note = .parseWarnings }
+            return DataSourceStatus(
+                providerId: pid, kind: .localLogs,
+                presence: presence, health: health,
+                lastObservedOk: lastOk, lastAttemptAt: providerLastAttemptAt[pid],
+                newestDataAt: newest,
+                attemptCount: providerAttemptCounts[pid] ?? 0,
+                provenanceNote: note,
+                recoveryAction: HealthDisplay.recovery(for: health, presence: presence, cli: pid))
         }
     }
 

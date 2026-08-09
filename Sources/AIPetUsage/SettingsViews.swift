@@ -8,6 +8,7 @@ struct SettingsRoot: View {
             GeneralSettings().tabItem { Label("General", systemImage: "gear") }
             PetSettings().tabItem { Label("Pet", systemImage: "pawprint") }
             ProviderSettings().tabItem { Label("Providers", systemImage: "puzzlepiece.extension") }
+            DataHealthSettings().tabItem { Label("Data Health", systemImage: "waveform.path.ecg") }
             LimitsPricingSettings().tabItem { Label("Limits & Pricing", systemImage: "dollarsign.gauge.chart.lefthalf.righthalf") }
             DataPrivacySettings().tabItem { Label("Data & Privacy", systemImage: "lock.shield") }
         }
@@ -203,6 +204,153 @@ struct PetSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Data Health(F17 信任層;契約 v5)
+
+/// Connections & Data Health:每個 provider 的資料來源在此回答 —— 這個數字從哪來、
+/// 新不新鮮、為什麼 unavailable/degraded、要做什麼恢復。分態呈現(絕不混成 generic
+/// warning);disabled 依契約勝過其他一切;單一來源壞掉不影響其他來源或 dashboard。
+struct DataHealthSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Form {
+            Section {
+                if model.sourceStatuses.isEmpty {
+                    Text("Collecting source status — refresh once to populate.")
+                        .foregroundStyle(Theme.textSecondary)
+                } else {
+                    ForEach(model.sourceStatuses, id: \.sourceId) { status in
+                        SourceHealthRow(status: status)
+                    }
+                }
+            } header: {
+                Text("Where every number comes from")
+            } footer: {
+                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. The only network source today is the opt-in OpenRouter credits check (Providers tab, off by default). A degraded source never blanks the rest of the dashboard.")
+                    .font(Theme.FontScale.note)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+        .formStyle(.grouped)
+        .task { await model.refreshSourceStatuses() }
+    }
+}
+
+private struct SourceHealthRow: View {
+    let status: DataSourceStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: badge.icon)
+                    .foregroundStyle(badge.color)
+                    .frame(width: 18)
+                Text(ProviderBrands.brand(for: status.providerId).displayName)
+                    .fontWeight(.medium)
+                Text(kindLabel)
+                    .font(Theme.FontScale.note)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Theme.accentSubtle, in: Capsule())
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer()
+                Text(badge.label)
+                    .font(Theme.FontScale.secondaryInfo)
+                    .foregroundStyle(badge.color)
+            }
+            // freshness 兩層、各佔一行(契約 §3:觀測時刻 ≠ 資料時刻;idle 不是 stale)
+            VStack(alignment: .leading, spacing: 2) {
+                Label(observedLine, systemImage: "arrow.triangle.2.circlepath")
+                Label(dataLine, systemImage: "clock")
+                switch status.provenanceNote {
+                case .parseWarnings:
+                    Label("some lines unparsable", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                case .clockChanged:
+                    Label("clock changed", systemImage: "clock.badge.questionmark")
+                        .foregroundStyle(.orange)
+                case .sourceNowOff:
+                    Label("source now off — value retained", systemImage: "power")
+                        .foregroundStyle(Theme.textMuted)
+                case .conflictingSources:
+                    Label("sources disagree", systemImage: "arrow.left.arrow.right")
+                        .foregroundStyle(.orange)
+                case .none:
+                    EmptyView()
+                }
+            }
+            .font(Theme.FontScale.note)
+            .foregroundStyle(Theme.textSecondary)
+            if let action = recoveryLine {
+                Text(action)
+                    .font(Theme.FontScale.note)
+                    .foregroundStyle(Theme.textMuted)
+            }
+        }
+        .padding(.vertical, 3)
+        .opacity(status.presence == .disabled ? 0.55 : 1)
+    }
+
+    private var kindLabel: String {
+        switch status.kind {
+        case .localLogs: return "Local logs"
+        case .officialAPI: return "Official API"
+        case .providerCost: return "Provider-reported"
+        case .derivedEstimate: return "Derived"
+        }
+    }
+
+    /// 分態 badge(契約:auth/stale/conflict 等不得混成一個 generic warning)。
+    private var badge: (icon: String, color: Color, label: String) {
+        switch status.presence {
+        case .disabled:
+            return ("minus.circle", Theme.textMuted, "Disabled")
+        case .unavailable(let reason):
+            switch reason {
+            case .notInstalled: return ("questionmark.circle", Theme.textMuted, "Not detected")
+            case .notLoggedIn:  return ("person.crop.circle.badge.exclamationmark", .orange, "Sign-in needed")
+            case .noSourceFiles: return ("doc.questionmark", Theme.textMuted, "No data files")
+            }
+        case .active:
+            // 首次啟用:尚無任何成功觀測 → connecting 態勝過 Healthy(xcheck f17-r1)
+            if status.health == .ok, status.lastObservedOk == nil {
+                return ("ellipsis.circle", Theme.textMuted, "Connecting…")
+            }
+            switch status.health {
+            case .ok:             return ("checkmark.circle.fill", .green, "Healthy")
+            case .stale:          return ("clock.badge.exclamationmark", .orange, "Not scanning")
+            case .transientError: return ("exclamationmark.triangle.fill", .orange, "Scan failing")
+            case .rateLimited:    return ("hourglass", .orange, "Rate limited")
+            case .authExpired:    return ("key.slash", .red, "Login expired")
+            case .schemaKilled:   return ("wrench.and.screwdriver", .red, "Format changed")
+            }
+        }
+    }
+
+    private var observedLine: String {
+        guard let t = status.lastObservedOk else {
+            return status.attemptCount == 0 ? "connecting…" : "no successful check yet"
+        }
+        return "checked \(timeAgo(t))"
+    }
+
+    private var dataLine: String {
+        guard let t = status.newestDataAt else { return "no usage yet" }
+        if t > Date() { return "last activity: clock changed" }   // 資料時戳超前不顯誤導年齡
+        return "last activity \(timeAgo(t))"
+    }
+
+    /// 封閉 recovery 文案(契約 §1;絕不顯示原始錯誤)。
+    private var recoveryLine: String? {
+        switch status.recoveryAction {
+        case .none: return nil
+        case .reEnableToggle: return "Enable it in the Providers tab to resume."
+        case .retryLater: return "Will keep retrying automatically."
+        case .reLogin(let cli): return "Run `\(cli)` once in a terminal to re-log in."
+        case .updateApp: return "The provider changed its format — update the app."
+        }
     }
 }
 
