@@ -17,7 +17,7 @@ Columns:
 | Auth files, API keys, tokens | **No** — except the reviewed narrow credential rows below (‡, §) | No | No | No | **No** |
 | opencode `auth.json` → the `openrouter` API key (only while the **opt-in** credits monitor is on) | Narrow ‡ | No | No | No | **Only** as the `Authorization` header to `openrouter.ai` (HTTPS, redirects refused) |
 | OpenRouter credit totals (purchased / used / derived remaining) | Received from openrouter.ai (opt-in) | No — memory only | No | No | Received only; never re-sent |
-| Grok CLI `auth.json` → the session token (only while the **opt-in** Grok quota card is on; *Phase 1, approved ahead of implementation* §) | Narrow § | No | No | No | **Only** as auth headers to `cli-chat-proxy.grok.com` (HTTPS, redirects refused) |
+| Grok CLI `auth.json` → the session token (only while the **opt-in** Grok quota card is on; *Phase 1, shipped* §) | Narrow § | No | No | No | **Only** as auth headers to `cli-chat-proxy.grok.com` (HTTPS, redirects refused) |
 | Codex `auth.json` → the access token + account id (only while the **opt-in** Codex usage card is on; *Phase 1, approved ahead of implementation* §) | Narrow § | No | No | No | **Only** as the `Authorization` header to `chatgpt.com` (HTTPS, redirects refused) |
 | Grok / Codex quota, credits & plan responses (received) | Received (opt-in) | No — memory only; **exception:** Codex official rate-limit readings fold into the existing "Limit percentages" row (`limits-state.json`) above | No | No | Received only; never re-sent |
 | Per-event **token counts** (usage) | Yes | `ledger.jsonl` | Yes | Yes | **No** |
@@ -79,7 +79,7 @@ Errors render from the fixed closed vocabulary — never raw error/response text
    `Accept: application/json`, and `User-Agent: AIPetUsage/<app-version>` — no usage data, no OS string. The
    response (credit totals) stays in memory and is never re-sent, persisted, or exported. Hardcoded HTTPS
    host, system TLS trust; no certificate pinning.
-3. *(Phase 1, approved ahead of implementation)* The **opt-in** Grok quota check:
+3. *(Phase 1, shipped)* The **opt-in** Grok quota check:
    `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` on the same ~15-minute/manual cadence,
    auth headers from the Grok CLI login (§ above) — no usage data sent. Response (usage %, period, plan)
    is memory-only.

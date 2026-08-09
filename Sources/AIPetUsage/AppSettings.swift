@@ -70,6 +70,8 @@ struct AppSettings: Codable {
     /// OpenRouter credits 監控(opt-in,**預設關**;boundary 變更見 docs/DATA_SOURCES.md)。
     /// GUI-only 設定,刻意不放 `core` —— CLI 維持零網路。
     var openRouterCreditsEnabled: Bool = false
+    var grokQuotaEnabled: Bool = false
+    var grokQuotaKilledAtVersion: String? = nil
     var core = CoreSettings()
 
     // MARK: - EngineV2 pack id 相容 facade(M2 §3-A;語意委派 PetSpecies,PetCore 端可測)
@@ -97,6 +99,8 @@ struct AppSettings: Codable {
         case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
         case speciesPackIdOverride
         case openRouterCreditsEnabled
+        case grokQuotaEnabled
+        case grokQuotaKilledAtVersion
         case core
     }
 
@@ -128,6 +132,8 @@ struct AppSettings: Codable {
         dailyExportFolderPath = (try? c.decodeIfPresent(String.self, forKey: .dailyExportFolderPath)) ?? nil
         speciesPackIdOverride = (try? c.decodeIfPresent(String.self, forKey: .speciesPackIdOverride)) ?? nil
         openRouterCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .openRouterCreditsEnabled)) ?? false ?? false
+        grokQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .grokQuotaEnabled)) ?? false ?? false
+        grokQuotaKilledAtVersion = (try? c.decodeIfPresent(String.self, forKey: .grokQuotaKilledAtVersion)) ?? nil ?? nil
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
     }
 }

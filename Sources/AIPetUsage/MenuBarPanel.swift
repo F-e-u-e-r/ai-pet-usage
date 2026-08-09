@@ -31,10 +31,9 @@ struct MenuBarPanel: View {
             }
             PanelActionRow(title: model.refreshing ? "Refreshing…" : "Refresh Now",
                            trailing: "⌘R", shortcut: "r", disabled: model.refreshing) {
-                // 手動刷新 = 使用者意圖「全部更新」:credits 一併抓(自動節奏仍是獨立的
-                // 15 分鐘輪詢,絕不掛在 FSEvents 觸發的 refreshNow 上)。
-                model.orCredits.refreshNow()
-                Task { await model.refreshNow() }
+                // 手動刷新 = 使用者意圖「全部更新」:manual 語義集中在 userRefresh()
+                // (credits + grok;自動節奏獨立,絕不掛 FSEvents)。
+                Task { await model.userRefresh() }
             }
             PanelActionRow(title: "Export Today's Report…") {
                 dismiss()
@@ -107,6 +106,9 @@ private struct PanelHeader: View {
                     }
                     if model.settings.openRouterCreditsEnabled {
                         OpenRouterCreditsRow(status: model.orCredits.status, now: context.date)
+                    }
+                    if model.settings.grokQuotaEnabled {
+                        GrokQuotaRow(status: model.grokQuota.status, now: context.date)
                     }
                     if let alert = model.alertSummary {
                         Label(alert.text, systemImage: "exclamationmark.triangle.fill")
@@ -194,6 +196,74 @@ private struct ProviderStatusRow: View {
 
 /// OpenRouter 預付 credits 列(opt-in;獨立版面 —— 預付餘額不是 5h/wk 配額,不進
 /// provider 表格欄)。bar 為**中性 teal 的剩餘比例**,無 warn/danger 色(R1 雙審 C8:
+/// Grok 官方額度列(F3;opt-in)。沿 OpenRouter 列的呈現慣例:數值路徑右欄、
+/// 狀態/錯誤句整寬第二行(完整句永遠可讀);所有字串出自 GrokQuota 封閉詞彙。
+/// 額度是 provider-reported → 恆帶 as-of 年齡;overflow anomaly 顯 ⚠(不靜默)。
+private struct GrokQuotaRow: View {
+    let status: GrokQuotaChecker.Status
+    let now: Date
+
+    private static let dot = Color(red: 0x8B / 255, green: 0x5C / 255, blue: 0xF6 / 255)
+
+    var body: some View {
+        Group {
+            if let snap = status.snapshot {
+                HStack(spacing: 8) {
+                    Circle().fill(Self.dot).frame(width: 8, height: 8)
+                    Text("Grok quota")
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        HStack(spacing: 4) {
+                            if snap.reportedPercentOverflow {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .font(.caption2).foregroundStyle(.orange)
+                                    .help("Provider reported a value above 100% — shown clamped")
+                            }
+                            Text("\(Int(snap.usedPercent))% used")
+                                .font(.callout.weight(.semibold)).monospacedDigit()
+                        }
+                        Text(subline(snap))
+                            .font(.caption2).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Circle().fill(Self.dot).frame(width: 8, height: 8)
+                        Text("Grok quota")
+                            .font(.callout.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Text(status.health == .schemaKilled ? "provider changed format"
+                         : (status.lastOutcome?.stateLine ?? "connecting…"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 16)
+                }
+            }
+        }
+    }
+
+    private func subline(_ snap: GrokQuotaSnapshot) -> String {
+        var parts: [String] = []
+        if let end = snap.periodEnd { parts.append("resets \(timeAgoOrIn(end))") }
+        parts.append("as of \(timeAgo(snap.fetchedAt))")
+        return parts.joined(separator: " · ")
+    }
+
+    private func timeAgoOrIn(_ d: Date) -> String {
+        guard d > now else { return timeAgo(d) }
+        let mins = Int(d.timeIntervalSince(now) / 60)
+        if mins >= 48 * 60 { return "in \(mins / (24 * 60))d" }
+        if mins >= 60 { return "in \(mins / 60)h" }
+        return "in \(max(1, mins))m"
+    }
+}
+
 /// 對預付餘額套配額警戒色是未經證成的 urgency 語意);teal 只是本列的識別色,
 /// 刻意**不是** ProviderBrand(不得被 rings/報告/CLI 泛化撿走 —— C7)。
 /// 所有字串來自 OpenRouterCreditsStatus.presentation 的封閉詞彙。

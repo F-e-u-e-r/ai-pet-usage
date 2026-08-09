@@ -11,9 +11,10 @@ and [`docs/DATA_BOUNDARY.md`](docs/DATA_BOUNDARY.md) is a per-data-class checkli
 - The app **does not extract, retain, write, export, or display** prompt text, assistant message content,
   tool-call payloads, attachments, or auth / credential files. (Log files are scanned as raw text to find
   the usage lines; only the declared usage / metadata fields are pulled out — message content is never
-  extracted into the app's data, stored, or shown.) The single reviewed exception: if you enable the
-  **opt-in** OpenRouter credits monitor, one API key is read narrowly from opencode's `auth.json` and used
-  only as a request header — see "The network calls" below and `docs/DATA_BOUNDARY.md` ‡.
+  extracted into the app's data, stored, or shown.) The reviewed exceptions: each opt-in
+  monitor you enable (OpenRouter credits, Grok quota) reads one credential narrowly from that CLI's
+  `auth.json` and uses it only as a request header to its one host — see "The network calls" below and
+  `docs/DATA_BOUNDARY.md` ‡ §.
 - Numbers are honest: provider-reported figures are labelled **high-confidence**, computed ones
   **estimated**, and a reading that is old is labelled **stale**. A genuinely-unknown value is left **blank**,
   not shown as a confident `0` (an expired window that has rolled over reads ~`0%` **labelled estimated** —
@@ -52,9 +53,9 @@ the request's `Authorization` header, never stored or shown.
   debugging — but they still show project basenames, plan labels and exact times, so they are convenience
   output, not hardened share artifacts. Prefer `aipet diag` or an HTML report when sharing.)
 
-## The network calls (two, each opt-in and off by default)
+## The network calls (up to four, each opt-in and off by default)
 
-This app sends nothing over the network unless you turn one of these on — and neither sends usage data:
+This app sends nothing over the network unless you turn one of these on — and none of them sends usage data:
 
 1. **Update check** (Settings → General): an opt-in check against the GitHub Releases API. The headers the
    app sets are `User-Agent: AIPetUsage/<app-version>` and `Accept: application/vnd.github+json` (the
@@ -69,13 +70,24 @@ This app sends nothing over the network unless you turn one of these on — and 
    header over HTTPS (dedicated in-memory session, redirects refused) and is never stored, logged,
    exported, or displayed; the returned credit totals stay in memory and are never written to disk or
    re-sent anywhere. The app deliberately ignores the `OPENROUTER_API_KEY` environment variable.
+3. **Grok quota** (Settings → Providers): an opt-in credit-usage check for grok CLI users. When on, the
+   app reads the session token the **grok CLI** saved in `~/.grok/auth.json` (or `$GROK_HOME/auth.json`;
+   the file is read as bytes; only the `key` field is decoded — the refresh token is never materialized)
+   and calls `https://cli-chat-proxy.grok.com/v1/billing` about every 15 minutes and on manual Refresh.
+   The token is sent **only** to that host as auth headers (plus `User-Agent: AIPetUsage/<app-version>`;
+   no OS string, no usage) over HTTPS (dedicated in-memory session, redirects refused) and is never
+   stored, logged, exported, displayed, or **refreshed** — on 401 the app only shows a "run grok once"
+   hint and stops calling until the credential file changes or you press Refresh. Returned quota stays
+   in memory. Provider env vars (e.g. `XAI_API_KEY`) are deliberately ignored.
+4. **Codex usage** *(upcoming — approved but not yet shipped)*: will follow the same reviewed pattern
+   for the Codex CLI login; nothing is read or sent until it ships and you opt in.
 
 Notes:
 
 - Requests go over the system's standard networking, so — as with any HTTPS call — the contacted host
   receives ordinary connection metadata (such as your IP address) and any system-managed HTTP headers. That
   is not usage telemetry, but it is not zero-metadata.
-- Beyond these two opt-in calls the app contacts no other host. The bundled price list is generated offline
+- Up to four reviewed outbound integrations are supported — the GitHub update check, the OpenRouter credits check, the Grok quota check, and the Codex usage check (upcoming) — each opt-in and disabled by default. Beyond whichever of these you enable, the app contacts no other host. The bundled price list is generated offline
   by the maintainer — the pricing pipeline never runs at runtime, and enabling the credits monitor fetches
   your credit totals only, never prices or model catalogs.
 
