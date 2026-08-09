@@ -14,7 +14,7 @@ Columns:
 | Data class | Read? | Persisted locally | HTML report | `aipet diag` | Network |
 |---|---|---|---|---|---|
 | Prompts, assistant / tool message content, attachments | Scanned as bytes, **not extracted** † | No | No | No | **No** |
-| Auth files, API keys, tokens | **No** — sole exception: the row below | No | No | No | **No** |
+| Auth files, API keys, tokens | **No** — except the reviewed narrow credential rows below (‡, §) | No | No | No | **No** |
 | opencode `auth.json` → the `openrouter` API key (only while the **opt-in** credits monitor is on) | Narrow ‡ | No | No | No | **Only** as the `Authorization` header to `openrouter.ai` (HTTPS, redirects refused) |
 | OpenRouter credit totals (purchased / used / derived remaining) | Received from openrouter.ai (opt-in) | No — memory only | No | No | Received only; never re-sent |
 | Grok CLI `auth.json` → the session token (only while the **opt-in** Grok quota card is on; *Phase 1, approved ahead of implementation* §) | Narrow § | No | No | No | **Only** as auth headers to `cli-chat-proxy.grok.com` (HTTPS, redirects refused) |
@@ -91,7 +91,7 @@ Errors render from the fixed closed vocabulary — never raw error/response text
    called.
 
 As with any HTTPS request over the system's standard networking, the contacted host also sees ordinary
-connection metadata (e.g. IP) and any system-managed headers. Beyond these two opt-in calls the app contacts
+connection metadata (e.g. IP) and any system-managed headers. Beyond the four opt-in calls listed above, the app contacts
 no other host; the bundled price list is generated offline — the pricing pipeline never runs at runtime.
 
 ### Not share-hardened
