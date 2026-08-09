@@ -229,7 +229,7 @@ struct DataHealthSettings: View {
             } header: {
                 Text("Where every number comes from")
             } footer: {
-                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. The only network source today is the opt-in OpenRouter credits check (Providers tab, off by default). A degraded source never blanks the rest of the dashboard.")
+                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits and Grok quota checks (Providers tab, both off by default). A degraded source never blanks the rest of the dashboard.")
                     .font(Theme.FontScale.note)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -378,6 +378,28 @@ struct ProviderSettings: View {
                     Text(info.dataSources).font(.caption).foregroundStyle(.secondary)
                     Text(info.permissions).font(.caption2).foregroundStyle(.tertiary)
                 }
+            }
+
+            // Grok 官方額度(F3;opt-in;boundary #73 —— 揭露文案說清楚讀什麼、送哪裡)。
+            Section("Grok quota (official)") {
+                Toggle("Show Grok credit usage (grok CLI)", isOn: Binding(
+                    get: { model.settings.grokQuotaEnabled },
+                    set: { v in model.updateSettings { $0.grokQuotaEnabled = v } }
+                ))
+                Text("""
+                Off by default. When on, the app reads the session token the grok CLI saved in \
+                ~/.grok/auth.json (or $GROK_HOME/auth.json; the file is read as bytes and only the \
+                "key" field is decoded — never the refresh token) and asks \
+                https://cli-chat-proxy.grok.com for your credit usage and reset time — about every \
+                15 minutes and on manual Refresh. The token is sent only to that host as auth \
+                headers over HTTPS (system TLS, redirects refused) and is never stored, logged, \
+                exported, displayed, or refreshed — if it expires (401), the app only shows a \
+                "run grok once to re-log in" hint and stops calling until the credential file \
+                changes or you press Refresh. Quota responses stay in memory (only this toggle and a \
+                format-protection marker are saved in settings — never the token or quota). Source health appears under Data Health as its \
+                own row, separate from Grok local logs.
+                """)
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             // OpenRouter credits(opt-in;boundary 變更 —— 揭露文案必須說清楚讀什麼、送哪裡)。
@@ -618,8 +640,8 @@ struct DataPrivacySettings: View {
             }
             Section("Privacy") {
                 Text("""
-                • Usage data is parsed and stored only on this Mac and is never uploaded — no telemetry, no account login. Two optional network calls exist, each opt-in and off by default: a GitHub version check for updates (Settings → General) and an OpenRouter credit-balance check (Settings → Providers). Neither sends usage data.
-                • Only token counts, model IDs, project paths, timestamps, and rate-limit numbers are read — never prompts or message contents. The OpenRouter monitor additionally reads one API key from opencode's auth.json, used only as the request's Authorization header and never stored or shown.
+                • Usage data is parsed and stored only on this Mac and is never uploaded — no telemetry, no account login. Up to four optional network integrations exist, each opt-in and off by default: a GitHub version check for updates (Settings → General), an OpenRouter credit-balance check and a Grok quota check (Settings → Providers), and an upcoming Codex usage check. None of them sends usage data.
+                • Only token counts, model IDs, project paths, timestamps, and rate-limit numbers are read — never prompts or message contents. Each enabled monitor additionally reads one credential narrowly — the OpenRouter key from opencode's auth.json, or the Grok session token from ~/.grok/auth.json — used only as its request's auth headers and never stored or shown.
                 • HTML reports are local files and redact full project paths by default.
                 """)
                 .font(.caption)

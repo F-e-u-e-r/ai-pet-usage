@@ -54,6 +54,7 @@ final class AppModel {
     let coordinator: UsageCoordinator
     /// OpenRouter credits 監控(opt-in;獨立 15 分鐘節奏,刻意不掛 FSEvents 刷新風暴)。
     let orCredits = OpenRouterCreditsChecker()
+    let grokQuota = GrokQuotaChecker()
     private let settingsStore: SettingsStore
     private let dataDir: URL
     /// monitor-only(低 RAM)模式下完全不建立;只在 full 模式第一次用到時載入。
@@ -102,6 +103,10 @@ final class AppModel {
         }
         if settings.notificationsEnabled { Notifier.requestAuthorization() }
         orCredits.setEnabled(settings.openRouterCreditsEnabled)
+        grokQuota.killedAtVersion = (
+            get: { [weak self] in self?.settings.grokQuotaKilledAtVersion },
+            set: { [weak self] v in self?.updateSettings { $0.grokQuotaKilledAtVersion = v } })
+        grokQuota.setEnabled(settings.grokQuotaEnabled, isUserAction: false)   // bootstrap ≠ 手動 re-enable(r3)
         applyModeSideEffects()
         observeAppearanceChanges()
         // 排程匯出:啟動時重套(修正 app 被移動後 plist 內失效的絕對路徑);僅 bundle 版有效。
@@ -144,6 +149,7 @@ final class AppModel {
         fileWatcher = nil
         settingsPushTask?.cancel()
         orCredits.setEnabled(false)
+        grokQuota.setEnabled(false)   // r1 三鏡:stop 漏停 grok 會讓輪詢在 teardown 後殘留
     }
 
     /// 深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
@@ -154,6 +160,15 @@ final class AppModel {
         ) { [weak self] _ in
             Task { @MainActor in self?.appearanceTick += 1 }
         }
+    }
+
+    /// 使用者手動刷新(⌘R / Refresh 鈕專用):credits/grok 的 manual 語義**只**綁真
+    /// 使用者動作 —— refreshNow() 也被啟動/輪詢/FSEvents 自動呼叫,在那裡冒用 manual
+    /// 會 bypass 401/kill 門檻(r4 ultra;與 bootstrap≠manual 同構)。
+    func userRefresh() async {
+        orCredits.refreshNow()
+        if settings.grokQuotaEnabled { grokQuota.refreshNow() }
+        await refreshNow()
     }
 
     func refreshNow() async {
@@ -168,7 +183,7 @@ final class AppModel {
             let outcome = await coordinator.refresh()
             dashboard = outcome.dashboard
             activeMinutesToday = await coordinator.activeMinutesToday()
-            sourceStatuses = await coordinator.dataSourceStatuses()   // F17 信任層
+            sourceStatuses = await assembleSourceStatuses()   // F17 信任層(local + API 分列)
 
             handleTransitions(outcome.transitions)
 
@@ -207,7 +222,21 @@ final class AppModel {
 
     /// F17:Data Health 面板開啟時主動拉一次(不等下一輪 refresh)。
     func refreshSourceStatuses() async {
-        sourceStatuses = await coordinator.dataSourceStatuses()
+        sourceStatuses = await assembleSourceStatuses()
+    }
+
+    /// F17 組裝:coordinator 的 local 源列 + GUI 層 API 源列(owner UI 語義:同 provider
+    /// 的 local 與 API 源**分列**,health/freshness/auth 各自獨立 —— API 的 401 絕不
+    /// 污染 local 列)。順序:依 provider 分組、local 在前。
+    private func assembleSourceStatuses() async -> [DataSourceStatus] {
+        var rows = await coordinator.dataSourceStatuses()
+        let api = grokQuota.dataSourceStatus()   // 恆列示(disabled 即顯 Disabled 態)
+        if let i = rows.lastIndex(where: { $0.providerId == "grok-code" }) {
+            rows.insert(api, at: rows.index(after: i))
+        } else {
+            rows.append(api)
+        }
+        return rows
     }
 
     func fullReindex() async {
@@ -216,7 +245,7 @@ final class AppModel {
         let outcome = await coordinator.refresh(fullReindex: true)
         dashboard = outcome.dashboard
         activeMinutesToday = await coordinator.activeMinutesToday()
-        sourceStatuses = await coordinator.dataSourceStatuses()   // F17:reindex 也要刷新健康態(xcheck f17-r1)
+        sourceStatuses = await assembleSourceStatuses()   // F17:reindex 也要刷新健康態(xcheck f17-r1)
         // 重建後同步寵物側,否則 Pet 卡/a11y/匯出的 mood(含 reason 裡的百分比)沿用
         // 重建前的舊值直到下次排程刷新(codex SEV2 round-2)。轉變(transitions)刻意
         // 不處理:重建是重放,不該觸發慶祝/通知。
@@ -308,9 +337,14 @@ final class AppModel {
         let oldEngineV2 = settings.petEngineV2Enabled
         let oldRange = settings.petWanderRangePercent
         let oldORCredits = settings.openRouterCreditsEnabled
+        let oldGrokQuota = settings.grokQuotaEnabled
         settingsStore.update(mutate)
         settings = settingsStore.settings
         // OpenRouter credits 開關:啟用即抓一次 + 開始 15 分鐘輪詢;停用即取消並清空狀態。
+        if oldGrokQuota != settings.grokQuotaEnabled {
+            grokQuota.setEnabled(settings.grokQuotaEnabled)
+            Task { [weak self] in await self?.refreshSourceStatuses() }   // Data Health 立即反映
+        }
         if oldORCredits != settings.openRouterCreditsEnabled {
             orCredits.setEnabled(settings.openRouterCreditsEnabled)
         }

@@ -111,7 +111,7 @@ struct DashboardRoot: View {
 
     private var refreshButton: some View {
         Button {
-            Task { await model.refreshNow() }
+            Task { await model.userRefresh() }
         } label: {
             if model.refreshing { ProgressView().controlSize(.small) }
             else { Label("Refresh", systemImage: "arrow.clockwise") }

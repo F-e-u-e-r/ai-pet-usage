@@ -149,6 +149,21 @@ runSuite("TrustWiringTests", [
     ("testStaleWhenObservationWindowExceededAndParseWarnings", trustWiring.testStaleWhenObservationWindowExceededAndParseWarnings),
 ])
 
+let grokQuota = GrokQuotaTests()
+runSuite("GrokQuotaTests", [
+    ("testParseSuccessNestedAndAdditiveTolerance", grokQuota.testParseSuccessNestedAndAdditiveTolerance),
+    ("testParseBreakingWhenRequiredFieldMissingOrWrongType", grokQuota.testParseBreakingWhenRequiredFieldMissingOrWrongType),
+    ("testBoolAndNonObjectRootAreSchemaBreaking", grokQuota.testBoolAndNonObjectRootAreSchemaBreaking),
+    ("testParseInvalidBodyAndHTTPMapping", grokQuota.testParseInvalidBodyAndHTTPMapping),
+    ("testEpochPeriodTimestampsTolerated", grokQuota.testEpochPeriodTimestampsTolerated),
+    ("testObservationEventMappingAndMachineIntegration", grokQuota.testObservationEventMappingAndMachineIntegration),
+    ("testRequestShapeAndRedirectRefusal", grokQuota.testRequestShapeAndRedirectRefusal),
+    ("testKeyParserNarrowAndCaps", grokQuota.testKeyParserNarrowAndCaps),
+    ("testPolicyZeroEgressWhenDisabledAndFull401Cycle", grokQuota.testPolicyZeroEgressWhenDisabledAndFull401Cycle),
+    ("testPolicyOverflowAnomalyIsNotSilent", grokQuota.testPolicyOverflowAnomalyIsNotSilent),
+    ("testCredentialChangeGate", grokQuota.testCredentialChangeGate),
+])
+
 let trustPlanLabel = TrustPlanLabelTests()
 runSuite("TrustPlanLabelTests", [
     ("testDecisionTreeBranches", trustPlanLabel.testDecisionTreeBranches),
