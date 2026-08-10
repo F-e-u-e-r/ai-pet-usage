@@ -54,7 +54,8 @@ credit snapshot. Errors render from a fixed closed vocabulary — never raw erro
 implementation; each lands only behind its own default-off toggle).** Same reviewed pattern as
 the opencode key (‡): read only while that provider's opt-in card is enabled, only at request
 time; the file is refused above 1 MB; only the single documented field(s) are **decoded**
-(Grok: the session token from `~/.grok/auth.json`, honoring `GROK_HOME`; Codex:
+(Grok: the nested `key` session token — plus `expires_at`, used only to deterministically pick the
+active account — from the `issuer::account` entries of `~/.grok/auth.json`, honoring `GROK_HOME`; Codex:
 `tokens.access_token` + `account_id` from `~/.codex/auth.json`, honoring `CODEX_HOME`) — no
 other entry is ever materialized. The token lives only inside the single fetch, goes out only
 as auth headers to the one hardcoded HTTPS host per provider (all redirects refused), and is

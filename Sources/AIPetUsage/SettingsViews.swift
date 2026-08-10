@@ -388,8 +388,9 @@ struct ProviderSettings: View {
                 ))
                 Text("""
                 Off by default. When on, the app reads the session token the grok CLI saved in \
-                ~/.grok/auth.json (or $GROK_HOME/auth.json; the file is read as bytes and only the \
-                "key" field is decoded — never the refresh token) and asks \
+                ~/.grok/auth.json (or $GROK_HOME/auth.json; an issuer→account store read as bytes, from \
+                which only the nested "key" field — plus its expiry, to pick the active account — is \
+                decoded, never the refresh token or profile fields) and asks \
                 https://cli-chat-proxy.grok.com for your credit usage and reset time — about every \
                 15 minutes and on manual Refresh. The token is sent only to that host as auth \
                 headers over HTTPS (system TLS, redirects refused) and is never stored, logged, \

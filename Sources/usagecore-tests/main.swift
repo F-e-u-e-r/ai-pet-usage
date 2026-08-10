@@ -151,16 +151,19 @@ runSuite("TrustWiringTests", [
 
 let grokQuota = GrokQuotaTests()
 runSuite("GrokQuotaTests", [
-    ("testParseSuccessNestedAndAdditiveTolerance", grokQuota.testParseSuccessNestedAndAdditiveTolerance),
-    ("testParseBreakingWhenRequiredFieldMissingOrWrongType", grokQuota.testParseBreakingWhenRequiredFieldMissingOrWrongType),
-    ("testBoolAndNonObjectRootAreSchemaBreaking", grokQuota.testBoolAndNonObjectRootAreSchemaBreaking),
-    ("testParseInvalidBodyAndHTTPMapping", grokQuota.testParseInvalidBodyAndHTTPMapping),
-    ("testEpochPeriodTimestampsTolerated", grokQuota.testEpochPeriodTimestampsTolerated),
+    ("testValidEnvelopeNeverRendersCreditUsagePercentAsQuota", grokQuota.testValidEnvelopeNeverRendersCreditUsagePercentAsQuota),
+    ("testEnvelopeClassification", grokQuota.testEnvelopeClassification),
+    ("testHTTPStatusAndOversizedMapping", grokQuota.testHTTPStatusAndOversizedMapping),
     ("testObservationEventMappingAndMachineIntegration", grokQuota.testObservationEventMappingAndMachineIntegration),
     ("testRequestShapeAndRedirectRefusal", grokQuota.testRequestShapeAndRedirectRefusal),
-    ("testKeyParserNarrowAndCaps", grokQuota.testKeyParserNarrowAndCaps),
+    ("testKeyParserNestedRealSchemaAndNarrow", grokQuota.testKeyParserNestedRealSchemaAndNarrow),
+    ("testKeyParserNarrowIgnoresAdversarialSiblingTypes", grokQuota.testKeyParserNarrowIgnoresAdversarialSiblingTypes),
+    ("testKeyParserMultiAccountDeterministicSelection", grokQuota.testKeyParserMultiAccountDeterministicSelection),
+    ("testKeyParserFormatUnrecognizedVsRetryable", grokQuota.testKeyParserFormatUnrecognizedVsRetryable),
+    ("testKeyParserOneBadEntryDoesNotKillValidSibling", grokQuota.testKeyParserOneBadEntryDoesNotKillValidSibling),
+    ("testIssuerExactHostNotSubstring", grokQuota.testIssuerExactHostNotSubstring),
+    ("testExpiresAtFractionalSecondsUsedInSelection", grokQuota.testExpiresAtFractionalSecondsUsedInSelection),
     ("testPolicyZeroEgressWhenDisabledAndFull401Cycle", grokQuota.testPolicyZeroEgressWhenDisabledAndFull401Cycle),
-    ("testPolicyOverflowAnomalyIsNotSilent", grokQuota.testPolicyOverflowAnomalyIsNotSilent),
     ("testCredentialChangeGate", grokQuota.testCredentialChangeGate),
 ])
 

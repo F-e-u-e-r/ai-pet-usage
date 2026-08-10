@@ -7,9 +7,10 @@ import UsageCore
 /// 門檻 = auth 檔 mtime/size/存在性變更或手動 Refresh —— GrokQuotaPolicy)與 F17 狀態機。
 /// 邊界(#73 修訂;契約 v5 §4 Grok 列):
 ///   - 停用 ⇒ 不開檔、不排程、清空狀態、取消進行中請求、丟棄晚到回應(世代守衛)。
-///   - token 於**每次抓取時**才從 `~/.grok/auth.json`(`GROK_HOME` 尊重)讀出,narrow
-///     decode 僅 `key` 欄;只存在於 fetch 區域範疇。**永不 refresh/寫回**(輪替會弄掉
-///     使用者 CLI 登入)。env(`XAI_API_KEY` 等)刻意忽略。
+///   - token 於**每次抓取時**才從 `~/.grok/auth.json`(`GROK_HOME` 尊重)讀出;真實檔為
+///     OIDC 憑證庫(頂層 `issuer::account-id` → 帳號物件),narrow decode 僅巢狀 `key`
+///     (+ `expires_at` 供多帳號決定性選擇);refresh_token/PII 永不 materialize。只存在於
+///     fetch 區域範疇。**永不 refresh/寫回**(輪替會弄掉使用者 CLI 登入)。env 刻意忽略。
 ///   - 專用 ephemeral session、拒絕所有 redirect;錯誤映射封閉詞彙,不 log
 ///     request/response/token。
 ///   - 15 分鐘輪詢 + 啟用當下 + 手動 Refresh;不掛 FSEvents;sleep/wake 不追補
@@ -158,7 +159,7 @@ final class GrokQuotaChecker {
         // 身分捕捉(r1 sol#6 + r2 P6):read 前後各 stat 一次,**一致才確定身分**;
         // 不一致(read 期間輪替)→ statAtFetch = nil → 401 不上門檻,下輪以新檔重試。
         let statBefore = await Task.detached(priority: .utility) { Self.statAuthFile() }.value
-        let load = await Task.detached(priority: .utility) { Self.loadKeyResult() }.value
+        let load = await Task.detached(priority: .utility) { Self.loadKeyResult(now: Date()) }.value
         let statAfter = await Task.detached(priority: .utility) { Self.statAuthFile() }.value
         let stat = statAfter
         let identityStable = statBefore == statAfter
@@ -171,6 +172,7 @@ final class GrokQuotaChecker {
         case .key(let key): outcome = await performFetch(key: key)
         case .fileMissing:  outcome = .noKey
         case .unreadable:   outcome = .credentialUnreadable
+        case .authFormatUnrecognized: outcome = .schemaBreaking   // 合法 auth JSON 但格式不符 → 復用 kill(零外呼)
         }
 
         guard let outcome, !Task.isCancelled, enabled, gate.shouldCommit(token) else { return }
@@ -210,6 +212,8 @@ final class GrokQuotaChecker {
                     // + as-of + 提示;絕不清掉真實觀測過的值
         case .schemaBreaking:
             next.snapshot = nil   // killed:直接值不顯(契約 §5)
+        case .noUsageData:
+            next.snapshot = nil   // 有效 200 但無可用 %:清舊值 → 顯 "no usage data"(避免跨 period reset 陳舊;r2 sol)
         case .credentialUnreadable, .rateLimited, .invalidBody, .endpointGone,
              .serverError, .badReply, .networkError:
             break                 // 保留舊快照;UI 標示失敗 + as-of
@@ -284,18 +288,22 @@ final class GrokQuotaChecker {
                                              exists: true)
     }
 
-    nonisolated private static func loadKeyResult() -> KeyLoadResult {
+    nonisolated private static func loadKeyResult(now: Date) -> KeyLoadResult {
         let url = authFileURL()
         guard FileManager.default.fileExists(atPath: url.path) else { return .fileMissing }
-        // 檔在:任何讀取/解碼失敗都是 unreadable(transientError,絕不顯重登;契約 §4)
+        // 檔在:讀取失敗 = unreadable(transientError,絕不顯重登;契約 §4)
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
               values.isRegularFile == true,
               let handle = try? FileHandle(forReadingFrom: url) else { return .unreadable }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: GrokKeyParser.maxAuthFileBytes + 1),
-              data.count <= GrokKeyParser.maxAuthFileBytes,
-              let key = GrokKeyParser.parse(data: data) else { return .unreadable }
-        return .key(key)
+              data.count <= GrokKeyParser.maxAuthFileBytes else { return .unreadable }
+        // narrow parse(真實巢狀 shape + deterministic selector);三分見 GrokKeyParser.Result。
+        switch GrokKeyParser.parse(data: data, now: now) {
+        case .key(let key):        return .key(key)
+        case .malformed:           return .unreadable              // 壞/超限/非物件 → transient
+        case .formatUnrecognized:  return .authFormatUnrecognized  // 合法但格式不符 → schemaBreaking
+        }
     }
 }
 
