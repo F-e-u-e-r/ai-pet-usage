@@ -8,52 +8,45 @@ final class GrokQuotaTests: XCTestCase {
 
     private func body(_ json: String) -> Data { json.data(using: .utf8)! }
 
-    // MARK: decoder(versioned;契約 §5)
+    // MARK: decoder(F3 hotfix 分類;Track A:creditUsagePercent 已撤除為 weekly-quota source)
 
-    func testParseSuccessNestedAndAdditiveTolerance() {
-        // 實抓 shape(config 巢狀)+ 未知欄位(additive)必須容忍
-        let json = """
-        {"config": {"creditUsagePercent": 41.5,
-                    "currentPeriod": {"start": "2026-08-01T00:00:00Z", "end": "2026-09-01T00:00:00Z"},
-                    "plan": "pro", "someFutureField": {"x": 1}},
-         "anotherUnknownTopLevel": true}
-        """
-        guard case .success(let snap) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(json), now: now) else {
-            return XCTAssertTrue(false, "additive 欄位不得阻擋成功解碼")
+    func testValidEnvelopeNeverRendersCreditUsagePercentAsQuota() {
+        // Track A 核心 + owner 要求的 regression:creditUsagePercent(Track B 已證 ≠ Grok weekly quota)
+        // 無論何值/在否,一律 → .noUsageData(honestly unavailable),**絕不** render 成 Grok quota N%。
+        for pct in ["100.0", "41.5", "0", "1", "true", "\"41%\"", "-3", "null"] {
+            XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
+                data: body("{\"config\": {\"creditUsagePercent\": \(pct)}}"), now: now), .noUsageData,
+                "creditUsagePercent=\(pct)(有效 config envelope)→ .noUsageData,不得 render 為 quota")
         }
-        XCTAssertEqual(snap.usedPercent, 41.5, accuracy: 0.001)
-        XCTAssertEqual(snap.periodEnd, date("2026-09-01T00:00:00Z"), "periodEnd = 重置時間")
-        XCTAssertEqual(snap.planName, "pro")
-        XCTAssertEqual(snap.fetchedAt, now)
+        // 缺 creditUsagePercent 的真實 200(currentPeriod/billing 欄在)→ 一樣 .noUsageData(非 kill)
+        let realAbsent = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-08-06T13:58:47.849415+00:00", "end": "2026-08-13T13:58:47.849415+00:00"}, "onDemandCap": {"val": 0}, "prepaidBalance": {"val": 0}, "billingPeriodEnd": "2026-08-13T13:58:47.849415+00:00"}}"#
+        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(realAbsent), now: now), .noUsageData)
+        // additive:未知頂層/巢狀欄位不改變分類
+        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
+            data: body(#"{"config": {"creditUsagePercent": 42, "future": {"x": 1}}, "unknownTop": true}"#), now: now),
+            .noUsageData)
     }
 
-    func testParseBreakingWhenRequiredFieldMissingOrWrongType() {
-        // 必要欄位 creditUsagePercent:缺 → breaking(立即 kill 級;契約 §5)
+    func testEnvelopeClassification() {
+        // 無 config(error / 無法辨識)→ .badReply(transient:不標健康、不清 401 門檻、不 kill)
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-                       data: body(#"{"config": {"plan": "pro"}}"#), now: now), .schemaBreaking)
-        // 型別錯(字串)→ breaking
+                       data: body(#"{"error": {"code": "unauthorized"}}"#), now: now), .badReply, "error-envelope → transient")
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-                       data: body(#"{"config": {"creditUsagePercent": "41%"}}"#), now: now), .schemaBreaking)
-        // 非有限/負值 → breaking(不得顯示假數)
+                       data: body(#"{"someOtherEnvelope": true}"#), now: now), .badReply, "無 config → transient")
+        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body("{}"), now: now), .badReply, "空物件 → transient")
+        // 明確 error key,即使 config 在 → 仍 .badReply(r3 luna/sol:不因 config 在而軟當 success)
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-                       data: body(#"{"config": {"creditUsagePercent": -3}}"#), now: now), .schemaBreaking)
-    }
-
-    func testBoolAndNonObjectRootAreSchemaBreaking() {
-        // r1 三鏡:JSON true 經 NSNumber 橋接不得變 1%
-        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-                       data: body(#"{"config": {"creditUsagePercent": true}}"#), now: now), .schemaBreaking)
-        // r1 ultra:合法 JSON 但非物件(陣列 root)= 結構型別錯 → breaking(非 invalidBody)
-        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-                       data: body("[1, 2, 3]"), now: now), .schemaBreaking)
-        // scalar fragment("42"):JSONSerialization 預設(無 .fragmentsAllowed)視為
-        // 非法文件 → invalidBody(×3 通道);刻意不放寬解析面。
-        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-                       data: body("42"), now: now), .invalidBody)
-    }
-
-    func testParseInvalidBodyAndHTTPMapping() {
+                       data: body(#"{"error": {"code": "x"}, "config": {"creditUsagePercent": 50}}"#), now: now),
+                       .badReply, "error key(即使 config 在)→ transient")
+        // root 非物件(陣列)= evidence-backed 結構破壞 → schemaBreaking(唯一保留的 kill)
+        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body("[1, 2, 3]"), now: now),
+                       .schemaBreaking, "root 非物件 → 結構破壞 → kill")
+        // scalar fragment / 壞 JSON → invalidBody(×3 通道)
+        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body("42"), now: now), .invalidBody)
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body("not json"), now: now), .invalidBody)
+    }
+
+    func testHTTPStatusAndOversizedMapping() {
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 401, data: Data(), now: now), .keyRejected)
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 429, data: Data(), now: now),
                        .rateLimited(retryAfterSeconds: nil))
@@ -66,22 +59,6 @@ final class GrokQuotaTests: XCTestCase {
         // 超限回應 → badReply(縱深;下載期另有硬斷)
         let oversized = Data(repeating: 0x20, count: GrokQuotaEngine.maxResponseBytes + 1)
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: oversized, now: now), .badReply)
-        // percent > 100 → clamp(顯示恆 ≤100)
-        guard case .success(let snap) = GrokQuotaEngine.parseResponse(statusCode: 200,
-              data: body(#"{"config": {"creditUsagePercent": 240}}"#), now: now) else {
-            return XCTAssertTrue(false)
-        }
-        XCTAssertEqual(snap.usedPercent, 100)
-    }
-
-    func testEpochPeriodTimestampsTolerated() {
-        // 週期為 epoch 秒或毫秒數值也容忍(additive-tolerant)
-        let json = #"{"config": {"creditUsagePercent": 10, "currentPeriod": {"start": 1754006400, "end": 1756684800000}}}"#
-        guard case .success(let snap) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(json), now: now) else {
-            return XCTAssertTrue(false)
-        }
-        XCTAssertEqual(snap.periodStart, Date(timeIntervalSince1970: 1_754_006_400))
-        XCTAssertEqual(snap.periodEnd, Date(timeIntervalSince1970: 1_756_684_800), "毫秒值需 /1000")
     }
 
     // MARK: 事件映射 + 狀態機整合(F17 substrate 消費)
@@ -93,6 +70,7 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertEqual(GrokQuotaOutcome.endpointGone.observationEvent, .endpointGone)
         XCTAssertEqual(GrokQuotaOutcome.serverError.observationEvent, .transportFailure)
         XCTAssertEqual(GrokQuotaOutcome.rateLimited(retryAfterSeconds: 30).observationEvent, .rateLimited)
+        XCTAssertEqual(GrokQuotaOutcome.noUsageData.observationEvent, .success, "有效 200 無 % = 源健康,非故障")
         // 端到端:breaking 一發 kill;invalidBody 三發 kill;5xx 永不 kill
         var s = SourceHealthMachine.State()
         s = SourceHealthMachine.step(s, GrokQuotaOutcome.schemaBreaking.observationEvent)
@@ -103,6 +81,10 @@ final class GrokQuotaTests: XCTestCase {
         var u = SourceHealthMachine.State()
         for _ in 0..<5 { u = SourceHealthMachine.step(u, GrokQuotaOutcome.serverError.observationEvent) }
         XCTAssertEqual(u.health, .transientError)
+        // noUsageData 永不 kill:任意多次(有效 200 只是資料暫缺)→ 源保持 ok
+        var n = SourceHealthMachine.State()
+        for _ in 0..<5 { n = SourceHealthMachine.step(n, GrokQuotaOutcome.noUsageData.observationEvent) }
+        XCTAssertEqual(n.health, .ok, "noUsageData 永不升級 schemaKilled;源保持 ok")
     }
 
     // MARK: request 構造(boundary #73)
@@ -125,17 +107,130 @@ final class GrokQuotaTests: XCTestCase {
                        "非 https 不可信")
     }
 
-    // MARK: key narrow 解碼(契約 §4 生命週期表)
+    // MARK: key narrow 解碼(真實巢狀 shape + deterministic selector;live-validated 2026-08-09)
 
-    func testKeyParserNarrowAndCaps() {
-        let parsed = GrokKeyParser.parse(data: body(#"{"key": "tok-1", "refresh": "SECRET-NEVER-READ"}"#))
-        XCTAssertTrue(parsed == "tok-1", "只解 key 欄(布林斷言:失敗輸出不印 key 值)")
-        XCTAssertTrue(parsed?.contains("SECRET") != true, "refresh 欄位永不 materialize")
-        XCTAssertNil(GrokKeyParser.parse(data: body(#"{"refresh": "x"}"#)), "key 缺 → nil(→ notLoggedIn 語義)")
-        XCTAssertNil(GrokKeyParser.parse(data: body(#"{"key": ""}"#)), "空 key → nil")
-        XCTAssertNil(GrokKeyParser.parse(data: body("not json")), "壞 JSON → nil(transientError 語義,絕不顯重登)")
-        let oversized = Data(repeating: 0x20, count: GrokKeyParser.maxAuthFileBytes + 1)
-        XCTAssertNil(GrokKeyParser.parse(data: oversized), ">1MB 拒讀")
+    /// 合成一個帳號 entry:`"<issuer>": {"key": …, "expires_at": …, "user_id": "u"}`(值皆合成,無真實憑證/PII)。
+    private func account(_ issuer: String, key: String, expires: String? = nil) -> String {
+        let exp = expires.map { #""expires_at": "\#($0)", "# } ?? ""
+        return #""\#(issuer)": {"key": "\#(key)", \#(exp)"user_id": "u"}"#
+    }
+
+    func testKeyParserNestedRealSchemaAndNarrow() {
+        // 真實 shape(單帳號):token 巢狀;refresh_token/email/PII 為同層 sibling —— 絕不進結果。
+        let json = #"""
+        {"https://auth.x.ai::abc-123": {
+            "key": "tok-REAL", "auth_mode": "oidc", "email": "a@b.c", "first_name": "A",
+            "refresh_token": "SECRET-NEVER-READ", "team_id": "t",
+            "expires_at": "2026-12-01T00:00:00.500000+00:00", "oidc_issuer": "https://auth.x.ai"}}
+        """#
+        guard case .key(let k) = GrokKeyParser.parse(data: body(json), now: now) else {
+            return XCTAssertTrue(false, "真實巢狀 shape 必須解出 key")
+        }
+        // k == 選出的巢狀 `key`,而非 refresh_token 的值("SECRET-NEVER-READ")→ 證明選的是 key 欄
+        // 而非誤取 sibling;narrow-decode(siblings 永不 materialize)的實證在下一個 adversarial 測試。
+        XCTAssertEqual(k, "tok-REAL", "選出的是巢狀 key,不是 refresh_token/其他欄的值")
+    }
+
+    func testKeyParserNarrowIgnoresAdversarialSiblingTypes() {
+        // 惡意 sibling 型別:refresh_token 是物件、email 是陣列、team_id 是數字、expires_at 型別怪。
+        // 寬 decoder 會在這些型別上爆掉;narrow decoder 只讀 key/expires_at,必須仍成功解出 key。
+        let json = #"""
+        {"https://auth.x.ai::x": {
+            "key": "tok-OK",
+            "refresh_token": {"nested": ["object", "not", "string"]},
+            "email": ["array", "of", "things"],
+            "coding_data_retention_opt_out": true,
+            "team_id": 12345,
+            "expires_at": {"weird": "type"}}}
+        """#
+        guard case .key(let k) = GrokKeyParser.parse(data: body(json), now: now) else {
+            return XCTAssertTrue(false, "narrow decode 必須無視惡意 sibling 型別而成功")
+        }
+        XCTAssertEqual(k, "tok-OK", "只讀 key;expires_at 型別怪 → 視為未知,不影響解出 key")
+    }
+
+    func testKeyParserMultiAccountDeterministicSelection() {
+        let future1 = "2027-01-01T00:00:00Z"
+        let future2 = "2027-06-01T00:00:00Z"   // 更晚
+        let past = "2020-01-01T00:00:00Z"
+        func pick(_ entries: String...) -> String? {
+            guard case .key(let k) = GrokKeyParser.parse(
+                data: body("{" + entries.joined(separator: ",") + "}"), now: now) else { return nil }
+            return k
+        }
+        // (a) 未過期優先於過期(無視 account 字典序)
+        XCTAssertEqual(pick(account("https://auth.x.ai::a-expired", key: "EXP", expires: past),
+                            account("https://auth.x.ai::z-valid", key: "VALID", expires: future1)), "VALID")
+        // (b) 同為未過期:x.ai issuer 優先(即使對方 expiry 更晚)
+        XCTAssertEqual(pick(account("https://auth.other.com::a", key: "OTHER", expires: future2),
+                            account("https://auth.x.ai::z", key: "XAI", expires: future1)), "XAI")
+        // (c) 同 band 同 issuer:晚 expiry 優先
+        XCTAssertEqual(pick(account("https://auth.x.ai::a", key: "EARLY", expires: future1),
+                            account("https://auth.x.ai::b", key: "LATE", expires: future2)), "LATE")
+        // (d) 完全同 rank:account 字典序作最後決定性 tie-break(殺 dict 迭代非決定性)
+        XCTAssertEqual(pick(account("https://auth.x.ai::zzz", key: "Z", expires: future1),
+                            account("https://auth.x.ai::aaa", key: "A", expires: future1)), "A")
+        // (e) 缺 expires_at = 未知 band(介於未過期與過期);不因缺 expiry 判過期
+        XCTAssertEqual(pick(account("https://auth.x.ai::a-unknown", key: "UNKNOWN"),
+                            account("https://auth.x.ai::b-expired", key: "EXPIRED", expires: past)), "UNKNOWN")
+    }
+
+    func testKeyParserFormatUnrecognizedVsRetryable() {
+        // retryable(transient):非 JSON / 非物件 / 超限
+        XCTAssertEqual(GrokKeyParser.parse(data: body("not json"), now: now), .malformed)
+        XCTAssertEqual(GrokKeyParser.parse(data: body("[1,2,3]"), now: now), .malformed, "陣列非帳號字典")
+        XCTAssertEqual(GrokKeyParser.parse(data: body("42"), now: now), .malformed)
+        // 有效但超限的 store:證明是 1MB CAP(而非「非 JSON」)在拒讀 —— 若移除 cap,這會解成 .key。
+        let hugeKey = String(repeating: "A", count: GrokKeyParser.maxAuthFileBytes)
+        let oversizedValid = body(#"{"https://auth.x.ai::a": {"key": "\#(hugeKey)"}}"#)
+        XCTAssertGreaterThan(oversizedValid.count, GrokKeyParser.maxAuthFileBytes, "fixture 必須真的超過 cap")
+        XCTAssertEqual(GrokKeyParser.parse(data: oversizedValid, now: now), .malformed, ">1MB 有效 store 仍被 cap 拒讀")
+        // formatUnrecognized:合法物件但無可用 key(非 transient —— 不無限重試同一 bytes)
+        XCTAssertEqual(GrokKeyParser.parse(data: body("{}"), now: now), .formatUnrecognized, "空 {} → 格式不符")
+        XCTAssertEqual(GrokKeyParser.parse(data: body(#"{"acct": {"refresh_token": "x"}}"#), now: now),
+                       .formatUnrecognized, "entry 無 key → 格式不符")
+        XCTAssertEqual(GrokKeyParser.parse(data: body(#"{"acct": {"key": ""}}"#), now: now),
+                       .formatUnrecognized, "空 key → 格式不符")
+        XCTAssertEqual(GrokKeyParser.parse(data: body(#"{"acct": {"key": 123}}"#), now: now),
+                       .formatUnrecognized, "key 型別錯(數字)→ 無可用 key → 格式不符")
+    }
+
+    func testKeyParserOneBadEntryDoesNotKillValidSibling() {
+        // 一個壞 entry(值非物件)+ 一個合法帳號 → 合法者仍被選出(壞 entry 靜默跳過)
+        let json = #"{"broken": "not-an-object", "https://auth.x.ai::ok": {"key": "SURVIVES"}}"#
+        guard case .key(let k) = GrokKeyParser.parse(data: body(json), now: now) else {
+            return XCTAssertTrue(false, "壞 entry 不得拖垮合法 sibling")
+        }
+        XCTAssertEqual(k, "SURVIVES")
+    }
+
+    func testIssuerExactHostNotSubstring() {
+        // r2 luna 安全項:`auth.x.ai.evil.com` 不得因子字串 "x.ai" 被當成 x.ai issuer 而優先。
+        // 兩者同 band、同 expiry;唯一差別是 issuer host。舊子字串比對會誤選 EVIL(且其 account 字典序在前);
+        // 精確 host 比對須選中真正的 x.ai(GOOD)。
+        let future = "2027-01-01T00:00:00Z"
+        func pick(_ entries: String...) -> String? {
+            guard case .key(let k) = GrokKeyParser.parse(
+                data: body("{" + entries.joined(separator: ",") + "}"), now: now) else { return nil }
+            return k
+        }
+        XCTAssertEqual(pick(account("https://auth.x.ai.evil.com::a", key: "EVIL", expires: future),
+                            account("https://auth.x.ai::b", key: "GOOD", expires: future)), "GOOD",
+                       "auth.x.ai.evil.com 不得偽裝成 x.ai;精確 host 比對選真正 x.ai")
+    }
+
+    func testExpiresAtFractionalSecondsUsedInSelection() {
+        // GrokISO8601(含小數秒容忍)現由 auth 的 expires_at 選擇使用。兩帳號皆 x.ai、皆未過期;A 的 expiry
+        // 帶微秒且較晚,B 不帶且較早。selector 偏好較晚 expiry → 必選 A;若微秒未被解析(→ nil,落 unknown
+        // band)則 A 反輸給 B(unexpired)。故選中 A 證明含微秒 expires_at 被正確解析為較晚時刻。
+        func pick(_ entries: String...) -> String? {
+            guard case .key(let k) = GrokKeyParser.parse(
+                data: body("{" + entries.joined(separator: ",") + "}"), now: now) else { return nil }
+            return k
+        }
+        XCTAssertEqual(pick(account("https://auth.x.ai::a", key: "FRAC", expires: "2027-06-01T00:00:00.500000+00:00"),
+                            account("https://auth.x.ai::b", key: "PLAIN", expires: "2027-01-01T00:00:00Z")), "FRAC",
+                       "含微秒 expires_at 須解析為較晚時刻(unexpired)→ 晚者優先選中")
     }
 
     // MARK: Policy 決策核心(owner 六 lifecycle case 的純邏輯面)
@@ -172,20 +267,6 @@ final class GrokQuotaTests: XCTestCase {
         p.apply(outcome: .serverError, statAtFetch: statB)
         XCTAssertEqual(p.machine.health, .transientError)
         XCTAssertEqual(p.decision(enabled: true, currentStat: statB, isManual: false), .proceed)
-    }
-
-    func testPolicyOverflowAnomalyIsNotSilent() {
-        guard case .success(let snap) = GrokQuotaEngine.parseResponse(statusCode: 200,
-              data: body(#"{"config": {"creditUsagePercent": 240}}"#), now: now) else {
-            return XCTAssertTrue(false)
-        }
-        XCTAssertEqual(snap.usedPercent, 100, "顯示 clamp")
-        XCTAssertTrue(snap.reportedPercentOverflow, "raw >100 必須留 anomaly 標記(不靜默;owner 裁示)")
-        guard case .success(let normal) = GrokQuotaEngine.parseResponse(statusCode: 200,
-              data: body(#"{"config": {"creditUsagePercent": 42}}"#), now: now) else {
-            return XCTAssertTrue(false)
-        }
-        XCTAssertFalse(normal.reportedPercentOverflow)
     }
 
     // MARK: 401 重試門檻(契約 §4:檔變更或手動,無時間例外)

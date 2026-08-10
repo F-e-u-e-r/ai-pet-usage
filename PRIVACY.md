@@ -72,7 +72,9 @@ This app sends nothing over the network unless you turn one of these on — and 
    re-sent anywhere. The app deliberately ignores the `OPENROUTER_API_KEY` environment variable.
 3. **Grok quota** (Settings → Providers): an opt-in credit-usage check for grok CLI users. When on, the
    app reads the session token the **grok CLI** saved in `~/.grok/auth.json` (or `$GROK_HOME/auth.json`;
-   the file is read as bytes; only the `key` field is decoded — the refresh token is never materialized)
+   the file is read as bytes; from its `issuer::account` entries only the nested `key` field — plus its
+   `expires_at`, used only to deterministically pick the active account — is decoded; the refresh token and
+   profile fields are never materialized)
    and calls `https://cli-chat-proxy.grok.com/v1/billing` about every 15 minutes and on manual Refresh.
    The token is sent **only** to that host as auth headers (plus `User-Agent: AIPetUsage/<app-version>`;
    no OS string, no usage) over HTTPS (dedicated in-memory session, redirects refused) and is never
