@@ -865,6 +865,19 @@ final class LedgerTests: XCTestCase {
         let reloaded = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
         XCTAssertEqual(reloaded.events.map(\.id), ledger.events.map(\.id))
         XCTAssertEqual(reloaded.events.map(\.projectName), ledger.events.map(\.projectName))
+        // #48 rebase-reconciliation:gate 新增的兩個提交點受同一「成功提交 ⇒ 推進世代」契約——
+        // 漏推進 ⇒ coordinator 聚合快取(projectPage/trends)不失效,reindex 後回傳舊資料。
+        let r2 = ledger.revision
+        let raw1 = try! Data(contentsOf: dir.appendingPathComponent("ledger.jsonl"))
+        XCTAssertEqual(try! ledger.replaceProviderSlice("codex", with: [event("w", "2026-01-15T08:00:00Z")],
+                                                        expectedRevision: ledger.loadedRevision(),
+                                                        preservingRaw: raw1), 1)
+        XCTAssertTrue(ledger.revision > r2, "CAS raw 保存式切片取代提交必須推進世代")
+        let r3 = ledger.revision
+        let raw2 = try! Data(contentsOf: dir.appendingPathComponent("ledger.jsonl"))
+        XCTAssertEqual(ledger.compactRawPreserving(retentionDays: 30, now: date("2026-03-01T00:00:00Z"),
+                                                   raw: raw2), .applied)
+        XCTAssertTrue(ledger.revision > r3, "raw 保存式 compact 提交必須推進世代")
     }
 }
 
