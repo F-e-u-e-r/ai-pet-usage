@@ -52,6 +52,17 @@ public enum PrivacyRedaction {
         if lower.contains("history kept") { return prefixed("history kept (provider unavailable during reindex)") }
         if lower.hasPrefix("state read failed") { return "State file unreadable — refresh skipped; existing data preserved" }
         if lower.hasPrefix("scan-state write failed") { return "State write failed — a rescan will reconcile next refresh" }
+        if lower.contains("reindex blocked — compaction unavailable") {
+            return prefixed("reindex blocked — compaction unavailable this refresh; history preserved")
+        }
+        if lower.contains("reindex blocked — history mismatch (retained ") {   // gate-r1 L7:錨定樣板頭
+            // #48 §7 固定 count-only 樣板:只轉發五個位置化計數,絕不含 event ID/unknown key/path/payload。
+            // 樣板由 coordinator 產生,格式固定;此處位置化擷取五個整數,任何解析失敗退固定字樣。
+            let counts = historyMismatchCounts(raw)
+            return prefixed(counts.map {
+                "reindex blocked — history mismatch (retained \($0.0), missing \($0.1), changed \($0.2), duplicate \($0.3), canonicalization \($0.4))"
+            } ?? "reindex blocked — history mismatch (history preserved)")
+        }
         if lower.contains("reindex incomplete") { return prefixed("reindex incomplete — history preserved") }
         if lower.contains("reindex kept cumulative") { return prefixed("reindex kept cumulative history (not rebuildable)") }
         if lower.contains("percent unavailable") {
@@ -98,6 +109,19 @@ public enum PrivacyRedaction {
         let match = s[r]
         guard let d = match.range(of: "[0-9]+", options: .regularExpression) else { return nil }
         return Int(match[d])
+    }
+
+    /// #48 §7:history-mismatch 樣板的五個**位置化**計數(retained/missing/changed/duplicate/
+    /// canonicalization 各自緊後的整數);任一缺席即回 nil(退無數字固定字樣,不掃任意數字)。
+    static func historyMismatchCounts(_ s: String) -> (Int, Int, Int, Int, Int)? {
+        func after(_ label: String) -> Int? {
+            guard let r = s.range(of: "\(label) [0-9]+", options: [.regularExpression, .caseInsensitive]),
+                  let d = s[r].range(of: "[0-9]+", options: .regularExpression) else { return nil }
+            return Int(s[r][d])
+        }
+        guard let r = after("retained"), let m = after("missing"), let c = after("changed"),
+              let d = after("duplicate"), let e = after("canonicalization") else { return nil }
+        return (r, m, c, d, e)
     }
 
     /// 字串**任何位置**是否內嵌「絕對路徑形狀」(grok r2/r3 + codex catch-up 迭代)。兩道掃描:

@@ -166,10 +166,13 @@ public enum LocalTime {
 
 public enum ISO8601 {
     /// 解析 "2026-06-29T16:33:32.124Z" / "2026-06-29T16:33:32Z" / "...+08:00"。
-    public static func parse(_ s: String) -> Date? {
+    /// `strict`(sol r4 MF2,#48 compact 丟棄判定用):要求**整串消耗**+明確時區
+    /// ('.'後至少 1 位小數;無時區、垃圾後綴、半形式 offset 皆 nil)——lenient 模式(預設)行為完全不變。
+    public static func parse(_ s: String, strict: Bool = false) -> Date? {
         var year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0
         var fraction = 0.0
         var tzOffset = 0
+        var tzHour = 0, tzMin = 0, tzSign = 1   // #48 gate-r5 sol MF1 / clearing-final sol#2:strict 時區值域檢查用
         let chars = Array(s.utf8)
         func digits(_ range: Range<Int>) -> Int? {
             guard range.upperBound <= chars.count else { return nil }
@@ -192,32 +195,45 @@ public enum ISO8601 {
         var i = 19
         if i < chars.count, chars[i] == 46 { // '.'
             i += 1
+            var fracDigits = 0
             var frac = 0.0
             var scale = 0.1
             while i < chars.count, chars[i] >= 48, chars[i] <= 57 {
                 frac += Double(chars[i] - 48) * scale
                 scale /= 10
                 i += 1
+                fracDigits += 1
             }
             fraction = frac
+            if strict, fracDigits == 0 { return nil }   // strict:'.' 後必須有小數位
         }
+        var tzPresent = false
+        var consumedEnd = i   // strict 用:合法 tz designator 結束後的索引
         if i < chars.count {
             switch chars[i] {
             case 90, 122: // 'Z'
                 tzOffset = 0
+                tzPresent = true
+                consumedEnd = i + 1
             case 43, 45: // '+' '-'
                 let sign = chars[i] == 43 ? 1 : -1
                 guard let oh = digits((i + 1)..<(i + 3)) else { return nil }
                 var om = 0
                 if i + 3 < chars.count, chars[i + 3] == 58 {
-                    om = digits((i + 4)..<(i + 6)) ?? 0
+                    if let m = digits((i + 4)..<(i + 6)) { om = m; consumedEnd = i + 6 } else { om = 0; consumedEnd = i + 3 }
                 } else {
-                    om = digits((i + 3)..<(i + 5)) ?? 0
+                    if let m = digits((i + 3)..<(i + 5)) { om = m; consumedEnd = i + 5 } else { om = 0; consumedEnd = i + 3 }
                 }
+                tzHour = oh; tzMin = om; tzSign = sign   // #48 sol MF1/final sol#2:strict 值域檢查用(lenient 不受影響)
                 tzOffset = sign * (oh * 3600 + om * 60)
+                tzPresent = true
             default:
                 break
             }
+        }
+        if strict {
+            // 整串消耗 + 明確時區;"+hh:" 之類半形式(consumedEnd 停在 hh 而後仍有殘字)自然不過。
+            guard tzPresent, consumedEnd == chars.count else { return nil }
         }
         var comps = DateComponents()
         comps.year = year; comps.month = month; comps.day = day
@@ -225,6 +241,19 @@ public enum ISO8601 {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         guard let base = cal.date(from: comps) else { return nil }
+        if strict {
+            // #48 gate-r5 sol MF1:strict 不得 fail-open 於 Calendar.date(from:) 會靜默 roll-over
+            // 正規化的超範圍欄位(twin 已證 hour/min/sec/月/日皆正規化而非 nil)。以「base 反解元件
+            // 逐一等於輸入」擋掉任何被正規化的欄位;時區 offset 值域另檢。任一非法 ⇒ nil ⇒ 呼叫端
+            //(compact 丟棄判定)fail-closed 保留該行,絕不以不可信 timestamp 誤刪歷史。
+            // #48 clearing-final sol#2:真實 UTC offset 範圍 -12:00..+14:00;逾此(語法合法但不可能)
+            // ⇒ fail-closed(否則 compact drop 判定會誤刪這類 raw 行 = history-loss)。tzMin 另須 ≤59。
+            let tzTotalMin = tzHour * 60 + tzMin
+            guard tzMin <= 59, tzTotalMin <= (tzSign >= 0 ? 840 : 720) else { return nil }
+            let back = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: base)
+            guard back.year == year, back.month == month, back.day == day,
+                  back.hour == hour, back.minute == minute, back.second == second else { return nil }
+        }
         return base.addingTimeInterval(fraction - Double(tzOffset))
     }
 

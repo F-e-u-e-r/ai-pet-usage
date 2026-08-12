@@ -28,6 +28,51 @@ final class ISO8601Tests: XCTestCase {
         XCTAssertNil(ISO8601.parse("not a date"))
         XCTAssertNil(ISO8601.parse("2026-01-15"))
     }
+
+    // #48 gate-r4 sol MF2:strict 模式 = 整串消耗 + 明確時區(compact 丟棄判定用);lenient 不變。
+    func testStrictParseRequiresFullConsumption() {
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T10:00:00Z", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T10:00:00.500Z", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T18:00:00+08:00", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2026-01-15T18:00:00+0800", strict: true))
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00garbage", strict: true), "垃圾後綴")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00Zgarbage", strict: true), "Z 後殘字")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00", strict: true), "無時區 ⇒ 不明確")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00.Z", strict: true), "小數點後無數字")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+08:", strict: true), "半形式 offset")
+        // lenient 行為維持:垃圾後綴照樣解析(既有呼叫端相容)
+        XCTAssertNotNil(ISO8601.parse("2020-01-01T00:00:00garbage"))
+    }
+
+    // #48 gate-r5 sol MF1:strict 不得 fail-open 於超範圍欄位(Calendar.date(from:) 會靜默
+    // roll-over 正規化——twin 已證 hour=99/min=99/sec=99/月/日皆正規化而非 nil)。全部語意
+    // 非法 ⇒ nil ⇒ 呼叫端(compact 丟棄判定)fail-closed 保留,絕不以不可信 timestamp 誤刪歷史。
+    func testStrictParseRejectsSemanticallyInvalidComponents() {
+        // 時區 offset 超範圍
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+99:99", strict: true), "tz 99:99")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+24:00", strict: true), "tz hour 24")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+00:60", strict: true), "tz minute 60")
+        // #48 clearing-final sol#2:真實 offset 上限 = ±14:00;超過者(語法合法但不可能)須 fail-closed
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+14:30", strict: true), "tz +14:30 超過真實 max +14:00")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00+23:59", strict: true), "tz +23:59 不可能 offset")
+        XCTAssertNil(ISO8601.parse("2020-01-01T00:00:00-13:00", strict: true), "tz -13:00 超過真實下限 -12:00")
+        // 日期/時間欄位超範圍(Calendar 會 roll-over)
+        XCTAssertNil(ISO8601.parse("2020-01-01T99:00:00Z", strict: true), "hour 99")
+        XCTAssertNil(ISO8601.parse("2020-01-01T24:00:00Z", strict: true), "hour 24")
+        XCTAssertNil(ISO8601.parse("2020-01-01T23:99:00Z", strict: true), "minute 99")
+        XCTAssertNil(ISO8601.parse("2020-01-01T23:59:99Z", strict: true), "second 99")
+        XCTAssertNil(ISO8601.parse("2020-13-01T00:00:00Z", strict: true), "month 13")
+        XCTAssertNil(ISO8601.parse("2020-00-01T00:00:00Z", strict: true), "month 00")
+        XCTAssertNil(ISO8601.parse("2020-01-32T00:00:00Z", strict: true), "day 32")
+        XCTAssertNil(ISO8601.parse("2020-02-30T00:00:00Z", strict: true), "Feb 30")
+        // 合法值仍解析
+        XCTAssertNotNil(ISO8601.parse("2020-01-01T23:59:59Z", strict: true))
+        XCTAssertNotNil(ISO8601.parse("2020-01-01T00:00:00+14:00", strict: true), "real max +14")
+        XCTAssertNotNil(ISO8601.parse("2020-12-31T23:59:59-08:00", strict: true))
+        // lenient(預設)完全不變:超範圍照舊解析(既有呼叫端相容)
+        XCTAssertNotNil(ISO8601.parse("2020-01-01T00:00:00+99:99"))
+        XCTAssertNotNil(ISO8601.parse("2020-01-01T99:00:00Z"))
+    }
 }
 
 // MARK: - JSONL scanner
@@ -820,6 +865,19 @@ final class LedgerTests: XCTestCase {
         let reloaded = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
         XCTAssertEqual(reloaded.events.map(\.id), ledger.events.map(\.id))
         XCTAssertEqual(reloaded.events.map(\.projectName), ledger.events.map(\.projectName))
+        // #48 rebase-reconciliation:gate 新增的兩個提交點受同一「成功提交 ⇒ 推進世代」契約——
+        // 漏推進 ⇒ coordinator 聚合快取(projectPage/trends)不失效,reindex 後回傳舊資料。
+        let r2 = ledger.revision
+        let raw1 = try! Data(contentsOf: dir.appendingPathComponent("ledger.jsonl"))
+        XCTAssertEqual(try! ledger.replaceProviderSlice("codex", with: [event("w", "2026-01-15T08:00:00Z")],
+                                                        expectedRevision: ledger.loadedRevision(),
+                                                        preservingRaw: raw1), 1)
+        XCTAssertTrue(ledger.revision > r2, "CAS raw 保存式切片取代提交必須推進世代")
+        let r3 = ledger.revision
+        let raw2 = try! Data(contentsOf: dir.appendingPathComponent("ledger.jsonl"))
+        XCTAssertEqual(ledger.compactRawPreserving(retentionDays: 30, now: date("2026-03-01T00:00:00Z"),
+                                                   raw: raw2), .applied)
+        XCTAssertTrue(ledger.revision > r3, "raw 保存式 compact 提交必須推進世代")
     }
 }
 

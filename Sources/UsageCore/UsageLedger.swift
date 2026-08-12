@@ -15,6 +15,11 @@ struct FileFingerprint: Equatable {
 public final class UsageLedger {
     public private(set) var events: [UsageEvent] = []
     private var ids: Set<String> = []
+    /// #48 MF3 clearing twin (invariant-B):decoder 拒收但仍是完整 JSON、能可信抽出 stable id 的
+    /// raw-only 行,其 id 保留為 collision-reserved——append/replace 不得重用(否則提交無法
+    /// canonicalize 的重複)。於 load/reload/compact/replace/reset 隨檔案內容一致重建;append 熱路徑
+    /// 只查此集合(不重掃檔),其可信度由 MF2 fingerprint preflight 在未漂移期間保證。
+    private var reservedRawIDs: Set<String> = []
     private let fileURL: URL?
     /// 記憶體事件集的單調世代號:load / append / compact / replace / reset 成功提交時 +1。
     /// 供上層(coordinator)做聚合快取的失效鍵 —— 世代未變 ⇒ 事件集完全相同。
@@ -80,6 +85,7 @@ public final class UsageLedger {
         needsReload = false
         events = []
         ids = []
+        reservedRawIDs = []
         internPool = [:]
         revision &+= 1   // 任何重建都推進世代(過度失效安全;失效不足才是 bug)
         guard let fileURL else { return }
@@ -124,6 +130,10 @@ public final class UsageLedger {
             } catch {
                 // 零星無法解碼行(部分 append 的斷尾/斷頭)容忍——維持既有「斷尾→續寫復原」;僅記首錯。
                 if firstDecodeError == nil { firstDecodeError = error }
+                // #48 MF3 clearing twin:decoder 拒收但仍是完整 JSON 且能抽出 stable id 的行 ⇒ 保留
+                // 為 collision-reserved(斷尾片段抽不出 id ⇒ 自然不納入,維持既有 torn-tail 容忍)。
+                if let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                   let rid = obj["id"] as? String { reservedRawIDs.insert(rid) }
             }
         }
         // 契約 A:非空內容卻解不出任何有效事件(含只有換行位元組的損壞檔)→ malformed(poisoned,不覆寫;C-MF7b)。
@@ -149,12 +159,14 @@ public final class UsageLedger {
         // R2-MF5:needsReload 為明確的強制重載旗標(append 半寫 / 讀取不穩時設),優先於指紋比較。
         guard fileURL != nil, needsReload || currentFingerprint() != expectedFingerprint else { return }
         let priorEvents = events, priorIds = ids, priorFingerprint = expectedFingerprint
+        let priorReserved = reservedRawIDs
         load()
         if loadError != nil {
             // 非破壞式:讀取失敗不得清掉既有記憶體(否則後續寫入會覆寫好資料)。
             // 保留舊狀態;coordinator 見 loadError 會中止本輪寫入(#44 契約 A)。
             events = priorEvents
             ids = priorIds
+            reservedRawIDs = priorReserved
             expectedFingerprint = priorFingerprint
             needsReload = true   // 讀取失敗 → 保持強制重載,下輪再試
             revision &+= 1       // 狀態又換回舊集 → 再推進一次世代(只多不少)
@@ -169,9 +181,32 @@ public final class UsageLedger {
     public func append(_ newEvents: [UsageEvent]) -> Int {
         writeError = nil
         if let loadError { writeError = loadError; return 0 }
+        // #48 clearing-r1 (luna + sol MUST-FIX):漂移檢查必須在 dedup **之前**且涵蓋所有 persistAppend
+        // 分支。否則:(sol) 撞陳舊 ids/reservedRawIDs 的 event 會在下方 dedup 就 SKIP、於 `guard
+        // !inserted.isEmpty` 提早 return,persistAppend 的漂移檢查根本不跑 → 有效 event 靜默略過
+        //(writeError==nil)+ coordinator 前進 watermark = 遺失(A);(luna) persistAppend 的
+        // missing/zero-length 分支會盲寫 [new] 覆蓋他方 truncate/unlink 後的檔(記憶體/磁碟分歧、遮蔽漂移)。
+        // #48 clearing-r2 (luna-max defensive-NIT):鏡射 rewritePreflightOK/casPreflight 的**完整**
+        // tri-state——nil 指紋僅在「可證明缺檔」時才等同 expected nil;不可 stat 的既有檔不可信 ⇒
+        // refuse(否則 nil==nil 誤判 no-drift,讓撞陳舊 id 的 skip 繞過 fail-closed)。此格在 open⟹stat
+        // 下不可達(read 成功 ⟹ stat 必成功,故 load 不會留 expectedFingerprint=nil+非空帳本),純防禦式
+        // 一致性,使兩個 append preflight 與既有 rewrite/cas preflight 共用同一 nil 語意。
+        // fail-closed:設 needsReload + writeError、不寫入,下輪 reloadIfChanged 對帳(殘餘寫時微窗同 #64)。
+        if let fileURL {
+            let cur = currentFingerprint()
+            if needsReload
+               || (cur == nil && !AtomicJSON.pathIsGenuinelyMissing(fileURL.path))
+               || cur != expectedFingerprint {
+                needsReload = true
+                writeError = CocoaError(.fileWriteUnknown)
+                return 0
+            }
+        }
         var inserted: [UsageEvent] = []
         var batchIds: Set<String> = []
-        for e in newEvents where !ids.contains(e.id) && batchIds.insert(e.id).inserted {
+        // #48 MF3 clearing twin:knownIDs = ids ∪ reservedRawIDs;不得重用 raw-only 保留 id(否則
+        // 提交無法 canonicalize 的重複)。與既有 keep-first 一致:碰撞即略過(不新增),不拋錯。
+        for e in newEvents where !ids.contains(e.id) && !reservedRawIDs.contains(e.id) && batchIds.insert(e.id).inserted {
             inserted.append(e)
         }
         guard !inserted.isEmpty else { return 0 }
@@ -213,13 +248,22 @@ public final class UsageLedger {
         // 續尾,且**開檔後以實際 end 為準**(不信任先前 stat),`if end > 0` 亦避免 stat/open 間被截斷至 0 造成 end-1 underflow。
         let fp = currentFingerprint()
         if AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
-            try blob.write(to: fileURL, options: .atomic)                 // 確認缺檔 → 原子建立
-            expectedFingerprint = currentFingerprint()
+            expectedFingerprint = try Self.atomicWriteCapturingFingerprint(blob, to: fileURL)   // 確認缺檔 → 原子建立
+            if expectedFingerprint == nil { needsReload = true }   // nil 捕捉 ⇒ 不可證 → 強制下輪對帳(sol r4 MF4)
         } else if let fp {
             if fp.size == 0 {
-                try blob.write(to: fileURL, options: .atomic)            // stat 成功且確認空檔 → 原子建立
-                expectedFingerprint = currentFingerprint()
+                expectedFingerprint = try Self.atomicWriteCapturingFingerprint(blob, to: fileURL)   // stat 成功且確認空檔 → 原子建立
+                if expectedFingerprint == nil { needsReload = true }   // nil 捕捉 ⇒ 不可證 → 強制下輪對帳(sol r4 MF4)
             } else {
+                // #48 gate-r5 sol MF2:續尾寫入前必須確認磁碟指紋未漂移(與 casPreflight/
+                // rewritePreflightOK 同級的 tri-state)。否則 seekToEnd 之前落地的他方寫入會被
+                // 吸收進 end,r4 size 檢查亦無法察覺 → 可提交重複 id(無法 canonicalize)的帳本。
+                // 寫入當下重採指紋比對(縮小 race window);漂移 ⇒ fail-closed:設 needsReload、拋錯
+                // 讓上層(writeError)對帳,不寫入。(重採→開檔→seek 的殘餘微窗同 stat→rename,#64。)
+                guard !needsReload, currentFingerprint() == expectedFingerprint else {
+                    needsReload = true
+                    throw CocoaError(.fileWriteUnknown)
+                }
                 // stat 成功且非空 → FileHandle 續尾。開檔後以**實際** end 為準(不信任先前 stat),
                 // `if end > 0` 亦避免 stat/open 間被截斷至 0 造成 end-1 underflow。
                 let handle = try FileHandle(forWritingTo: fileURL)
@@ -235,7 +279,18 @@ public final class UsageLedger {
                 }
                 try handle.write(contentsOf: blob)
                 try handle.synchronize()   // fsync:落盤耐久(契約 B)
-                expectedFingerprint = currentFingerprint()
+                // sol r3 MF2:指紋必須描述**我們自己的寫入**——以 fstat(fd) 於寫入當下捕捉,
+                // 不得事後 re-stat 路徑(write→stat 間他方落盤會把指紋毒化成「已含他方事件」,
+                // 記憶體卻沒有 → reload 不觸發 → CAS 過檢 → 之後的 replace 刪掉他方事件)。
+                // sol r4 MF5:fsync→fstat 之間他方 append 仍可混入——以「尺寸必須恰為 end+本批
+                // bytes」驗證捕捉;不符 ⇒ 指紋不可信,清空並強制下輪對帳(fail closed,不採他方狀態)。
+                let captured = Self.fingerprint(ofFD: handle.fileDescriptor)
+                if let captured, captured.size == Int64(end) + Int64(blob.count) {
+                    expectedFingerprint = captured
+                } else {
+                    expectedFingerprint = nil
+                    needsReload = true
+                }
             }
         } else {
             // stat 失敗但非「確認缺檔」(權限/IO/斷 symlink…)→ fail-closed:不覆寫、不冒險,拋錯讓上層(writeError)對帳。
@@ -243,47 +298,279 @@ public final class UsageLedger {
         }
     }
 
+    /// compact 結果(#48 gate-r1 luna L2:contract step 4「compact 失敗則不得比較或 replacement」
+    /// 需要呼叫端可見的失敗訊號;沿用既有安全行為,只補回報)。
+    public enum CompactResult: Equatable, Sendable {
+        case noop            // 無事可丟(未重寫;raw bytes 原封不動)
+        case applied         // 已重寫並提交
+        case skippedSuspectRaw   // 呼叫端判定 raw 層可疑而跳過(luna L1:不得在 gate 前消滅 raw 證據)
+        case failed          // 落盤失敗(舊記憶體與舊檔案皆保留)
+        case poisoned        // loadError,未動
+    }
+
     /// 丟棄保留期以外的舊事件並重寫帳本檔。交易式(契約 B):先落盤成功才提交記憶體;
     /// 失敗則舊記憶體與舊檔案皆保留(acceptance #5)。poisoned 時不動。
-    public func compact(retentionDays: Int, now: Date = Date()) {
-        guard loadError == nil else { return }
+    @discardableResult
+    public func compact(retentionDays: Int, now: Date = Date()) -> CompactResult {
+        guard loadError == nil else { return .poisoned }
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
         // O(1) 短路:最舊事件仍在保留期內 → 無事可壓縮(原本每輪 refresh 都 filter
         // 整個 9 萬+ 陣列,只為發現「沒東西可丟」)。
-        if let oldest = events.first, oldest.timestamp >= cutoff { return }
+        if let oldest = events.first, oldest.timestamp >= cutoff { return .noop }
         let kept = events.filter { $0.timestamp >= cutoff }
-        guard kept.count != events.count else { return }
+        guard kept.count != events.count else { return .noop }
         guard let fileURL else {   // 記憶體模式:直接套用
             events = kept
             ids = Set(kept.map(\.id))
+            reservedRawIDs = []   // #48 MF3 clearing twin:typed 重寫丟棄所有 raw-only 行
             rebuildInternPool()    // 事件被移除 → 池重建才有界(xcheck r1)
             revision &+= 1
-            return
+            return .applied
         }
+        // sol r3 MF1:compact 是「整檔破壞式重寫」,與 replace 同級——未對帳快照(unstable load /
+        // append 半寫)或指紋不可驗/不符(穩定 reload 後他方落盤、或不可 stat)時,typed 記憶體
+        // 不可信,一律拒絕重寫。compact 在 coordinator 中先於 gate 執行,缺 guard 即 gate 前 history-loss。
+        guard rewritePreflightOK() else { return .failed }
         do {
-            _ = try Self.writeAllAtomic(kept, to: fileURL)   // 先落盤(可能 throw)
+            let fp = try Self.writeAllAtomic(kept, to: fileURL)   // 先落盤(可能 throw);寫入當下捕捉指紋
             events = kept                                     // 成功才提交記憶體
             ids = Set(kept.map(\.id))
+            reservedRawIDs = []   // #48 MF3 clearing twin:typed 重寫丟棄所有 raw-only 行
             rebuildInternPool()                               // 事件被移除 → 池重建才有界(xcheck r1)
-            expectedFingerprint = currentFingerprint()
+            expectedFingerprint = fp   // 寫入當下捕捉(sol r3 MF2),取代事後 re-stat
+            if fp == nil { needsReload = true }
             revision &+= 1
+            return .applied
         } catch {
             // 落盤失敗 → 舊記憶體與舊檔案皆保留
+            return .failed
         }
     }
 
-    /// 全量原子重寫帳本檔:整份 encode(任一失敗即 throw,不做半份重寫)後 `.atomic`(temp→rename)
-    /// 替換,回傳新檔位元組數。供 compact 與(step 6)切片取代共用。
-    static func writeAllAtomic(_ events: [UsageEvent], to url: URL) throws -> Int64 {
-        try AppPaths.ensureDirectory(url.deletingLastPathComponent())
+    /// raw 保存式 compact(sol r3 MF3):在**已通過整檔 canonicalization** 的 raw bytes 上做行級手術——
+    /// 只丟「可解析且確定過期」的行,其餘**逐位元組保留**(不經 typed decode→encode round-trip,
+    /// 不改寫任何 provider 的 raw 表示;timestamp 無法解析 ⇒ fail-closed 保留)。
+    /// caller(coordinator precheck)保證 raw 即目前磁碟內容且 canonicalization 成功。
+    @discardableResult
+    public func compactRawPreserving(retentionDays: Int, now: Date, raw: Data) -> CompactResult {
+        guard loadError == nil else { return .poisoned }
+        guard let fileURL else { return compact(retentionDays: retentionDays, now: now) }   // 記憶體模式無 raw 可保
+        guard rewritePreflightOK() else { return .failed }
+        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
+        var newData = Data()
+        var dropped = 0
+        for line in raw.split(separator: 0x0A, omittingEmptySubsequences: false) {
+            if line.isEmpty { continue }   // 尾端 trailing-newline 空段(canonicalization 已拒內部空白行)
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else {
+                return .failed   // 防禦性:caller 已 canonicalize 成功,解析失敗即拒絕重寫(不冒險)
+            }
+            // sol r4 MF2:丟棄判定必須用 strict 解析(整串消耗+明確時區)——lenient 解析接受
+            // 垃圾後綴("…T00:00:00garbage"),會把 canonical 域視為 opaque 字串的行誤判為過期而刪除。
+            if let ts = obj["timestamp"] as? String, let d = ISO8601.parse(ts, strict: true), d < cutoff {
+                dropped += 1
+                continue   // 唯一允許丟棄的行:timestamp 可解析且確定過期
+            }
+            newData.append(contentsOf: line)
+            newData.append(0x0A)
+        }
+        guard dropped > 0 else { return .noop }
+        // #48 clearing-final sol#1:先 re-decode newData 再決定是否寫入——若丟棄後只剩 canonical 但
+        // decoder-拒收的 raw-only 行(load() 會判該檔 poison),**絕不提交該狀態**:return .failed、
+        // 原檔逐位元組保留(否則 retention compaction 會把健康帳本變 poisoned)。typed 視角以寫前的
+        // newData 重新解碼(不用 cutoff 近似,保證與 fresh load 一致;grok r4)。
+        var reloaded: [UsageEvent] = []
+        var reloadedIDs = Set<String>()
+        var reloadedReserved = Set<String>()
+        let decoder = AtomicJSON.decoder()
+        for line in newData.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            if let e = try? decoder.decode(UsageEvent.self, from: Data(line)) {
+                if reloadedIDs.insert(e.id).inserted { reloaded.append(e) }
+            } else if let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                      let rid = obj["id"] as? String {
+                reloadedReserved.insert(rid)   // #48 MF3 clearing twin:保留的 raw-only 行 id ⇒ collision-reserved
+            }
+        }
+        if reloaded.isEmpty && !newData.isEmpty {
+            return .failed   // 全 raw-only ⇒ 不寫入、保留原檔(不提交 load()-poison 狀態)
+        }
+        do {
+            let fp = try Self.atomicWriteCapturingFingerprint(newData, to: fileURL)   // 通過 poison 檢查才寫
+            events = reloaded.sorted { $0.timestamp < $1.timestamp }
+            ids = reloadedIDs
+            reservedRawIDs = reloadedReserved   // #48 MF3 clearing twin:保留的 raw-only id 隨檔案重建
+            rebuildInternPool()   // 事件被移除 → 池重建才有界(xcheck r1;與 compact 同原則)
+            expectedFingerprint = fp
+            if fp == nil { needsReload = true }
+            revision &+= 1        // 事件集已變 → 推進世代(聚合快取失效鍵)
+            return .applied
+        } catch {
+            return .failed
+        }
+    }
+
+    /// 破壞式整檔重寫的共同前置檢查(compact 兩型共用;luna/sol r4):
+    /// needsReload ⇒ 拒絕;nil 指紋只在「可證明缺檔」時可與 expected nil 相等(不可 stat ⇒ 拒絕,
+    /// 與 casPreflight/persistAppend 的 tri-state 一致);其餘要求指紋與載入時完全一致,
+    /// 不符即設 needsReload 強制下輪對帳。
+    private func rewritePreflightOK() -> Bool {
+        guard !needsReload else { return false }
+        let cur = currentFingerprint()
+        if cur == nil, let fileURL, !AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
+            needsReload = true
+            return false
+        }
+        guard cur == expectedFingerprint else {
+            needsReload = true   // 磁碟已前進:強制下輪 reloadIfChanged 對帳
+            return false
+        }
+        return true
+    }
+
+    /// #48 gate-r1 luna L1:compact「將會動作」的廉價預判(typed 視角)。true ⇒ 呼叫端應先做
+    /// raw 完整性 precheck——typed 重寫會消滅 malformed/duplicate/unknown-key raw 行,
+    /// 不得在 monotonic gate 之前發生於可疑檔案上。
+    public func compactWouldAct(retentionDays: Int, now: Date = Date()) -> Bool {
+        guard loadError == nil else { return false }
+        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
+        return events.contains { $0.timestamp < cutoff }
+    }
+
+    /// #48 CAS gate:帳本檔目前修訂(以 (dev,ino,size,mtime) 指紋為代理;nil = 檔缺/不可 stat)。
+    /// 供「重讀 baseline → 比較 → 同一 revision 邊界內 replace」的 compare-and-swap 判定。
+    public struct LedgerRevision: Equatable, Sendable {
+        let fp: FileFingerprint?
+    }
+    public func currentRevision() -> LedgerRevision { LedgerRevision(fp: currentFingerprint()) }
+
+    /// #48 gate-r1 luna L3(b) 修正:CAS 的 expected revision 必須取「typed 記憶體實際載入時」
+    /// 的指紋(expectedFingerprint),而非事後 re-stat——否則 reload 與 stat 之間落盤的他人
+    /// 寫入會讓 revision 捕捉到新指紋、記憶體卻停在舊態,CAS 過檢後以 stale 記憶體重寫、
+    /// 丟失新事件。以此值作 expected ⇒ 「記憶體 == revision」成為不變量。
+    public func loadedRevision() -> LedgerRevision { LedgerRevision(fp: expectedFingerprint) }
+
+    /// #48 gate-r2 luna L3b-殘餘:load() 三次不穩定重試後會把 stale data 標上較新 fpAfter 並設
+    /// needsReload(下輪對帳)——該狀態下 revision 看似最新、記憶體卻可能缺最新事件。
+    /// destructive gate 必須據此 fail closed;CAS overload 亦雙層拒絕。
+    public var hasUnreconciledSnapshot: Bool { needsReload }
+
+    public enum CASError: Error, Equatable { case revisionChanged }
+
+    /// CAS 版切片取代(#48 pivot §3):寫入前 re-stat;revision 與 compare 時不符 ⇒ throw
+    /// `.revisionChanged`,呼叫端必須放棄並 preserve——不得覆寫比較後才落盤的較新帳本。
+    /// (剩餘 stat→rename 微窗屬 #64 durability/commit-semantics 範圍,此處不擴。)
+    public func replaceProviderSlice(_ providerId: String, with freshEvents: [UsageEvent],
+                                     expectedRevision: LedgerRevision) throws -> Int {
+        try casPreflight(expectedRevision)
+        return try replaceProviderSlice(providerId, with: freshEvents)
+    }
+
+    /// CAS 共同前置檢查(順序固定):
+    /// 1. gate-r2 luna L3b-殘餘:未對帳快照(unstable load / append 半寫)⇒ 記憶體不可信,一律拒絕。
+    /// 2. luna r3 MF1(nil-split):「不可 stat」≠「確認缺檔」——nil 指紋只在**可證明缺檔**
+    ///    (合法空 baseline 初始化)時可與 expected nil 相等;其餘 stat 失敗一律 fail closed
+    ///    (與 persistAppend 的 tri-state 原則一致,#44)。
+    /// 3. 指紋必須與 compare 時的 loadedRevision 完全一致。
+    private func casPreflight(_ expectedRevision: LedgerRevision) throws {
+        guard !needsReload else { throw CASError.revisionChanged }
+        let cur = currentFingerprint()
+        if cur == nil, let fileURL, !AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
+            throw CASError.revisionChanged
+        }
+        guard cur == expectedRevision.fp else { throw CASError.revisionChanged }
+    }
+
+    /// raw 保存式 CAS 切片取代(sol r3 MF3):非目標 provider 的行從 `baselineRaw` **逐位元組保留**,
+    /// 只有目標 provider 的切片以 production encoder 重新編碼——typed decode→encode round-trip
+    /// 會改寫(小數秒 timestamp)或丟失(decoder 拒收但 canonicalizer 接受的行)其他 provider 的
+    /// canonical 表示,違反 per-provider isolation(無需任何 race)。caller(gate)保證:
+    /// baselineRaw 於 drift-guard 驗證後讀取、整檔 canonicalization 成功、revision 邊界由 CAS 把關。
+    public func replaceProviderSlice(_ providerId: String, with freshEvents: [UsageEvent],
+                                     expectedRevision: LedgerRevision, preservingRaw baselineRaw: Data) throws -> Int {
+        try casPreflight(expectedRevision)
+        if let loadError { throw loadError }
+        guard let fileURL else { return try replaceProviderSlice(providerId, with: freshEvents) }   // 記憶體模式無 raw 可保
+        var newData = Data()
+        var preservedForeignIDs = Set<String>()
+        for line in baselineRaw.split(separator: 0x0A, omittingEmptySubsequences: false) {
+            if line.isEmpty { continue }   // 尾端 trailing-newline 空段
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                  let pid = obj["providerId"] as? String, let lineID = obj["id"] as? String else {
+                throw CocoaError(.fileWriteUnknown)   // 防禦性:gate 已 canonicalize 成功;解析失敗即拒絕(不重寫)
+            }
+            if pid != providerId {
+                newData.append(contentsOf: line)
+                newData.append(0x0A)
+                preservedForeignIDs.insert(lineID)
+            }
+        }
+        let encoder = AtomicJSON.encoder()
+        let keptTyped = events.filter { $0.providerId != providerId }
+        var seen = Set(keptTyped.map(\.id))
+        var freshAccepted: [UsageEvent] = []
+        for e in freshEvents.sorted(by: { $0.timestamp < $1.timestamp }) where seen.insert(e.id).inserted {
+            // sol r4 MF6:candidate id 與「僅存在於 raw(decoder 拒收)的外來行」撞號時,寫出的檔案
+            // 會含重複 id、立即無法 canonicalize——絕不提交已知不可驗證的帳本,整筆拒絕(preserve)。
+            guard !preservedForeignIDs.contains(e.id) else { throw CocoaError(.fileWriteUnknown) }
+            newData.append(try encoder.encode(e))
+            newData.append(0x0A)
+            freshAccepted.append(e)
+        }
+        let fp = try Self.atomicWriteCapturingFingerprint(newData, to: fileURL)   // 先落盤;throw → 記憶體不變
+        var merged = keptTyped + freshAccepted
+        merged.sort { $0.timestamp < $1.timestamp }
+        events = merged
+        ids = seen
+        reservedRawIDs = preservedForeignIDs.subtracting(seen)   // #48 MF3 clearing twin:保留的 foreign raw-only id 仍 collision-reserved
+        rebuildInternPool()   // 舊切片事件被移除 → 池重建才有界(xcheck r1;與非-CAS 版同原則)
+        expectedFingerprint = fp
+        if fp == nil { needsReload = true }
+        revision &+= 1        // 事件集已變 → 推進世代(聚合快取失效鍵)
+        return freshAccepted.count
+    }
+
+    /// 全量原子重寫帳本檔:整份 encode(任一失敗即 throw,不做半份重寫)後 temp→stat→rename
+    /// 替換,回傳**寫入當下捕捉**的指紋。供 compact 與切片取代共用。
+    static func writeAllAtomic(_ events: [UsageEvent], to url: URL) throws -> FileFingerprint? {
         let encoder = AtomicJSON.encoder()
         var blob = Data()
         for e in events {
             blob.append(try encoder.encode(e))
             blob.append(0x0A)
         }
-        try blob.write(to: url, options: .atomic)
-        return Int64(blob.count)
+        return try atomicWriteCapturingFingerprint(blob, to: url)
+    }
+
+    /// sol r3 MF2:原子寫入並於**rename 前**對 temp 檔取指紋——dev/ino/size/mtime 皆不因 rename
+    /// 改變,故回傳值精確描述「我們這次寫入」的內容;事後 re-stat 目標路徑則有 write→stat 間
+    /// 他方落盤把指紋毒化成他方帳本的窗(記憶體卻無其事件 → reload 不觸發 → CAS 過檢 → 覆滅)。
+    static func atomicWriteCapturingFingerprint(_ blob: Data, to url: URL) throws -> FileFingerprint? {
+        try AppPaths.ensureDirectory(url.deletingLastPathComponent())
+        let tempURL = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
+        do { try blob.write(to: tempURL) } catch {
+            try? FileManager.default.removeItem(at: tempURL)   // 半寫 temp 不留殘骸
+            throw error
+        }
+        var st = stat()
+        let statOK = stat(tempURL.path, &st) == 0
+        let fp: FileFingerprint? = statOK
+            ? FileFingerprint(dev: Int64(st.st_dev), ino: UInt64(st.st_ino), size: Int64(st.st_size),
+                              mtimeSec: Int64(st.st_mtimespec.tv_sec), mtimeNsec: Int64(st.st_mtimespec.tv_nsec))
+            : nil
+        guard rename(tempURL.path, url.path) == 0 else {
+            let err = errno
+            try? FileManager.default.removeItem(at: tempURL)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+        }
+        return fp
+    }
+
+    /// fstat 版指紋(append 路徑:對已開啟的 fd 取,描述我們自己的寫入)。
+    static func fingerprint(ofFD fd: Int32) -> FileFingerprint? {
+        var st = stat()
+        guard fstat(fd, &st) == 0 else { return nil }
+        return FileFingerprint(dev: Int64(st.st_dev), ino: UInt64(st.st_ino), size: Int64(st.st_size),
+                               mtimeSec: Int64(st.st_mtimespec.tv_sec), mtimeNsec: Int64(st.st_mtimespec.tv_nsec))
     }
 
     /// 交易式切片取代(契約 F / codex C11):新帳本 = {其他 provider 事件} ∪ {此 provider 重掃事件},
@@ -304,15 +591,18 @@ public final class UsageLedger {
         guard let fileURL else {   // 記憶體模式
             events = merged
             ids = seen
+            reservedRawIDs = []   // #48 MF3 clearing twin:非-preservingRaw typed 重寫丟棄 raw-only 行
             rebuildInternPool()    // 舊切片事件被移除 → 池重建才有界(xcheck r1)
             revision &+= 1
             return accepted
         }
-        _ = try Self.writeAllAtomic(merged, to: fileURL)   // 先落盤;throw → 記憶體不變(舊切片保留)
+        let fp = try Self.writeAllAtomic(merged, to: fileURL)   // 先落盤;throw → 記憶體不變(舊切片保留)
         events = merged
         ids = seen
+        reservedRawIDs = []   // #48 MF3 clearing twin:非-preservingRaw typed 重寫丟棄 raw-only 行
         rebuildInternPool()                                // 舊切片事件被移除 → 池重建才有界(xcheck r1)
-        expectedFingerprint = currentFingerprint()
+        expectedFingerprint = fp   // 寫入當下捕捉(sol r3 MF2),取代事後 re-stat
+        if fp == nil { needsReload = true }
         revision &+= 1
         return accepted
     }
@@ -321,6 +611,7 @@ public final class UsageLedger {
     public func reset() {
         events = []
         ids = []
+        reservedRawIDs = []
         internPool = [:]
         expectedFingerprint = nil
         revision &+= 1
