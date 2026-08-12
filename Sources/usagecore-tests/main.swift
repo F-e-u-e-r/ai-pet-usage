@@ -6,6 +6,7 @@ let iso = ISO8601Tests()
 runSuite("ISO8601Tests", [
     ("testParseVariants", iso.testParseVariants),
     ("testStrictParseRequiresFullConsumption", iso.testStrictParseRequiresFullConsumption),
+    ("testStrictParseRejectsSemanticallyInvalidComponents", iso.testStrictParseRejectsSemanticallyInvalidComponents),
 ])
 
 let scanner = JSONLScannerTests()
@@ -746,6 +747,15 @@ runSuite("DataIntegrityReindexTests", [
     ("testCompactPreservesForeignRawOnWiredPath", diReindex.testCompactPreservesForeignRawOnWiredPath),
     ("testCompactRawPreservingKeepsGarbageSuffixTimestamp", diReindex.testCompactRawPreservingKeepsGarbageSuffixTimestamp),
     ("testReplaceRefusesRawOnlyIDCollision", diReindex.testReplaceRefusesRawOnlyIDCollision),
+    ("testCompactRawPreservingKeepsOutOfRangeTimestamp", diReindex.testCompactRawPreservingKeepsOutOfRangeTimestamp),
+    ("testAppendRefusesForeignDriftBeforeWrite", diReindex.testAppendRefusesForeignDriftBeforeWrite),
+    ("testCompactRawPreservingRefusesWriteThatWouldPoison", diReindex.testCompactRawPreservingRefusesWriteThatWouldPoison),
+    ("testAppendRefusesReuseOfPreservedRawOnlyID", diReindex.testAppendRefusesReuseOfPreservedRawOnlyID),
+    ("testAppendRefusesReuseAfterReplacePreservedForeignRawID", diReindex.testAppendRefusesReuseAfterReplacePreservedForeignRawID),
+    ("testAppendAllowsNewUniqueIDDespiteReservedRawIDs", diReindex.testAppendAllowsNewUniqueIDDespiteReservedRawIDs),
+    ("testAppendDriftPreflightWinsOverStaleReservedIDs", diReindex.testAppendDriftPreflightWinsOverStaleReservedIDs),
+    ("testAppendDetectsDriftBeforeReservedIDSkip", diReindex.testAppendDetectsDriftBeforeReservedIDSkip),
+    ("testAppendRefusesDriftIntoTruncatedFile", diReindex.testAppendRefusesDriftIntoTruncatedFile),
     ("testReindexAppliesRetentionCutoff", diReindex.testReindexAppliesRetentionCutoff),
     ("testCumulativeBaselinePreservedWhenScanStateMissing", diReindex.testCumulativeBaselinePreservedWhenScanStateMissing),
     ("testCumulativeBaselinePreservedWhenDiskHasDifferentMark", diReindex.testCumulativeBaselinePreservedWhenDiskHasDifferentMark),

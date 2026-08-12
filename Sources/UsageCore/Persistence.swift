@@ -172,6 +172,7 @@ public enum ISO8601 {
         var year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0
         var fraction = 0.0
         var tzOffset = 0
+        var tzHour = 0, tzMin = 0, tzSign = 1   // #48 gate-r5 sol MF1 / clearing-final sol#2:strict 時區值域檢查用
         let chars = Array(s.utf8)
         func digits(_ range: Range<Int>) -> Int? {
             guard range.upperBound <= chars.count else { return nil }
@@ -223,6 +224,7 @@ public enum ISO8601 {
                 } else {
                     if let m = digits((i + 3)..<(i + 5)) { om = m; consumedEnd = i + 5 } else { om = 0; consumedEnd = i + 3 }
                 }
+                tzHour = oh; tzMin = om; tzSign = sign   // #48 sol MF1/final sol#2:strict 值域檢查用(lenient 不受影響)
                 tzOffset = sign * (oh * 3600 + om * 60)
                 tzPresent = true
             default:
@@ -239,6 +241,19 @@ public enum ISO8601 {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         guard let base = cal.date(from: comps) else { return nil }
+        if strict {
+            // #48 gate-r5 sol MF1:strict 不得 fail-open 於 Calendar.date(from:) 會靜默 roll-over
+            // 正規化的超範圍欄位(twin 已證 hour/min/sec/月/日皆正規化而非 nil)。以「base 反解元件
+            // 逐一等於輸入」擋掉任何被正規化的欄位;時區 offset 值域另檢。任一非法 ⇒ nil ⇒ 呼叫端
+            //(compact 丟棄判定)fail-closed 保留該行,絕不以不可信 timestamp 誤刪歷史。
+            // #48 clearing-final sol#2:真實 UTC offset 範圍 -12:00..+14:00;逾此(語法合法但不可能)
+            // ⇒ fail-closed(否則 compact drop 判定會誤刪這類 raw 行 = history-loss)。tzMin 另須 ≤59。
+            let tzTotalMin = tzHour * 60 + tzMin
+            guard tzMin <= 59, tzTotalMin <= (tzSign >= 0 ? 840 : 720) else { return nil }
+            let back = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: base)
+            guard back.year == year, back.month == month, back.day == day,
+                  back.hour == hour, back.minute == minute, back.second == second else { return nil }
+        }
         return base.addingTimeInterval(fraction - Double(tzOffset))
     }
 

@@ -524,6 +524,182 @@ final class DataIntegrityReindexTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), blob, "檔案逐位元組未變")
     }
 
+    // #48 gate-r5 sol MF1 回歸(wired):時區/欄位超範圍的 timestamp(Calendar 會正規化)必須
+    // strict 解析失敗 ⇒ fail-closed 保留,不得被 compact 誤判過期而刪(history-loss)。
+    func testCompactRawPreservingKeepsOutOfRangeTimestamp() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let oorLine = #"{"id":"oor-keep","providerId":"mock","timestamp":"2020-01-01T00:00:00+99:99","tokens":{"input":1,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("oor-expired", at: Date().addingTimeInterval(-200 * 86400)))); blob.append(0x0A)
+        blob.append(Data(oorLine.utf8)); blob.append(0x0A)
+        blob.append(try AtomicJSON.encoder().encode(diEvent("oor-recent"))); blob.append(0x0A)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)
+        let raw = try Data(contentsOf: url)
+        XCTAssertEqual(ledger.compactRawPreserving(retentionDays: 92, now: Date(), raw: raw), .applied)
+        let after = String(data: try Data(contentsOf: url), encoding: .utf8) ?? ""
+        XCTAssertTrue(after.contains(oorLine), "超範圍時區 timestamp(strict 解析失敗)⇒ 必須保留")
+        XCTAssertTrue(after.contains("oor-recent"), "近期行保留")
+        XCTAssertFalse(after.contains("oor-expired"), "真正過期(strict 可解析)行丟棄")
+    }
+
+    // #48 gate-r5 sol MF2:persistAppend 必須在寫入**前**偵測磁碟指紋漂移(鏡射 casPreflight)。
+    // 否則 seekToEnd 之前落地的他方寫入會被吸收,提交重複 id(無法 canonicalize)的帳本。
+    func testAppendRefusesForeignDriftBeforeWrite() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ledgerA = UsageLedger(fileURL: url)
+        _ = ledgerA.append([diEvent("a1")])                 // 初始寫入 → expectedFingerprint = 我方狀態
+        XCTAssertNil(ledgerA.writeError, "初始 append 應成功")
+        // 他方(第二個 in-process ledger)在 A 認知之外 append 同一個 id
+        let ledgerB = UsageLedger(fileURL: url)
+        _ = ledgerB.append([diEvent("foreign-x")])
+        XCTAssertNil(ledgerB.writeError, "B 的 append 應成功")
+        // A 以陳舊 expectedFingerprint 嘗試 append foreign-x(模擬 adapter 回傳同 id)
+        let n = ledgerA.append([diEvent("foreign-x")])
+        XCTAssertEqual(n, 0, "指紋漂移 ⇒ append 必須拒寫(回 0)")
+        XCTAssertNotNil(ledgerA.writeError, "漂移拒寫必須設 writeError")
+        let after = String(data: try Data(contentsOf: url), encoding: .utf8) ?? ""
+        XCTAssertEqual(after.components(separatedBy: "\"foreign-x\"").count - 1, 1, "foreign-x 只應存在一次(A 未重複提交)")
+    }
+
+    // #48 clearing-final sol#1:compact 丟掉唯一可解碼(過期)行後只剩 canonical 但 decoder 拒收的
+    // raw-only 行 ⇒ 若寫出,load() 會判該檔 poison。**絕不提交會被 load() poison 的狀態**——
+    // re-decode 移到 atomicWrite 之前,全 raw-only ⇒ return .failed、原檔逐位元組保留、帳本保持健康
+    //(否則 retention compaction 會把健康帳本變 poisoned)。
+    func testCompactRawPreservingRefusesWriteThatWouldPoison() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let rawOnly = #"{"id":"ro-x","providerId":"other","timestamp":"not-an-iso-date","tokens":{"input":2,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("ro-expired", at: Date().addingTimeInterval(-200 * 86400)))); blob.append(0x0A)
+        blob.append(Data(rawOnly.utf8)); blob.append(0x0A)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)
+        let raw = try Data(contentsOf: url)
+        // 丟掉 ro-expired 後只剩 raw-only ⇒ 拒絕寫入(不提交 poison 狀態),保留原檔
+        XCTAssertEqual(ledger.compactRawPreserving(retentionDays: 92, now: Date(), raw: raw), .failed)
+        XCTAssertNil(ledger.loadError, "拒絕提交 poison 狀態 ⇒ 帳本保持健康,不 poison")
+        XCTAssertEqual(try Data(contentsOf: url), blob, "原檔逐位元組保留(未提交 all-raw-only compacted 狀態)")
+        XCTAssertNil(UsageLedger(fileURL: url).loadError, "原檔健康(含可解碼行),fresh load 不 poison")
+    }
+
+    // #48 MF3 clearing twin / invariant-B completion(class 1:mixed-state append collision)。
+    // raw-only(decoder 拒收但可抽出 stable id)行與可解碼行並存時,事後 append 重用該 id 必須被擋。
+    func testAppendRefusesReuseOfPreservedRawOnlyID() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let rawOnly = #"{"id":"rr-x","providerId":"mock","timestamp":"not-an-iso-date","tokens":{"input":2,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("rr-a"))); blob.append(0x0A)   // 可解碼行
+        blob.append(Data(rawOnly.utf8)); blob.append(0x0A)                                  // raw-only,id=rr-x
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)   // load ⇒ ids={rr-a}, reservedRawIDs={rr-x}
+        let before = try Data(contentsOf: url)
+        let n = ledger.append([diEvent("rr-x")])   // 重用 raw-only 保留 id
+        XCTAssertEqual(n, 0, "重用 raw-only 保留 id ⇒ 不新增(不得提交重複)")
+        XCTAssertEqual(try Data(contentsOf: url), before, "檔案逐位元組未變")
+    }
+
+    // class 2:replace → append collision。replaceProviderSlice(...preservingRaw:) 保留的 foreign
+    // raw-only id 在 commit 後仍須是 collision-reserved(證明 in-memory identity 沒把它丟掉)。
+    func testAppendRefusesReuseAfterReplacePreservedForeignRawID() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let foreignRawOnly = #"{"id":"fr-x","providerId":"other","timestamp":"not-an-iso-date","tokens":{"input":2,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("mk-1"))); blob.append(0x0A)   // provider mock,可解碼
+        blob.append(Data(foreignRawOnly.utf8)); blob.append(0x0A)                            // provider other,raw-only,id=fr-x
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)
+        _ = try ledger.replaceProviderSlice("mock", with: [diEvent("mk-1"), diEvent("mk-2")],
+                                            expectedRevision: ledger.loadedRevision(), preservingRaw: blob)
+        let n = ledger.append([diEvent("fr-x", provider: "other")])   // 重用被保留的 foreign raw-only id
+        XCTAssertEqual(n, 0, "replace 後 foreign raw-only id 仍須為 collision-reserved")
+    }
+
+    // class 3:normal unique append 不受影響(修法不得變成「有 raw-only 行就全面禁止 append」)。
+    func testAppendAllowsNewUniqueIDDespiteReservedRawIDs() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let rawOnly = #"{"id":"rn-x","providerId":"mock","timestamp":"not-an-iso-date","tokens":{"input":2,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("rn-a"))); blob.append(0x0A)
+        blob.append(Data(rawOnly.utf8)); blob.append(0x0A)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)
+        let n = ledger.append([diEvent("rn-y")])   // 全新 id
+        XCTAssertEqual(n, 1, "全新 id 不受 reservedRawIDs 影響,正常寫入")
+        XCTAssertNil(ledger.writeError)
+    }
+
+    // class 4:drift interaction。reservedRawIDs 建立後若磁碟漂移,MF2 fingerprint preflight 必須
+    // 先擋 append(不得依賴可能已陳舊的 in-memory 集合)。
+    func testAppendDriftPreflightWinsOverStaleReservedIDs() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let rawOnly = #"{"id":"rd-x","providerId":"mock","timestamp":"not-an-iso-date","tokens":{"input":2,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("rd-a"))); blob.append(0x0A)
+        blob.append(Data(rawOnly.utf8)); blob.append(0x0A)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledgerA = UsageLedger(fileURL: url)   // 建立 reservedRawIDs={rd-x}
+        let ledgerB = UsageLedger(fileURL: url)
+        _ = ledgerB.append([diEvent("rd-b")])     // 他方漂移
+        XCTAssertNil(ledgerB.writeError)
+        let n = ledgerA.append([diEvent("rd-new")])   // 全新 id,但磁碟已漂移
+        XCTAssertEqual(n, 0, "指紋漂移 ⇒ MF2 preflight 先擋(不依賴陳舊 in-memory 集合)")
+        XCTAssertNotNil(ledgerA.writeError, "漂移拒寫設 writeError")
+    }
+
+    // #48 clearing-r1 sol MUST-FIX:漂移檢查必須在 dedup **之前**。event 撞陳舊 reservedRawIDs 會在
+    // dedup 就 SKIP、於 `guard !inserted.isEmpty` 提早 return,persistAppend 的漂移檢查根本不跑。
+    // 若他方漂移已移除該 raw-only 行,有效 event 不得被靜默略過(writeError==nil)→ coordinator
+    // 前進 watermark → 永久遺失(A)。漂移 ⇒ fail-closed(writeError 非空)。
+    func testAppendDetectsDriftBeforeReservedIDSkip() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        let rawOnlyX = #"{"id":"dx-x","providerId":"mock","timestamp":"not-an-iso-date","tokens":{"input":2,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"mock"}"#
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("dx-a"))); blob.append(0x0A)
+        blob.append(Data(rawOnlyX.utf8)); blob.append(0x0A)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)   // ids={dx-a}, reservedRawIDs={dx-x}
+        // 他方漂移:改寫檔案移除 raw-only dx-x(只剩 dx-a)
+        var blob2 = Data()
+        blob2.append(try AtomicJSON.encoder().encode(diEvent("dx-a"))); blob2.append(0x0A)
+        try blob2.write(to: url)
+        // append 有效 dx-x — 陳舊 reservedRawIDs 會 SKIP;但磁碟已漂移 ⇒ 必須 fail-closed,不得靜默略過
+        let n = ledger.append([diEvent("dx-x")])
+        XCTAssertEqual(n, 0, "漂移 ⇒ 不寫入")
+        XCTAssertNotNil(ledger.writeError, "漂移必須設 writeError(禁止 writeError==nil 的靜默略過→watermark 前進→遺失)")
+    }
+
+    // #48 clearing-r1 luna MUST-FIX:missing/zero-length 分支亦不得無指紋比對盲寫。已載入非空歷史的
+    // 帳本若被他方 truncate 成 0,append 不得走 zero-length 分支盲寫 [new](記憶體/磁碟分歧、遮蔽漂移)。
+    func testAppendRefusesDriftIntoTruncatedFile() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("ledger.jsonl")
+        var blob = Data()
+        blob.append(try AtomicJSON.encoder().encode(diEvent("tr-old"))); blob.append(0x0A)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try blob.write(to: url)
+        let ledger = UsageLedger(fileURL: url)   // 載入非空 [tr-old],expectedFingerprint=F(非空)
+        try Data().write(to: url)                // 他方 truncate 成 0
+        let n = ledger.append([diEvent("tr-new")])
+        XCTAssertEqual(n, 0, "他方截斷(漂移)⇒ 不盲寫 [new]")
+        XCTAssertNotNil(ledger.writeError, "漂移必須 fail-closed 設 writeError")
+    }
+
     // C-MF6 × #48 Δ4 遷移:reindex 切片套用保留期 cutoff,不重新引入過期事件。
     // 遷移原則(owner):驗證 successful replacement 的測試必須提供可 canonicalize 的 source
     // identity 且不違反 monotonic gate——seed 改為「真正超過保留期」的事件(refresh 起點的
