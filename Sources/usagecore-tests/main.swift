@@ -816,4 +816,24 @@ runSuite("CanonicalLedgerTests", [
     ("testEncodingDomainGate", clTests.testEncodingDomainGate),
 ])
 
+// #64 durable-commit crash matrix(PLAN-v1 §5 preregistered;C7 注入 + C1–C3 構造 + 順序/等價鎖)。
+let duraMatrix = DurabilityMatrixTests()
+runSuite("DurabilityMatrixTests", [
+    ("testC7aCompactSyncFileFailureFailsClosedOldIntact", duraMatrix.testC7aCompactSyncFileFailureFailsClosedOldIntact),
+    ("testC7aFirstCreateSyncFileFailureLeavesNoLedger", duraMatrix.testC7aFirstCreateSyncFileFailureLeavesNoLedger),
+    ("testC7aRawPreservingSyncFileFailurePreservesOriginalBytes", duraMatrix.testC7aRawPreservingSyncFileFailurePreservesOriginalBytes),
+    ("testC7aCASReplaceSyncFileFailureThrowsMemoryUnchanged", duraMatrix.testC7aCASReplaceSyncFileFailureThrowsMemoryUnchanged),
+    ("testP1PreRenameStatFailureFailsClosedOldIntact", duraMatrix.testP1PreRenameStatFailureFailsClosedOldIntact),
+    ("testC7bCompactRenameFailureFailsClosedOldIntact", duraMatrix.testC7bCompactRenameFailureFailsClosedOldIntact),
+    ("testC7cCompactDirSyncFailureOutcomeUnknownFailClosed", duraMatrix.testC7cCompactDirSyncFailureOutcomeUnknownFailClosed),
+    ("testC7cCASReplaceDirSyncFailureOutcomeUnknownFailClosed", duraMatrix.testC7cCASReplaceDirSyncFailureOutcomeUnknownFailClosed),
+    ("testC7P2AppendSyncFailureNoAckOutcomeUnknown", duraMatrix.testC7P2AppendSyncFailureNoAckOutcomeUnknown),
+    ("testP1BarrierCallOrder", duraMatrix.testP1BarrierCallOrder),
+    ("testP2ExactlyOneSyncFilePerAppendNoRename", duraMatrix.testP2ExactlyOneSyncFilePerAppendNoRename),
+    ("testFingerprintEquivalenceAcrossRename", duraMatrix.testFingerprintEquivalenceAcrossRename),
+    ("testC1TempResidueInertOldIntactNextMutationProceeds", duraMatrix.testC1TempResidueInertOldIntactNextMutationProceeds),
+    ("testC3RenameVisibleNewValidRestart", duraMatrix.testC3RenameVisibleNewValidRestart),
+    ("testC3TornWriteRestartToleratedNeverSilentlyEmpty", duraMatrix.testC3TornWriteRestartToleratedNeverSilentlyEmpty),
+])
+
 finishTestRun()

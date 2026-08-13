@@ -10,6 +10,35 @@ struct FileFingerprint: Equatable {
     let mtimeNsec: Int64
 }
 
+/// #64 P5:durability syscall seam(internal、per-instance、不可變)。tests 以 `@testable` 經
+/// internal init 注入失敗排程;production 只走 `.production`(public init 不暴露此參數,
+/// 無全域可變狀態 → 平行測試不互染,production 代碼無法換掉 barrier;owner DP-3)。
+/// 三槽 = P1/P2 barrier 的三個 syscalls;回傳值語義同 POSIX(0 成功、-1 失敗)。
+struct DurabilityOps {
+    var syncFile: (Int32) -> Int32
+    var statFile: (Int32, UnsafeMutablePointer<stat>) -> Int32
+    var renameFile: (String, String) -> Int32
+    var syncDirectory: (String) -> Int32
+
+    /// Darwin production 實作。syncFile = F_FULLFSYNC(application 所選的最強平台持久化屏障;
+    /// Apple 文件亦標明其為 best-effort——本檔一律以「durable commit = 此屏障成功」為 commit
+    /// boundary,不宣稱絕對斷電保證)。任何失敗(含 ENOTSUP/EINVAL)= mutation failed,
+    /// 絕不降級 fsync、絕不 transparent downgrade(owner DP-1 hard-fail)。
+    /// syncDirectory = 開啟目錄 fd + fsync(rename metadata 層級;owner 裁定 dir 不要求 FULLFSYNC)。
+    static let production = DurabilityOps(
+        syncFile: { fd in fcntl(fd, F_FULLFSYNC) },
+        statFile: { fd, st in fstat(fd, st) },
+        renameFile: { src, dst in Darwin.rename(src, dst) },
+        syncDirectory: { path in
+            let dirfd = open(path, O_RDONLY)
+            guard dirfd >= 0 else { return -1 }
+            let r = fsync(dirfd)
+            close(dirfd)
+            return r
+        }
+    )
+}
+
 /// 本機用量帳本:彙整所有 provider 的正規化事件,為三個頁面與報告提供查詢。
 /// 帳本是「provider 全域」的聚合,而非單一終端面板的即時值(規格核心要求)。
 public final class UsageLedger {
@@ -73,8 +102,17 @@ public final class UsageLedger {
     /// `nil != nil` 為 false 會漏掉重載。
     private var needsReload = false
 
-    public init(fileURL: URL?) {
+    /// #64 P5:本 instance 的 durability syscalls(不可變;production 恆為 `.production`)。
+    private let durabilityOps: DurabilityOps
+
+    public convenience init(fileURL: URL?) {
+        self.init(fileURL: fileURL, durabilityOps: .production)
+    }
+
+    /// internal(tests-only via `@testable`):注入 barrier 失敗排程用;見 DurabilityOps 註解。
+    init(fileURL: URL?, durabilityOps: DurabilityOps) {
         self.fileURL = fileURL
+        self.durabilityOps = durabilityOps
         load()
     }
 
@@ -248,12 +286,10 @@ public final class UsageLedger {
         // 續尾,且**開檔後以實際 end 為準**(不信任先前 stat),`if end > 0` 亦避免 stat/open 間被截斷至 0 造成 end-1 underflow。
         let fp = currentFingerprint()
         if AtomicJSON.pathIsGenuinelyMissing(fileURL.path) {
-            expectedFingerprint = try Self.atomicWriteCapturingFingerprint(blob, to: fileURL)   // 確認缺檔 → 原子建立
-            if expectedFingerprint == nil { needsReload = true }   // nil 捕捉 ⇒ 不可證 → 強制下輪對帳(sol r4 MF4)
+            expectedFingerprint = try atomicWriteCapturingFingerprint(blob, to: fileURL)   // 確認缺檔 → 原子建立
         } else if let fp {
             if fp.size == 0 {
-                expectedFingerprint = try Self.atomicWriteCapturingFingerprint(blob, to: fileURL)   // stat 成功且確認空檔 → 原子建立
-                if expectedFingerprint == nil { needsReload = true }   // nil 捕捉 ⇒ 不可證 → 強制下輪對帳(sol r4 MF4)
+                expectedFingerprint = try atomicWriteCapturingFingerprint(blob, to: fileURL)   // stat 成功且確認空檔 → 原子建立
             } else {
                 // #48 gate-r5 sol MF2:續尾寫入前必須確認磁碟指紋未漂移(與 casPreflight/
                 // rewritePreflightOK 同級的 tri-state)。否則 seekToEnd 之前落地的他方寫入會被
@@ -278,7 +314,16 @@ public final class UsageLedger {
                     }
                 }
                 try handle.write(contentsOf: blob)
-                try handle.synchronize()   // fsync:落盤耐久(契約 B)
+                // #64 P2:F_FULLFSYNC(契約 B durable ack;plain fsync 只到 drive cache——斷電下
+                // drive 亂序寫回可讓 un-synced watermark 落盤而 append bytes 消失 = watermark leads,
+                // 違反 P3 invariant)。任何失敗(含 ENOTSUP)= append failed,不降級(DP-1)。
+                // bytes 已出 → outcome unknown 非 rollback:不 ack、不提交記憶體、needsReload
+                // 令下輪 reloadIfChanged 對帳({完整吸收 | torn-tail 容忍} 皆合法)。
+                guard durabilityOps.syncFile(handle.fileDescriptor) == 0 else {
+                    let err = errno
+                    needsReload = true
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+                }
                 // sol r3 MF2:指紋必須描述**我們自己的寫入**——以 fstat(fd) 於寫入當下捕捉,
                 // 不得事後 re-stat 路徑(write→stat 間他方落盤會把指紋毒化成「已含他方事件」,
                 // 記憶體卻沒有 → reload 不觸發 → CAS 過檢 → 之後的 replace 刪掉他方事件)。
@@ -332,13 +377,12 @@ public final class UsageLedger {
         // 不可信,一律拒絕重寫。compact 在 coordinator 中先於 gate 執行,缺 guard 即 gate 前 history-loss。
         guard rewritePreflightOK() else { return .failed }
         do {
-            let fp = try Self.writeAllAtomic(kept, to: fileURL)   // 先落盤(可能 throw);寫入當下捕捉指紋
+            let fp = try writeAllAtomic(kept, to: fileURL)   // 先落盤(可能 throw);寫入當下捕捉指紋
             events = kept                                     // 成功才提交記憶體
             ids = Set(kept.map(\.id))
             reservedRawIDs = []   // #48 MF3 clearing twin:typed 重寫丟棄所有 raw-only 行
             rebuildInternPool()                               // 事件被移除 → 池重建才有界(xcheck r1)
             expectedFingerprint = fp   // 寫入當下捕捉(sol r3 MF2),取代事後 re-stat
-            if fp == nil { needsReload = true }
             revision &+= 1
             return .applied
         } catch {
@@ -394,13 +438,12 @@ public final class UsageLedger {
             return .failed   // 全 raw-only ⇒ 不寫入、保留原檔(不提交 load()-poison 狀態)
         }
         do {
-            let fp = try Self.atomicWriteCapturingFingerprint(newData, to: fileURL)   // 通過 poison 檢查才寫
+            let fp = try atomicWriteCapturingFingerprint(newData, to: fileURL)   // 通過 poison 檢查才寫
             events = reloaded.sorted { $0.timestamp < $1.timestamp }
             ids = reloadedIDs
             reservedRawIDs = reloadedReserved   // #48 MF3 clearing twin:保留的 raw-only id 隨檔案重建
             rebuildInternPool()   // 事件被移除 → 池重建才有界(xcheck r1;與 compact 同原則)
             expectedFingerprint = fp
-            if fp == nil { needsReload = true }
             revision &+= 1        // 事件集已變 → 推進世代(聚合快取失效鍵)
             return .applied
         } catch {
@@ -515,7 +558,7 @@ public final class UsageLedger {
             newData.append(0x0A)
             freshAccepted.append(e)
         }
-        let fp = try Self.atomicWriteCapturingFingerprint(newData, to: fileURL)   // 先落盤;throw → 記憶體不變
+        let fp = try atomicWriteCapturingFingerprint(newData, to: fileURL)   // 先落盤;throw → 記憶體不變
         var merged = keptTyped + freshAccepted
         merged.sort { $0.timestamp < $1.timestamp }
         events = merged
@@ -523,14 +566,13 @@ public final class UsageLedger {
         reservedRawIDs = preservedForeignIDs.subtracting(seen)   // #48 MF3 clearing twin:保留的 foreign raw-only id 仍 collision-reserved
         rebuildInternPool()   // 舊切片事件被移除 → 池重建才有界(xcheck r1;與非-CAS 版同原則)
         expectedFingerprint = fp
-        if fp == nil { needsReload = true }
         revision &+= 1        // 事件集已變 → 推進世代(聚合快取失效鍵)
         return freshAccepted.count
     }
 
-    /// 全量原子重寫帳本檔:整份 encode(任一失敗即 throw,不做半份重寫)後 temp→stat→rename
-    /// 替換,回傳**寫入當下捕捉**的指紋。供 compact 與切片取代共用。
-    static func writeAllAtomic(_ events: [UsageEvent], to url: URL) throws -> FileFingerprint? {
+    /// 全量原子重寫帳本檔:整份 encode(任一失敗即 throw,不做半份重寫)後走 #64 P1 durable
+    /// barrier(temp→FULLFSYNC→rename→dir-fsync),回傳寫入當下捕捉的指紋。供 compact 與切片取代共用。
+    func writeAllAtomic(_ events: [UsageEvent], to url: URL) throws -> FileFingerprint {
         let encoder = AtomicJSON.encoder()
         var blob = Data()
         for e in events {
@@ -540,26 +582,71 @@ public final class UsageLedger {
         return try atomicWriteCapturingFingerprint(blob, to: url)
     }
 
-    /// sol r3 MF2:原子寫入並於**rename 前**對 temp 檔取指紋——dev/ino/size/mtime 皆不因 rename
-    /// 改變,故回傳值精確描述「我們這次寫入」的內容;事後 re-stat 目標路徑則有 write→stat 間
-    /// 他方落盤把指紋毒化成他方帳本的窗(記憶體卻無其事件 → reload 不觸發 → CAS 過檢 → 覆滅)。
-    static func atomicWriteCapturingFingerprint(_ blob: Data, to url: URL) throws -> FileFingerprint? {
-        try AppPaths.ensureDirectory(url.deletingLastPathComponent())
-        let tempURL = url.deletingLastPathComponent()
-            .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
-        do { try blob.write(to: tempURL) } catch {
-            try? FileManager.default.removeItem(at: tempURL)   // 半寫 temp 不留殘骸
-            throw error
+    /// #64 P1 durable atomic rewrite(owner architecture verdict):
+    ///   temp write(write-all)→ F_FULLFSYNC(temp fd)→ fstat 捕捉指紋 → rename → fsync(parent dir)
+    /// 全部成功才回傳(= durable commit ack)。durable commit 的定義是「application 所選最強平台
+    /// 持久化屏障成功」(F_FULLFSYNC file data + dir fsync rename metadata)——Apple 文件標明
+    /// F_FULLFSYNC 亦為 best-effort,故不宣稱絕對斷電保證,只以此為 commit boundary。
+    /// Success rule:任何 barrier 失敗 = mutation failed、不 ack;bytes 可能已改變檔案系統之後的
+    /// 失敗(C7c dir-sync)= outcome-unknown + fail-closed(設 needsReload 令下輪對帳),
+    /// 絕不假設 rollback、絕不動已 rename 的 destination。
+    /// 指紋於 rename 前以 fstat(temp fd) 捕捉(sol r3 MF2 血統:rename 不改 dev/ino/size/mtime;
+    /// 等價性由 testFingerprintEquivalenceAcrossRename 以測試鎖定,不只靠此推理)。
+    func atomicWriteCapturingFingerprint(_ blob: Data, to url: URL) throws -> FileFingerprint {
+        let parent = url.deletingLastPathComponent()
+        try AppPaths.ensureDirectory(parent)
+        // DP-2:temp 與 destination 同 parent(rename 同-filesystem 原子性前提)、O_EXCL unique。
+        let tempURL = parent.appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
+        let fd = open(tempURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        // 6b-1 write-all:short write 續寫、EINTR 重試;write()==0 或其他 errno = pre-rename failure。
+        var wrote = 0
+        let total = blob.count
+        var writeErrno: Int32 = 0
+        blob.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            while wrote < total {
+                let n = write(fd, raw.baseAddress!.advanced(by: wrote), total - wrote)
+                if n > 0 { wrote += n; continue }
+                if n < 0 && errno == EINTR { continue }
+                writeErrno = (n < 0) ? errno : EIO   // n==0:無進展,視為 I/O 失敗
+                return
+            }
         }
-        var st = stat()
-        let statOK = stat(tempURL.path, &st) == 0
-        let fp: FileFingerprint? = statOK
-            ? FileFingerprint(dev: Int64(st.st_dev), ino: UInt64(st.st_ino), size: Int64(st.st_size),
-                              mtimeSec: Int64(st.st_mtimespec.tv_sec), mtimeNsec: Int64(st.st_mtimespec.tv_nsec))
-            : nil
-        guard rename(tempURL.path, url.path) == 0 else {
+        guard wrote == total else {
+            close(fd); unlink(tempURL.path)   // C7-pre:destination 未動,temp best-effort 清除
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(writeErrno))
+        }
+        // C7a:F_FULLFSYNC 任何失敗(含 ENOTSUP/EINVAL)= mutation failed;絕不降級 fsync、
+        // 絕不 transparent downgrade(owner DP-1 hard fail)。destination 仍 old。
+        guard durabilityOps.syncFile(fd) == 0 else {
             let err = errno
-            try? FileManager.default.removeItem(at: tempURL)
+            close(fd); unlink(tempURL.path)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+        }
+        // attempt-002 owner-accepted MUST-FIX:verify(fstat)是 P1 success sequence 的一步,
+        // 失敗 = pre-rename failure(C7a 同腿)——destination 未動、可零歧義 abort;絕無理由在
+        // 已知拿不到預期指紋時仍執行 destructive rename。(對照 P2 tail 的 post-commit fstat:
+        // 那是 #48 sol r4 MF5 的 reconciliation 層,owner 裁定維持,兩者語義不同勿混。)
+        var st = stat()
+        guard durabilityOps.statFile(fd, &st) == 0 else {
+            let err = errno
+            close(fd); unlink(tempURL.path)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err == 0 ? EIO : err))
+        }
+        let fp = FileFingerprint(dev: Int64(st.st_dev), ino: UInt64(st.st_ino), size: Int64(st.st_size),
+                                 mtimeSec: Int64(st.st_mtimespec.tv_sec), mtimeNsec: Int64(st.st_mtimespec.tv_nsec))
+        close(fd)
+        // C7b:rename 失敗 → destination 仍 old;temp best-effort 清除。
+        guard durabilityOps.renameFile(tempURL.path, url.path) == 0 else {
+            let err = errno
+            unlink(tempURL.path)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+        }
+        // C7c:rename 已可見 → commit outcome UNKNOWN。不得 unlink(可能毀掉已 commit 的 new)、
+        // 不得回滾、不得 ack;設 needsReload 讓下輪 reloadIfChanged 對帳磁碟實況({old|new} 皆 valid)。
+        guard durabilityOps.syncDirectory(parent.path) == 0 else {
+            let err = errno
+            needsReload = true
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
         }
         return fp
@@ -596,13 +683,12 @@ public final class UsageLedger {
             revision &+= 1
             return accepted
         }
-        let fp = try Self.writeAllAtomic(merged, to: fileURL)   // 先落盤;throw → 記憶體不變(舊切片保留)
+        let fp = try writeAllAtomic(merged, to: fileURL)   // 先落盤;throw → 記憶體不變(舊切片保留)
         events = merged
         ids = seen
         reservedRawIDs = []   // #48 MF3 clearing twin:非-preservingRaw typed 重寫丟棄 raw-only 行
         rebuildInternPool()                                // 舊切片事件被移除 → 池重建才有界(xcheck r1)
         expectedFingerprint = fp   // 寫入當下捕捉(sol r3 MF2),取代事後 re-stat
-        if fp == nil { needsReload = true }
         revision &+= 1
         return accepted
     }

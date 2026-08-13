@@ -238,6 +238,15 @@ public actor UsageCoordinator {
         }
     }
     /// 持久化 scan-state(checked;供 reindex 前置「安全排序」用——失敗即 throw,呼叫端據此不 replace)。
+    ///
+    /// #64 P3(owner-locked、刻意的 asymmetry,勿「補強」):**A scan watermark is never a commit
+    /// record. It may lag durable ledger state, but it must never lead it.**
+    /// scan-state 是 rebuildable progress hint,**刻意不做 durability barrier**(帳本才是 authoritative
+    /// accounting state,由 #64 P1/P2 的 F_FULLFSYNC+dir-fsync commit boundary 保護)。
+    /// never-lead 由順序保證:記憶體 watermark 只在 ledger mutation durable ack 之後推進,本函數
+    /// 又只寫當下記憶體 —— 任何 durable watermark 都蘊含一個更早完成的 ledger barrier。
+    /// 丟失方向恆 safe:watermark 丟/舊 → 重掃 + id 去重(C-MF2);絕不因此把它做成雙檔 transaction
+    ///(那不增 correctness、徒增 I/O,並誤導 maintainer 以為兩檔必須原子)。
     private func persistScanState() throws {
         try AtomicJSON.write(scanStates, to: scanStateURL)
     }
