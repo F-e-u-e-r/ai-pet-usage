@@ -194,6 +194,80 @@ public actor UsageCoordinator {
     /// #48 §7:本次 refresh 的逐 provider data action(每輪 refresh 重置;僅 fullReindex 填寫)。
     private var providerOutcomes: [String: ProviderDataAction] = [:]
 
+    /// #83 A′ restart 判定(PLAN-v2 §3.4)。取代 proto-I4 的 absence→full 推導與 process-local
+    /// pending-fullReindex set:full 續跑意圖由 R7(amended)顯式 durable intent 欄位
+    ///(`ScanState.pendingFullReconcile`)承載,absence 單獨不再授權 full-fold 語義
+    ///(owner row-7 verdict:full source scan ≠ full-reindex fold semantics)。
+    private enum ProviderStartDisposition: Equatable {
+        case ordinary
+        /// row 2:R7(amended)顯式 durable intent(`pendingFullReconcile`)→ 續跑 full。
+        case resumeFull
+        /// row 6:first authoritative construction(gen∧ack 皆缺、wm 缺,rebuildable)→
+        /// full fold 語義(#83 U4:「空 state 下 ordinary 等價」被 [60@t1,45@t2] 反證——
+        /// decrease-ending 歷史下 ordinary 得 60+pendingDecrease、full 得 45)。
+        /// historical rescan of already-established provider(gen 存在)仍一律 ordinary。
+        case firstContact
+        /// row 5/8:ack 超前 limits(gen<ack,或 gen 缺席∧ack 存在)= invariant violation →
+        /// loud fail-closed:本輪該 provider 完全 skip(不 scan、不落帳、不 ingest、watermark 不動,
+        /// **派生 pass 亦排除**,U2),絕不自動 identity-reset(owner row-8 POISON verdict)。
+        case poison(String)
+    }
+
+    /// #83 W1(clearing-2):poison 判定的**唯一**真相來源——pre-pass 與 classify 共用,
+    /// 不在不同 phase 各自重算(owner contract)。
+    private func poisonReason(_ pid: String) -> String? {
+        let gen = limits.reconcileGeneration(for: pid)
+        guard let ack = scanStates[pid]?.ackGeneration else { return nil }
+        guard let g = gen else {
+            return "scan-state acks generation \(ack) but limits has no reconciliation identity (row 8) — fail closed; explicit reindex required"
+        }
+        if g < ack {
+            return "scan-state acks generation \(ack) ahead of limits generation \(g) (row 5) — fail closed; limits store appears rolled back"
+        }
+        return nil
+    }
+
+    private func classifyProviderStart(_ pid: String, historyModel: ProviderHistoryModel) -> ProviderStartDisposition {
+        let gen = limits.reconcileGeneration(for: pid)
+        let scan = scanStates[pid]
+        if let why = poisonReason(pid) { return .poison(why) }
+        // row 2(R7 amended):顯式 durable intent;ack==gen(或首次 requested-full:皆 nil)= full
+        // 未 commit → 續跑。intent 在 ∧ gen>ack = full 已 commit、tail 丟 → ordinary(R6,
+        // generation evidence 優先於 intent bit),成功 adopt 順手清 flag。
+        if historyModel == .rebuildableHistory, scan?.pendingFullReconcile == true,
+           gen == scan?.ackGeneration {
+            return .resumeFull
+        }
+        if historyModel == .rebuildableHistory, gen == nil, scan?.ackGeneration == nil,
+           scan?.files.isEmpty ?? true {
+            return .firstContact   // row 6(U4)
+        }
+        if gen != nil, scan?.ackGeneration == nil {
+            // row 7(U1):limits 歷史存在而 scan acknowledgement 遺失——ordinary 重掃(零重發),
+            // 但必須 loud;ack 於本輪首個成功 reconciliation 重建。
+            refreshQualityNotes.append("\(pid): scan-state acknowledgement missing while limits history exists (row 7) — ordinary rescan; acknowledgement will be re-established")
+        }
+        // rows 1/3/4/6′/7:ordinary(gen>ack 或 wm absent 一律 ordinary replay,R6;legacy 由
+        // ingest 於首個 reconciliation 建立 identity)。fold 的 fullReindex flag 三源:
+        // requested、row-2 resume、row-6 first contact。
+        return .ordinary
+    }
+
+    /// #83 U1(#48 §7):providerOutcomes 只在 **requested** fullReindex 輪填寫;row-2 resume
+    /// 輪(fullReindex=false)不得污染「增量刷新為空」contract——resume 的揭示走 quality note。
+    private func recordReindexOutcome(_ pid: String, requested: Bool, _ action: ProviderDataAction) {
+        if requested { providerOutcomes[pid] = action }
+    }
+
+    /// R5:成功腿統一經此 adopt——ack 寫入「此刻已 durable committed/confirmed」的 generation;
+    /// full intent(若在)一併清除(reconciliation 完成 = intent 履行,R7 amended)。
+    private func adoptScanState(_ pid: String, _ newState: ScanState) {
+        var adopted = newState
+        adopted.ackGeneration = limits.reconcileGeneration(for: pid)
+        adopted.pendingFullReconcile = nil
+        scanStates[pid] = adopted
+    }
+
     /// #48 gate 判定(純函式,可測):whole-file raw canonicalization → per-provider baseline 切片 →
     /// candidate 以實際持久化 bytes canonicalize → compareMonotonic。任一 raw/canonicalization
     /// failure ⇒ preserve(count-only;檔級失敗無法歸屬 provider,對本 provider 一律 fail closed)。
@@ -258,6 +332,16 @@ public actor UsageCoordinator {
     public init(dataDir: URL? = nil, settings: CoreSettings = CoreSettings(),
                 adapters: [ProviderAdapter]? = nil, refreshLockTimeout: TimeInterval = 60,
                 readOnly: Bool = false) {
+        self.init(dataDir: dataDir, settings: settings, adapters: adapters,
+                  refreshLockTimeout: refreshLockTimeout, readOnly: readOnly,
+                  limitsDurabilityOps: .production)
+    }
+
+    /// internal(tests-only via `@testable`,mirror #64 DP-3):注入 LimitEngine barrier 失敗排程;
+    /// production 一律經 public init(針 .production,無注入面)。
+    init(dataDir: URL? = nil, settings: CoreSettings = CoreSettings(),
+         adapters: [ProviderAdapter]? = nil, refreshLockTimeout: TimeInterval = 60,
+         readOnly: Bool = false, limitsDurabilityOps: DurabilityOps) {
         let dir = dataDir ?? AppPaths.dataDirectory()
         self.dataDir = dir
         self.settings = settings
@@ -268,7 +352,7 @@ public actor UsageCoordinator {
         if !readOnly { try? AppPaths.ensureDirectory(dir) }
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
         self.ledger = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
-        self.limits = LimitEngine(stateURL: dir.appendingPathComponent("limits-state.json"))
+        self.limits = LimitEngine(stateURL: dir.appendingPathComponent("limits-state.json"), durabilityOps: limitsDurabilityOps)
         do {
             self.scanStates = try AtomicJSON.readOrThrow([String: ScanState].self, from: dir.appendingPathComponent("scan-state.json")) ?? [:]
         } catch {
@@ -385,6 +469,7 @@ public actor UsageCoordinator {
         defer { refreshLock.release() }
         refreshQualityNotes = []
         providerOutcomes = [:]
+        limits.clearDerivedFailure()   // #49 AM-8:derived loud-error 的明確 cycle reset(讀取在 refresh 尾)
         ledger.clearWriteError()   // R2-NIT:清除上一輪殘留的落盤失敗旗標,避免誤觸本輪的 break
 
         // 其他行程可能已推進帳本/掃描進度/限額狀態:先收斂再增量掃描,
@@ -454,14 +539,39 @@ public actor UsageCoordinator {
         }
         var transitions: [LimitTransition] = []
         var inserted = 0
+        var attemptedThisRound: Set<String> = []    // #83 W5:真正進行 adapter work 的 providers(notAttempted 填補的排除依據)
+        // #83 U2 + W1(clearing-2):poison pre-pass **先於 availability**——enabled ∧ poisoned 的
+        // provider 無論 adapter 是否暫時 unavailable 都必須整輪 fail-closed;之後所有
+        // sweep / estimated / marker / delivery 一律查同一個集合,不各自重算(owner contract)。
+        var poisonedThisRefresh: Set<String> = []
+        // #83 X2(final correction):poison 判定域 = **enabledProviders 全體**(非現存 adapters)——
+        // enabled ∧ poisoned persisted state ∧ adapter 缺席(設定殘留/版本偏差)仍必須整輪
+        // fail-closed(sweep / estimated / marker / delivery 全部禁止;W1 domain closure)。
+        for pid in settings.enabledProviders.sorted() {
+            if let why = poisonReason(pid) {
+                poisonedThisRefresh.insert(pid)
+                refreshErrors[pid] = why
+                refreshQualityNotes.append("\(pid): \(why)")
+            }
+        }
 
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
             guard adapter.detectAvailability().available else { continue }
             let pid = adapter.providerId
             providerLastAttemptAt[pid] = now                          // F17:per-provider 真實嘗試記錄
             providerAttemptCounts[pid] = (providerAttemptCounts[pid] ?? 0) + 1
+            if poisonedThisRefresh.contains(pid) {
+                continue   // row 5/8:loud fail-closed(pre-pass 已記 error/note)——skip 全部(lastOk 不記,#74 語義)
+            }
+            // #83 A′:restart 判定先於一切讀寫(PLAN-v2 §3.4;poison 已由 pre-pass 擋,此處必非 poison)。
+            let disposition = classifyProviderStart(pid, historyModel: adapter.historyModel)
+            // #83 X1(final correction):真正開始 attempt ⇒ 清除 preflight 以第一次 availability
+            // 探測 prefill 的 `.preservedUnavailable`(availability flap 下為 stale)。此後只有
+            // work 成功才寫 truthful outcome;失敗 = 無 success/preserved outcome + loud(W5 contract)。
+            providerOutcomes.removeValue(forKey: pid)
+            attemptedThisRound.insert(pid)
             do {
-                if fullReindex && adapter.historyModel == .rebuildableHistory {
+                if (fullReindex || disposition == .resumeFull) && adapter.historyModel == .rebuildableHistory {
                     // 契約 F:從零重掃 → 只有「完整」掃描才切片取代(set-replace);不完整則保留舊切片、
                     // 舊 scanState、不刪歷史(契約 E / codex C8)。
                     // 注意:僅 rebuildableHistory 走此路;cumulativeSnapshotOnly(OpenCode)落到 else 走增量、
@@ -484,10 +594,10 @@ public actor UsageCoordinator {
                         if let reason = compactBlockedReason {
                             // 契約 step 4(luna L2)/luna L1:compact 失敗或 raw 可疑 ⇒ 不得比較,全量 preserve。
                             fullReindexPreservedProviderIds.insert(pid)
-                            providerOutcomes[pid] = reason == "compact-failed"
+                            recordReindexOutcome(pid, requested: fullReindex, reason == "compact-failed"
                                 ? .failedBeforeCommit
                                 : .preservedHistoryMismatch(retained: 0, missing: 0, changed: 0,
-                                                            duplicates: 0, canonicalizationErrors: 1)
+                                                            duplicates: 0, canonicalizationErrors: 1))
                             refreshQualityNotes.append("\(pid): reindex blocked — compaction unavailable; history preserved")
                             continue
                         }
@@ -495,8 +605,8 @@ public actor UsageCoordinator {
                         if ledger.hasUnreconciledSnapshot {
                             // gate-r2 luna L3b-殘餘:unstable snapshot ⇒ 記憶體不可信,fail closed preserve。
                             fullReindexPreservedProviderIds.insert(pid)
-                            providerOutcomes[pid] = .preservedHistoryMismatch(
-                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0)
+                            recordReindexOutcome(pid, requested: fullReindex, .preservedHistoryMismatch(
+                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0))
                             refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
                             continue
                         }
@@ -511,50 +621,76 @@ public actor UsageCoordinator {
                         } else {
                             // 檔存在但不可讀 ⇒ fail closed preserve(count-only)。
                             fullReindexPreservedProviderIds.insert(pid)
-                            providerOutcomes[pid] = .preservedHistoryMismatch(
-                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 1)
+                            recordReindexOutcome(pid, requested: fullReindex, .preservedHistoryMismatch(
+                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 1))
                             refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 1)")
                             continue
                         }
                         guard ledger.currentRevision().fp == revision.fp else {
                             // 讀取與 stat 之間 baseline 已漂移 ⇒ 放棄並 preserve(owner §3:不覆寫,v1 不 retry)。
                             fullReindexPreservedProviderIds.insert(pid)
-                            providerOutcomes[pid] = .preservedHistoryMismatch(
-                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0)
+                            recordReindexOutcome(pid, requested: fullReindex, .preservedHistoryMismatch(
+                                retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0))
                             refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
                             continue
                         }
                         switch Self.monotonicGateDecision(baselineRaw: baselineRaw, providerId: pid, candidate: freshKept) {
                         case .pass:
                             // C-MF2 安全排序:先把此 provider 的 watermark 持久化為空,再 replace,最後才提交 newState。
-                            scanStates[pid] = ScanState()
+                            // #83 R4:pre-clear 保留 acknowledged generation(寫入當下 gen——該 gen 已 durable
+                            // committed,R5 允許)並豎起顯式 durable full intent(R7 amended:唯一寫出點在此);
+                            // crash 後 restart 由 row 2(intent ∧ ack==gen)續跑,絕不落入 absence 歧義。
+                            scanStates[pid] = ScanState(files: [:], ackGeneration: limits.reconcileGeneration(for: pid),
+                                                        pendingFullReconcile: true)
                             try persistScanState()   // checked;失敗即 throw → catch → 保留舊切片(不 replace)
                             do {
                                 inserted += try ledger.replaceProviderSlice(pid, with: freshKept, expectedRevision: revision,
                                                                             preservingRaw: baselineRaw)
-                                scanStates[pid] = newState
-                                transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: true, now: now)
+                                // #49 R2 commit chain:durable ledger(上一行)→ durable limits(ingest 內
+                                // saveDurably)→ 才 adopt watermark。invariant:provider scan watermark
+                                // may lag durable LimitEngine state, but must never lead it.
+                                // #83 W5(clearing-2,owner contract + twin):requested-full 失敗不得產生
+                                // 看似成功的 provider outcome——limits fold 失敗時 **omit** 該 provider 的
+                                // outcome(ledger durable truth 保留;failure 由 error/note 承載)。
+                                // rebuildable 的 `.replaced`-on-fail 是 cumulative `.appendedCumulative` 的
+                                // twin(同一 contract 條文),一併收斂。
+                                switch limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: true, now: now, reconcilingProvider: pid) {
+                                case .unchanged:
+                                    adoptScanState(pid, newState)
+                                    refreshErrors[pid] = nil
+                                    if !fullReindex { refreshQualityNotes.append("\(pid): resumed full reconciliation completed (row 2)") }   // U1
+                                    recordReindexOutcome(pid, requested: fullReindex, .replaced)
+                                case .committed(let t):
+                                    adoptScanState(pid, newState)
+                                    transitions += t
+                                    refreshErrors[pid] = nil
+                                    if !fullReindex { refreshQualityNotes.append("\(pid): resumed full reconciliation completed (row 2)") }   // U1
+                                    recordReindexOutcome(pid, requested: fullReindex, .replaced)
+                                case .failed(let err):
+                                    // limits durable commit 未成立 ⇒ watermark 不推、outcome 缺席(W5)。
+                                    // durable intent 已在(pre-clear)⇒ 下輪 row 2 續跑 full。
+                                    refreshQualityNotes.append("\(pid): limits durable save failed — full reconciliation will resume next refresh (row 2)")
+                                    refreshErrors[pid] = String(describing: err)
+                                }
                                 parseErrorCounts[pid] = result.parseErrors
-                                refreshErrors[pid] = nil
-                                providerOutcomes[pid] = .replaced
                             } catch UsageLedger.CASError.revisionChanged {
                                 // compare 後、replace 前另一寫入落盤 ⇒ CAS 放棄,全量 preserve。
                                 fullReindexPreservedProviderIds.insert(pid)
-                                providerOutcomes[pid] = .preservedHistoryMismatch(
-                                    retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0)
+                                recordReindexOutcome(pid, requested: fullReindex, .preservedHistoryMismatch(
+                                    retained: 0, missing: 0, changed: 0, duplicates: 0, canonicalizationErrors: 0))
                                 refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
                             }
                         case .preserve(let r, let m, let c, let d, let e):
                             fullReindexPreservedProviderIds.insert(pid)   // 保留舊切片,不刪歷史
-                            providerOutcomes[pid] = .preservedHistoryMismatch(
-                                retained: r, missing: m, changed: c, duplicates: d, canonicalizationErrors: e)
+                            recordReindexOutcome(pid, requested: fullReindex, .preservedHistoryMismatch(
+                                retained: r, missing: m, changed: c, duplicates: d, canonicalizationErrors: e))
                             refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained \(r), missing \(m), changed \(c), duplicate \(d), canonicalization \(e))")
                             parseErrorCounts[pid] = result.parseErrors
                             refreshErrors[pid] = nil
                         }
                     case .incomplete:
                         fullReindexPreservedProviderIds.insert(pid)   // 保留舊切片,不刪歷史
-                        providerOutcomes[pid] = .preservedIncomplete
+                        recordReindexOutcome(pid, requested: fullReindex, .preservedIncomplete)
                         refreshQualityNotes.append("\(pid): reindex incomplete — history preserved")   // 誠實通知(非 error)
                     }
                 } else {
@@ -562,15 +698,43 @@ public actor UsageCoordinator {
                     let (result, newState) = try adapter.refreshUsage(state: state)
                     inserted += ledger.append(result.events)         // 交易式落盤(記憶體僅落盤成功才提交)
                     if let we = ledger.writeError { throw we }        // 落盤失敗 → 不提交下面(契約 B/M5)
-                    scanStates[pid] = newState                        // 落盤成功才推進 watermark
-                    transitions += limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: false, now: now)
+                    // #49 R2 commit chain:durable ledger(append 已 barrier)→ durable limits →
+                    // 才 adopt watermark(invariant:watermark may lag durable limits, never lead)。
+                    // #83 A′:full-fold 語義三源——requested 同輪(此處 = cumulative 的 requested
+                    // full)、row-2 續跑(rebuildable,上方分支)、row-6 first contact(U4:first
+                    // authoritative construction 用 full fold;established provider 的重掃恆 ordinary)。
+                    // absence/pending 推導已廢(R6)。cumulative 的 requested full .failed 不自動重試
+                    //(owner D1 verdict:loud、explicit rerun required)。
+                    let effFull = fullReindex || disposition == .firstContact
+                    var limitsCommitted = true   // #83 W5
+                    switch limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: effFull, now: now, reconcilingProvider: pid) {
+                    case .unchanged:
+                        adoptScanState(pid, newState)
+                        refreshErrors[pid] = nil
+                    case .committed(let t):
+                        adoptScanState(pid, newState)
+                        transitions += t
+                        refreshErrors[pid] = nil
+                    case .failed(let err):
+                        limitsCommitted = false
+                        if fullReindex {
+                            refreshQualityNotes.append("\(pid): limits durable save failed — requested full fold not committed; re-run reindex to reapply")
+                        } else {
+                            refreshQualityNotes.append("\(pid): limits durable save failed — watermark held, will re-ingest next refresh")
+                        }
+                        refreshErrors[pid] = String(describing: err)
+                    }
                     parseErrorCounts[pid] = result.parseErrors
-                    refreshErrors[pid] = nil
                     providerLastOkAt[pid] = now   // F17:成功觀測
                     if fullReindex {
                         // 走到 else 且 fullReindex → 必為 cumulativeSnapshotOnly(OpenCode):保留累計歷史、僅增量(不重建)。
-                        providerOutcomes[pid] = .appendedCumulative   // #48 §7:成功 append,非 preserved
-                        refreshQualityNotes.append("\(pid): reindex kept cumulative history — not rebuildable")
+                        // #83 W5(owner contract):ledger append 成功 ∧ limits fold 失敗 ⇒ **omit** 該
+                        // provider 的 outcome——不得以 .appendedCumulative 把 partial failure 表示成
+                        // 成功(failure 由 error/note 承載;attemptedThisRound 防 notAttempted 誤標)。
+                        if limitsCommitted {
+                            providerOutcomes[pid] = .appendedCumulative   // #48 §7:成功 append + fold 成立
+                            refreshQualityNotes.append("\(pid): reindex kept cumulative history — not rebuildable")
+                        }
                     }
                 }
             } catch {
@@ -583,14 +747,18 @@ public actor UsageCoordinator {
         }
         if fullReindex {
             // #48 §7:mid-loop 中斷後未嘗試(或被 skip)的 requested provider 如實標 not-attempted。
+            // #83 W5:真正嘗試過(進行了 adapter work)但 limits fold 失敗而 omit outcome 的
+            // provider 不得被誤標 notAttempted——以 attemptedThisRound 排除。
             let requested = Set(adapters.filter { settings.enabledProviders.contains($0.providerId) }.map(\.providerId))
-            for pid in requested where providerOutcomes[pid] == nil { providerOutcomes[pid] = .notAttempted }
+            for pid in requested where providerOutcomes[pid] == nil && !attemptedThisRound.contains(pid) {
+                providerOutcomes[pid] = .notAttempted
+            }
         }
 
-        transitions += limits.sweepExpiredWindows(now: now)
+        transitions += limits.sweepExpiredWindows(now: now, excluding: poisonedThisRefresh)   // U2
 
-        // Claude 估算區塊的重置偵測
-        if settings.enabledProviders.contains("claude-code") {
+        // Claude 估算區塊的重置偵測(U2:poisoned 亦排除)
+        if settings.enabledProviders.contains("claude-code"), !poisonedThisRefresh.contains("claude-code") {
             let recent = ledger.events(in: .trailing(days: 8, now: now), providerId: "claude-code")
             let block = LimitEngine.fiveHourBlock(events: recent, now: now)
             transitions += limits.noteEstimatedBlock(providerId: "claude-code",
@@ -601,6 +769,12 @@ public actor UsageCoordinator {
         }
         // 官方與估算同窗撞 reset → 留官方(估算不得蓋掉官方歸因)。
         transitions = LimitEngine.preferOfficialResets(transitions)
+
+        // #49 R3:derived-state(sweep/estimatedBlock)持久化失敗 = loud-but-nonblocking——
+        // 可自 durable ledger/limits 重算,下輪即補;絕不因此否定已 durable 的 ingest、不撤 watermark。
+        if let derr = limits.derivedSaveError {
+            refreshQualityNotes.append("limits derived-state save failed (recomputed next refresh): \(derr)")
+        }
 
         do {
             try AtomicJSON.write(scanStates, to: scanStateURL)   // C-MF8:寫失敗不再靜默

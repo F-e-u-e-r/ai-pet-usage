@@ -190,6 +190,7 @@ Policy:
 
 - Provider-wide aggregates win over any single terminal panel.
 - Within one active window, a usage percent never goes **down** because an older/stale source event appeared. A single newer-but-lower reading does not lower it either.
+- **Temporal mutation authority (#49 I2, 2026-08-13 — supersedes the earlier unconditional same-window max).** Once a window has a committed observation at time `T`, any observation with `observedAt <= T` (equal included — no max tie-break) cannot mutate the committed value in any direction. Timestamps are the single mutation authority; this is what makes replay after a crash/watermark loss idempotent (no re-raised values, no duplicate threshold transitions). An explicit **Full Reindex** is the rebuild authorization and is exempt.
 - A percent may drop only through three channels: (a) the window rolls over (resets_at changes); (b) an explicit **Full Reindex**; or (c) **two consecutive newer official readings** — strictly increasing observation times, each more than 0.5pt below the stored value (e.g. after a plan upgrade or a backend recompute). Channels (b) and (c) are labelled `corrected` in the UI, reports, and CLI for 24 hours after the correction, then the label clears on its own.
 - Expired windows (resets_at in the past) display as recovered (0%, confidence `estimated`) until fresh data arrives.
 

@@ -126,6 +126,11 @@ final class MockAdapter: ProviderAdapter {
     let historyModel: ProviderHistoryModel
     private let make: (ScanState) -> (AdapterRefreshResult, ScanState)
     var lastSeenState: ScanState?
+    /// #83 clearing-2 W1 測試面:模擬暫時 unavailable(default nil = 既有恆 available 行為)。
+    var availabilityOverride: ProviderAvailability?
+    /// #83 X1 測試面:逐呼叫消費的 availability 序列(availability flap 模擬;耗盡後
+    /// fallback 至 availabilityOverride / 恆 available)。
+    var availabilitySequence: [ProviderAvailability] = []
     init(_ providerId: String, historyModel: ProviderHistoryModel = .rebuildableHistory,
          make: @escaping (ScanState) -> (AdapterRefreshResult, ScanState)) {
         self.providerId = providerId
@@ -135,7 +140,10 @@ final class MockAdapter: ProviderAdapter {
     var displayName: String { providerId }
     var roots: [URL] { [] }
     var watchFiles: [URL] { [] }
-    func detectAvailability() -> ProviderAvailability { ProviderAvailability(available: true, detail: "mock") }
+    func detectAvailability() -> ProviderAvailability {
+        if !availabilitySequence.isEmpty { return availabilitySequence.removeFirst() }
+        return availabilityOverride ?? ProviderAvailability(available: true, detail: "mock")
+    }
     func refreshUsage(state: ScanState) throws -> (AdapterRefreshResult, ScanState) {
         lastSeenState = state
         return make(state)
