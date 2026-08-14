@@ -1,5 +1,5 @@
 import Foundation
-import UsageCore
+@testable import UsageCore
 
 // F17 信任層 substrate 測試(契約 v5 §7 fixtures 的落地;全部 deterministic、時刻注入)。
 
@@ -268,7 +268,7 @@ final class TrustOrderingTests: XCTestCase {
         let now = base.addingTimeInterval(4 * 3600)
         var last = FoldedState(percent: -1, resetsAt: nil, windowMinutes: nil)
         for (i, batch) in batches.enumerated() {
-            _ = engine.ingest(readings: batch, settings: settings, now: now)
+            _ = engine.ingestTransitions(readings: batch, settings: settings, now: now)
             let st = engine.limitState(providerId: "codex", ledger: ledger, settings: settings, now: now)
             last = FoldedState(percent: st.fiveHour.usedPercent ?? -1,
                                resetsAt: st.fiveHour.resetAt,
@@ -305,11 +305,13 @@ final class TrustOrderingTests: XCTestCase {
         // 每條 interleaving 斷言**每步的精確 folded 值**(r2 sol#8:寬鬆下界擋不住
         // 「單讀即降」的壞引擎;精確序列同時 enforce 兩連降語義與 per-sequence 決定性):
         // - AAB step1 = 80(70 只是第一低:pending 凍結,percent 不動)→ step2 = 60(兩連)
-        // - ABA step2 = 90(B 升)→ step3 = 60(pending 70@t1 + 60@t2 兩連確認)
+        //   → step3 = 60(#49 I2:b90@tb 早於 committed observedAt=t2 ⇒ 完全 inert,不得抬回)
+        // - ABA step2 = 90(B 升:tb 晚於 committed=base ⇒ 合法)→ step3 = 60(兩連確認)
         // - BAA step1 = 90 → step3 = 60(同上)
-        // 單讀即降的壞引擎會在 step1 炸(80→70);越權樂觀值同樣炸。
+        // 單讀即降的壞引擎會在 step1 炸(80→70);越權樂觀值同樣炸;
+        // older-raise 的壞引擎(pre-I2)會在 AAB step3 炸(60→90)。
         let interleavings: [(name: String, order: [[RateLimitReading]], expected: [Double])] = [
-            ("AAB", [[seed], [a70], [a60], [b90]], [80, 80, 60, 90]),
+            ("AAB", [[seed], [a70], [a60], [b90]], [80, 80, 60, 60]),
             ("ABA", [[seed], [a70], [b90], [a60]], [80, 80, 90, 60]),
             ("BAA", [[seed], [b90], [a70], [a60]], [80, 90, 90, 60]),
         ]
@@ -321,8 +323,10 @@ final class TrustOrderingTests: XCTestCase {
             }
             finals.insert(f.percent)
         }
-        // K1 safety 總結:兩個合法終態(90 保守高值 / 60 兩連降),無任何低於 60 的樂觀值
-        XCTAssertEqual(finals, Set([60, 90]), "終態集合恰為 {60, 90}(分歧存在且皆在保守側)")
+        // K1 safety 總結(#49 I2 supersede):temporal authority 使三種排列**同一終態 60**——
+        // 舊有的 order-divergence({60,90})被消滅(D-2026-08-09-1 期望的 ordered-determinism
+        // 在此 fixture 上成立);安全側不變:過程無任何低於 60 的樂觀值。
+        XCTAssertEqual(finals, Set([60]), "終態集合收斂為 {60}(I2:排列不再分歧)")
     }
 
     func testStabilizationConvergence() {
@@ -336,8 +340,10 @@ final class TrustOrderingTests: XCTestCase {
         let histBAA: [[RateLimitReading]] = [[seed], [reading(90, at: tb)], [reading(70, at: t1)], [reading(60, at: t2)]]
         let divergedA = run(batches: histAAB).percent
         let divergedB = run(batches: histBAA).percent
-        XCTAssertEqual(Set([divergedA, divergedB]), Set([90, 60]),
-                       "前置:兩條歷史必須先真的分歧到 90/60(否則 fixture 沒在測收斂)")
+        // #49 I2 supersede:兩條歷史不再分歧(older b90 於 AAB 為 inert)——收斂在 fold 層直接成立;
+        // fixture 保留穩定序列段,繼續釘「已同態後餵相同後續仍一致」。
+        XCTAssertEqual(Set([divergedA, divergedB]), Set([60]),
+                       "前置(I2 後):兩條排列歷史直接同終態 60(order-divergence 已消滅)")
         // 穩定後續:同源連續兩筆 65(observedAt 嚴格遞增、晚於一切歷史)
         let s1 = reading(65, at: base.addingTimeInterval(1800))
         let s2 = reading(65, at: base.addingTimeInterval(2400))

@@ -836,4 +836,78 @@ runSuite("DurabilityMatrixTests", [
     ("testC3TornWriteRestartToleratedNeverSilentlyEmpty", duraMatrix.testC3TornWriteRestartToleratedNeverSilentlyEmpty),
 ])
 
+// #49 R4 replay/idempotence characterization(PLAN-v1 phase 2;現行 engine,零產品碼改動)。
+let l49 = Limit49CharacterizationTests()
+runSuite("Limit49CharacterizationTests", [
+    ("testReplayFullBatchEmitsNoTransitionsAndPreservesStore", l49.testReplayFullBatchEmitsNoTransitionsAndPreservesStore),
+    ("testCrossProviderSharedStoreReplayConverges", l49.testCrossProviderSharedStoreReplayConverges),
+    ("testRolloverReplayWithinRecencyDoesNotRecelebrate", l49.testRolloverReplayWithinRecencyDoesNotRecelebrate),
+    ("testRow1SyncFileFailureFailsClosedOldDurable", l49.testRow1SyncFileFailureFailsClosedOldDurable),
+    ("testRow2RenameFailureFailsClosedOldDurable", l49.testRow2RenameFailureFailsClosedOldDurable),
+    ("testRow3DirSyncFailureOutcomeUnknownReplayConverges", l49.testRow3DirSyncFailureOutcomeUnknownReplayConverges),
+    ("testRow7CoordinatorHoldsWatermarkWhenLimitsCommitFails", l49.testRow7CoordinatorHoldsWatermarkWhenLimitsCommitFails),
+    ("testRow9DerivedSaveFailureIsLoudButNonblocking", l49.testRow9DerivedSaveFailureIsLoudButNonblocking),
+    ("testAM1FailedIngestStateNeverLaunderedByDerivedSave", l49.testAM1FailedIngestStateNeverLaunderedByDerivedSave),
+    ("testAM2DerivedRewriteGoesThroughFullBarrier", l49.testAM2DerivedRewriteGoesThroughFullBarrier),
+    ("testAM3SweepMarkerDurableBeforeResetDelivery", l49.testAM3SweepMarkerDurableBeforeResetDelivery),
+    ("testAM45FullReindexRetrySemanticsAndUnchangedClears", l49.testAM45FullReindexRetrySemanticsAndUnchangedClears),
+    ("testAM6InjectedAFailureNotLaunderedByBCommit", l49.testAM6InjectedAFailureNotLaunderedByBCommit),
+    ("testAM7DerivedFailureDoesNotInvalidateDurableIngest", l49.testAM7DerivedFailureDoesNotInvalidateDurableIngest),
+    ("testAM8DerivedErrorAccumulatesUntilCycleReset", l49.testAM8DerivedErrorAccumulatesUntilCycleReset),
+])
+
+// #49 Plan v2 preregistered(I1–I4;cases 9/10 = AM-5/AM-6 既有 lock)。
+let l49v2 = Limit49V2Tests()
+runSuite("Limit49V2Tests", [
+    ("testV2C1SameProcessUnchangedRequiresRebarrierAfterC7c", l49v2.testV2C1SameProcessUnchangedRequiresRebarrierAfterC7c),
+    ("testV2C2RestartUnchangedRequiresConfirmation", l49v2.testV2C2RestartUnchangedRequiresConfirmation),
+    ("testV2C3DecreaseEndingBatchReplayIdempotent", l49v2.testV2C3DecreaseEndingBatchReplayIdempotent),
+    ("testV2C4TemporalAuthoritySixCases", l49v2.testV2C4TemporalAuthoritySixCases),
+    ("testV2C5OfficialThenEstimatedCrossCycleZeroDuplicate", l49v2.testV2C5OfficialThenEstimatedCrossCycleZeroDuplicate),
+    ("testV2C6EstimatedMarkerFailureZeroThenExactlyOne", l49v2.testV2C6EstimatedMarkerFailureZeroThenExactlyOne),
+    ("testV2C7RequestedFullOnCumulativePathUsesFullSemantics", l49v2.testV2C7RequestedFullOnCumulativePathUsesFullSemantics),
+    ("testV2C8ProcessDeathAbsentWatermarkDerivesFullSemantics", l49v2.testV2C8ProcessDeathAbsentWatermarkDerivesFullSemantics),
+])
+
+// #83 A′ red-first(PLAN-v2 §5 CE + §3.4 rows + §3.3 bump + R7;owner GO 2026-08-14)。
+let l49v3 = Limit49V3Tests()
+runSuite("Limit49V3Tests", [
+    ("testV3BumpOrdinaryChangedIncrementsUnchangedDoesNot", l49v3.testV3BumpOrdinaryChangedIncrementsUnchangedDoesNot),
+    ("testV3CE3FullUnchangedStillBumpsGeneration", l49v3.testV3CE3FullUnchangedStillBumpsGeneration),
+    ("testV3CE4DerivedWriteDoesNotAdvanceGeneration", l49v3.testV3CE4DerivedWriteDoesNotAdvanceGeneration),
+    ("testV3AckEstablishedAfterCommit", l49v3.testV3AckEstablishedAfterCommit),
+    ("testV3CE1CrossProviderGeneration", l49v3.testV3CE1CrossProviderGeneration),
+    ("testV3Row4LimitsLeadScanOrdinaryZeroDuplicate", l49v3.testV3Row4LimitsLeadScanOrdinaryZeroDuplicate),
+    ("testV3Row7ScanStateLossOrdinaryNoHistoricalReplay", l49v3.testV3Row7ScanStateLossOrdinaryNoHistoricalReplay),
+    ("testV3Row2ReservedShapeResumesFullSemantics", l49v3.testV3Row2ReservedShapeResumesFullSemantics),
+    ("testV3Row8PoisonGenAbsentAckPresent", l49v3.testV3Row8PoisonGenAbsentAckPresent),
+    ("testV3Row5PoisonGenLessThanAck", l49v3.testV3Row5PoisonGenLessThanAck),
+    ("testV3R7PreClearProducesReservedShape", l49v3.testV3R7PreClearProducesReservedShape),
+    ("testV3R7OrdinaryPathsNeverManufactureReservedShape", l49v3.testV3R7OrdinaryPathsNeverManufactureReservedShape),
+    ("testV3R7NaturallyEmptyWatermarkDoesNotTriggerResumeFull", l49v3.testV3R7NaturallyEmptyWatermarkDoesNotTriggerResumeFull),
+    ("testV3MigrationLazyEstablishmentOnFirstReconciliation", l49v3.testV3MigrationLazyEstablishmentOnFirstReconciliation),
+    ("testV3U1ResumeFullKeepsOutcomesEmptyAndLoud", l49v3.testV3U1ResumeFullKeepsOutcomesEmptyAndLoud),
+    ("testV3U1Row7EmitsLoudQualityNote", l49v3.testV3U1Row7EmitsLoudQualityNote),
+    ("testV3U2PoisonExcludedFromDerivedPasses", l49v3.testV3U2PoisonExcludedFromDerivedPasses),
+    ("testV3U3FoldRolloverSuppressedAfterEstimatedDelivery", l49v3.testV3U3FoldRolloverSuppressedAfterEstimatedDelivery),
+    ("testV3U3FoldRolloverStillFiresWhenEstimatedSuppressed", l49v3.testV3U3FoldRolloverStillFiresWhenEstimatedSuppressed),
+    ("testV3U4FirstContactUsesFullFold", l49v3.testV3U4FirstContactUsesFullFold),
+    ("testV3U5CrossProviderReadingDoesNotBumpSubject", l49v3.testV3U5CrossProviderReadingDoesNotBumpSubject),
+    ("testV3IntentWithGenLeadTakesOrdinaryAndClears", l49v3.testV3IntentWithGenLeadTakesOrdinaryAndClears),
+    ("testV3W1UnavailablePoisonedStillExcludedFromDerivedPasses", l49v3.testV3W1UnavailablePoisonedStillExcludedFromDerivedPasses),
+    ("testV3W2NilBoundaryRolloverSuppressedAfterEstimatedDelivery", l49v3.testV3W2NilBoundaryRolloverSuppressedAfterEstimatedDelivery),
+    ("testV3W2NilBoundaryRolloverFiresWhenEstimatedSuppressed", l49v3.testV3W2NilBoundaryRolloverFiresWhenEstimatedSuppressed),
+    ("testV3W3FullExemptionScopedToReconcilingProvider", l49v3.testV3W3FullExemptionScopedToReconcilingProvider),
+    ("testV3W4EstablishmentIndependentOfUnrelatedMutation", l49v3.testV3W4EstablishmentIndependentOfUnrelatedMutation),
+    ("testV3W5CumulativeFailedFoldOmitsSuccessOutcome", l49v3.testV3W5CumulativeFailedFoldOmitsSuccessOutcome),
+    ("testV3U1ResumeIncompleteLegAlsoGated", l49v3.testV3U1ResumeIncompleteLegAlsoGated),
+    ("testV3X1AvailabilityFlapClearsStalePreservedUnavailable", l49v3.testV3X1AvailabilityFlapClearsStalePreservedUnavailable),
+    ("testV3X2AdapterlessEnabledPoisonedStillExcluded", l49v3.testV3X2AdapterlessEnabledPoisonedStillExcluded),
+    ("testV3X3SecondaryWindowAlsoScopedToReconcilingProvider", l49v3.testV3X3SecondaryWindowAlsoScopedToReconcilingProvider),
+    ("testV3G1SanitizeInvalidatesDurabilityConfirmation", l49v3.testV3G1SanitizeInvalidatesDurabilityConfirmation),
+    ("testV3G2EstimatedDeliveredSuppressesLateOfficialSameBoundary", l49v3.testV3G2EstimatedDeliveredSuppressesLateOfficialSameBoundary),
+    ("testV3G2SuppressedEstimatedDoesNotSwallowFreshOfficial", l49v3.testV3G2SuppressedEstimatedDoesNotSwallowFreshOfficial),
+    ("testV3CumulativeEstablishesGenAndAck", l49v3.testV3CumulativeEstablishesGenAndAck),
+])
+
 finishTestRun()

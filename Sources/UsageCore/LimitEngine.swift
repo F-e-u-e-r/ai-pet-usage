@@ -46,15 +46,19 @@ public struct CoreSettings: Codable, Sendable {
 /// 較舊/較低的來源事件不得拉低已知百分比;向下修正只有三條合法通道 —
 /// (a) 窗口翻轉、(b) 全量重建索引、(c) 連續兩筆 observedAt 嚴格遞增且各低於現值
 /// 0.5pt 以上的官方讀數(方案升級/後端重算)。(b)(c) 標 `corrected`,僅 surface 24h。
+/// **#49 I2 修訂(owner,2026-08-13;supersede 舊「同窗無條件 max」措辭)**:committed
+/// observedAt 之前(含 equal)的觀測對 committed value 完全 inert——timestamp 是唯一
+/// mutation authority,任何方向皆然;fullReindex 為重建授權例外。此使 crash/watermark-loss
+/// 後的 replay 冪等(不重抬、不重發 crossings)。
 public final class LimitEngine {
 
-    struct PercentSample: Codable {
+    struct PercentSample: Codable, Equatable {
         var at: Date
         var percent: Double
     }
 
     /// 換窗候選:窗口翻轉需連續兩筆同窗讀數確認(見 fold);跨批次/重啟持久化。
-    struct PendingWindow: Codable {
+    struct PendingWindow: Codable, Equatable {
         var percent: Double
         var resetsAt: Date?
         var observedAt: Date
@@ -65,13 +69,13 @@ public final class LimitEngine {
     /// 同窗「向下修正」候選(與換窗候選 `pending` 各司其職,互不相涉):
     /// 官方同窗讀數持續走低(方案升級/後端重算)需連續兩筆 observedAt 嚴格遞增確認,
     /// 單筆抖低不得下修(重放同樣被 observedAt 規則擋下)。
-    struct PendingDecrease: Codable {
+    struct PendingDecrease: Codable, Equatable {
         var percent: Double
         var observedAt: Date
         var count: Int
     }
 
-    struct PersistedWindow: Codable {
+    struct PersistedWindow: Codable, Equatable {
         var percent: Double
         var resetsAt: Date?
         var observedAt: Date
@@ -87,7 +91,7 @@ public final class LimitEngine {
         var correctedReason: CorrectionReason? = nil
     }
 
-    struct PersistedProvider: Codable {
+    struct PersistedProvider: Codable, Equatable {
         var primary: PersistedWindow?
         var secondary: PersistedWindow?
         var planType: String?
@@ -95,17 +99,51 @@ public final class LimitEngine {
         var estimatedBlockEnd: Date?
         var estimatedBlockTokens: Int?
         var estimatedResetHandled: Bool?
+        /// #83 G2(r3 ACCEPT):estimated reset 實際**交付**時的 boundary(blockEnd)。與
+        /// `estimatedResetHandled`(處理 marker——閘壓下也會設)區分:同一 logical boundary 的
+        /// 單一 delivery identity 需要「已交付」證據,handled 不足以判別。sweep 讀側據此抑制
+        /// 同 boundary 的遲到 official 重發;suppressed(handled 而未交付)不抑制。舊檔解碼 nil。
+        var estimatedResetDeliveredAt: Date? = nil
         /// Codex 5h「消失」時點(週-only 快照的 observedAt)。不新於此的殘留 5h 讀數(如封存
         /// session 檔以新路徑被重掃重放)不得復活已凍結的 5h 槽。舊 state 檔解碼為 nil。
         var codexFiveHourAbsentSince: Date? = nil
+        /// #83 A′ R1/R2:本 provider 的 reconciliation generation——只隨「該 provider 一次成功
+        /// durable commit 的 scan-consuming reconciliation」推進(R2);derived write 與他 provider
+        /// 的 commit 不得推進(R1)。full reconciliation 即使 logical unchanged 也建立新 generation
+        ///(R3,failed-full 與 succeeded-unchanged-full 的 durable 判別)。舊 state 檔解碼為 nil
+        /// = unestablished reconciliation identity(migration:首個 reconciliation 建立)。
+        var reconcileGeneration: UInt64? = nil
     }
 
     private var store: [String: PersistedProvider]
     private let stateURL: URL?
+    /// #83 A′:讀取 provider 的 reconciliation generation(coordinator restart 判定 + 測試觀察)。
+    func reconcileGeneration(for providerId: String) -> UInt64? {
+        store[providerId]?.reconcileGeneration
+    }
     /// 非 nil 表示 limits-state 檔存在但讀不到 / 損壞;coordinator 見此中止本輪寫入,不覆寫(#44 契約 A)。
     public private(set) var loadError: Error?
+    /// #49 R3:derived-state(sweep/estimatedBlock)持久化失敗的可觀測旗標——loud-but-nonblocking,
+    /// coordinator 讀後入 refreshQualityNotes;絕不 retroactively 否定已 durable 的 provider ingest,
+    /// 絕不擋 watermark(derived 可由 durable ledger/limits 重算)。每次 derived 寫入起始清空。
+    public private(set) var derivedSaveError: Error?
+    /// #49 R5/P5:durability syscalls(同 #64 DP-3:per-instance 不可變、public init 針 production、
+    /// internal init 供 @testable 注入;直接 reuse #64 的 DurabilityOps —— 不抽泛型 persistence)。
+    private let durabilityOps: DurabilityOps
+    /// #49 I1(durability provenance):本 process 內經**成功完整 barrier** 寫出的 store bytes 身分。
+    /// load/reload 讀到相同 bytes ⇒ 維持 confirmed;不同/缺席(含 process 起始)⇒ UNCONFIRMED;
+    /// C7c(post-rename outcome-unknown)⇒ 清 nil。invariant:UNCONFIRMED generation 的 .unchanged
+    /// 必須先補一次 durable no-op save,成功才得回 .unchanged(watermark 才可據以前進)——
+    /// 這是 LimitEngine 版的 #64 reconciliation,身分比對用「我們自己 encode 的內容」,不需指紋架構。
+    private var confirmedStateBlob: Data?
 
-    public init(stateURL: URL?) {
+    public convenience init(stateURL: URL?) {
+        self.init(stateURL: stateURL, durabilityOps: .production)
+    }
+
+    /// internal(tests-only via `@testable`):注入 barrier 失敗排程用。
+    init(stateURL: URL?, durabilityOps: DurabilityOps) {
+        self.durabilityOps = durabilityOps
         self.stateURL = stateURL
         if let stateURL {
             do {
@@ -117,31 +155,102 @@ public final class LimitEngine {
         } else {
             store = [:]
         }
+        // I1:process 起始一律 UNCONFIRMED(confirmedStateBlob 初始 nil)——載入的檔可邏輯使用,
+        // 但其 durability 未在本 process 證實,首個 .unchanged 前必先 no-op durable confirm。
         // 載入即清理「窗型錯置」的持久化窗口(見 sanitizeCrossTypedWindows)。init 只在記憶體
         // 清理、不寫檔——維持 aipet status/report 唯讀契約;清淨值於下次 ingest 才落地。
         sanitizeCrossTypedWindows()
     }
 
-    private func save() {
-        guard let stateURL, loadError == nil else { return }   // poisoned 時不覆寫(#44 契約 A/B)
-        try? AtomicJSON.write(store, to: stateURL)
+    /// #49 amendment(owner R3 修訂):**同一 authoritative state file 只允許一種 durable
+    /// replacement primitive** —— derived 與 scan-consuming 的差異只留在 failure CONSEQUENCE
+    ///(derived 失敗:不倒退 watermark、不 retroactively 否定已 durable 的 ingest、loud、下輪重算),
+    /// 寫檔強度不再 asymmetry(弱寫會把 scan path 剛建立的 durability 重新抹掉)。
+    /// cycle-accumulate:first error 保留至 coordinator 明確 cycle reset,不被後續成功寫清除。
+    func clearDerivedFailure() { derivedSaveError = nil }
+
+    private func recordDerivedFailure(_ error: Error) {
+        if derivedSaveError == nil { derivedSaveError = error }
+    }
+
+    /// #49 R5:scan-consuming durable commit——temp(O_EXCL,write-all)→ F_FULLFSYNC → rename →
+    /// parent-dir fsync;任何 barrier 失敗(含 ENOTSUP)= throw,不降級(#64 DP-1 verbatim)。
+    /// 本地最小實作:#64 的 UsageLedger helper 綁著 fingerprint 捕捉語義,limits 無指紋機制,
+    /// 故只 reuse `DurabilityOps` syscall contract,不搬 helper、不抽 DurableStore(owner 界線)。
+    private func saveDurably() throws {
+        guard let stateURL else { return }
+        guard loadError == nil else { throw StateReadError.unreadable(underlying: loadError!) }
+        let blob = try AtomicJSON.encoder().encode(store)
+        let parent = stateURL.deletingLastPathComponent()
+        try AppPaths.ensureDirectory(parent)
+        let tempURL = parent.appendingPathComponent(".\(stateURL.lastPathComponent).tmp-\(UUID().uuidString)")
+        let fd = open(tempURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        var wrote = 0
+        let total = blob.count
+        var writeErrno: Int32 = 0
+        blob.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            while wrote < total {
+                let n = write(fd, raw.baseAddress!.advanced(by: wrote), total - wrote)
+                if n > 0 { wrote += n; continue }
+                if n < 0 && errno == EINTR { continue }
+                writeErrno = (n < 0) ? errno : EIO
+                return
+            }
+        }
+        guard wrote == total else {
+            close(fd); unlink(tempURL.path)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(writeErrno))
+        }
+        guard durabilityOps.syncFile(fd) == 0 else {
+            let err = errno; close(fd); unlink(tempURL.path)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+        }
+        close(fd)
+        guard durabilityOps.renameFile(tempURL.path, stateURL.path) == 0 else {
+            let err = errno; unlink(tempURL.path)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+        }
+        // post-rename dir-fsync 失敗 = durability outcome unknown({old|new} 皆可能 durable):
+        // 不 unlink、不回滾;throw 令 ingest 回 .failed ⇒ watermark 不推;I1:confirmed 身分清空
+        //(下一個 would-be-.unchanged 會被迫補 barrier,S1 的 laundering 路徑就此關閉)。
+        guard durabilityOps.syncDirectory(parent.path) == 0 else {
+            confirmedStateBlob = nil
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        confirmedStateBlob = blob   // I1:完整 barrier 成功 ⇒ 此內容在本 process 為 durability-confirmed
     }
 
     /// 其他行程可能已寫入較新的限額狀態;寫入階段開始前重新載入以收斂。
     /// 非破壞式:讀不到/損壞時保留現有記憶體並設 loadError(coordinator 中止本輪,不覆寫)。
     public func reloadFromDisk() {
         guard let stateURL else { return }
+        // I1:以 raw bytes 做 durability-provenance 身分比對(decode 前);與本 process 上次成功
+        // barrier 寫出的 blob 相同 ⇒ 維持 confirmed,否則(他方寫入/未知來源)⇒ UNCONFIRMED。
+        let raw: Data
         do {
-            guard let loaded = try AtomicJSON.readOrThrow([String: PersistedProvider].self, from: stateURL) else {
-                store = [:]        // R2-MF7:檔案不存在 → 磁碟真相為空,整份採用(不保留陳舊 store,避免刪檔後復活舊配額/校正/待定窗)
+            raw = try Data(contentsOf: stateURL)
+        } catch {
+            if AtomicJSON.pathIsGenuinelyMissing(stateURL.path) {
+                store = [:]        // R2-MF7:檔案不存在 → 磁碟真相為空,整份採用
                 loadError = nil
-                return
+                confirmedStateBlob = nil
+            } else {
+                loadError = error   // 讀不到 → 不動記憶體(#44 契約 A)
             }
+            return
+        }
+        do {
+            let loaded = try AtomicJSON.decoder().decode([String: PersistedProvider].self, from: raw)
             store = loaded
             loadError = nil
-            sanitizeCrossTypedWindows()   // 清淨值於接續的 ingest→save 落地(此處不獨立寫檔)
+            if raw != confirmedStateBlob { confirmedStateBlob = nil }
+            // #83 G1(r3 ACCEPT):sanitize 改動 store ⇒ 記憶體已偏離磁碟 bytes,durability
+            // confirmation 必須一併失效——否則後續 would-be-.unchanged 不補 barrier,sanitized
+            // 內容未 durable 而 watermark 前進(watermark-never-leads violation)。
+            if sanitizeCrossTypedWindows() { confirmedStateBlob = nil }   // 清淨值於接續的 ingest→save 落地(此處不獨立寫檔)
         } catch {
-            loadError = error   // 讀不到/損壞 → 不動記憶體
+            loadError = error   // 損壞 → 不動記憶體
         }
     }
 
@@ -182,13 +291,42 @@ public final class LimitEngine {
     /// app 關閉跨過翻轉、重開後才掃到的舊翻轉證據(observedAt 距 now 太遠)只默默採納
     /// 新窗,不得再說「剛剛重置」(grok SEV1 round-2:ingest 先於 sweep,重開時新讀數
     /// 已在磁碟上 → fold 是補發陳舊慶祝的主要路徑,不是罕見邊角)。
+    /// #49 owner contract:scan-consuming ingest 的三態結果——watermark 推進與否由此定,
+    /// 比裸 throws 更能釘死 join contract(「全 replay duplicate」不因未寫檔而被當 failure)。
+    public enum IngestResult {
+        /// replay/no-op 未改變 durable logical state → 無需重寫 → watermark 可前進。
+        case unchanged
+        /// state 已變且 durable save 成功 → watermark 可前進 → transitions 可交付。
+        case committed([LimitTransition])
+        /// durable commit 未成立 / outcome unknown → watermark 不可前進 → provider error 可觀測。
+        /// 顯式決策(reviewable):本輪已生成的 transitions **不交付**——寧丟一次通知,不發
+        /// 「durable 未記」的假一致;replay 收斂後(fold 單調)該 crossing 不再重發。
+        case failed(Error)
+    }
+
+    /// `reconcilingProvider`:#83 A′ —— 本次 scan-consuming reconciliation 的主體 provider;
+    /// bump 規則表據此推進該 provider 的 reconcileGeneration(R1/R2/R3)。production(coordinator)
+    /// 必傳;nil 僅供既有測試 shim 相容 = 不建立/不推進 generation。readings 混入他 provider
+    /// 屬 adapter contract violation(fold 照舊,generation 只動主體)。
     public func ingest(readings: [RateLimitReading], settings: CoreSettings, fullReindex: Bool = false,
-                       now: Date? = nil) -> [LimitTransition] {
+                       now: Date? = nil, reconcilingProvider: String? = nil) -> IngestResult {
         var transitions: [LimitTransition] = []
         let sorted = readings.sorted { $0.observedAt < $1.observedAt }
+        // #49 amendment(owner):candidate/publish-on-commit —— fold 在整份值語義 snapshot 的
+        // 「候選」上進行(Swift dict COW,便宜);.failed ⇒ 整份還原 = FAILED 必須讓 authoritative
+        // in-memory 狀態與 pre-call **觀測等價**(整份 swap 是可證明的 exact snapshot-restore,
+        // 無逐欄 rollback 漏欄風險)。UNCHANGED = 候選 == pre-call authoritative(在
+        // publish-on-commit 紀律下 authoritative 恆為 last-durable-or-pre-call)。
+        let backup = store
         let effectiveNow = now ?? sorted.last.map { $0.observedAt.addingTimeInterval(1) } ?? Date()
         for reading in sorted {
             var provider = store[reading.providerId] ?? PersistedProvider()
+            // #83 W3(clearing-2):full-reindex temporal exemption 是 **provider-scoped** 授權——
+            // 只有 reconciling 主體的讀數得到 full fold;同批混入的他 provider 讀數(contract-
+            // violation 防禦域)維持 ordinary temporal authority,不得改寫 established state /
+            // 重放 crossings。subject nil(測試 shim)保留批次級舊語義。
+            let readingFull = fullReindex
+                && (reconcilingProvider == nil || reading.providerId == reconcilingProvider)
             if let plan = reading.planType { provider.planType = plan }
             if let w = reading.primary {
                 // Codex 5h tombstone 之持久化(見下方 codexFiveHourAbsentSince):不新於「5h 已消失」
@@ -200,7 +338,8 @@ public final class LimitEngine {
                 } else {
                     provider.primary = fold(window: provider.primary, reading: w, observedAt: reading.observedAt,
                                             providerId: reading.providerId, windowName: "5h",
-                                            settings: settings, fullReindex: fullReindex, now: effectiveNow,
+                                            settings: settings, fullReindex: readingFull, now: effectiveNow,
+                                            estimatedResetDeliveredAt: provider.estimatedResetDeliveredAt,
                                             transitions: &transitions)
                     if reading.providerId == "codex" { provider.codexFiveHourAbsentSince = nil }
                 }
@@ -208,7 +347,7 @@ public final class LimitEngine {
             if let w = reading.secondary {
                 provider.secondary = fold(window: provider.secondary, reading: w, observedAt: reading.observedAt,
                                           providerId: reading.providerId, windowName: "weekly",
-                                          settings: settings, fullReindex: fullReindex, now: effectiveNow,
+                                          settings: settings, fullReindex: readingFull, now: effectiveNow,
                                           transitions: &transitions)
             }
             // Codex 的每筆 rate_limits 是完整快照:若回報了「週」窗卻沒有「5h」窗,代表 5h 此刻不存在
@@ -224,13 +363,85 @@ public final class LimitEngine {
             }
             store[reading.providerId] = provider
         }
-        save()
-        return transitions
+        // #83 A′ bump 規則表(PLAN-v2 §3.3;窮舉、無 runtime 裁量):
+        //   changed commit             ⇒ gen++(R2)
+        //   full 完成(即使 unchanged) ⇒ gen++(R3;blob 因此已變 ⇒ .committed([]),§4-e)
+        //   首次(gen 缺席)之 unchanged ⇒ 建立 gen=1(migration:與 proto-I1 no-op confirm 同一 barrier)
+        //   ordinary unchanged(已建立)⇒ 不 bump;confirmed 則零寫入
+        //   subject nil(測試 shim 相容)⇒ generation 完全不動
+        func bumpGeneration(_ s: String) {
+            var p = store[s] ?? PersistedProvider()
+            p.reconcileGeneration = (p.reconcileGeneration ?? 0) + 1
+            store[s] = p
+        }
+        if store == backup {
+            if let s = reconcilingProvider,
+               fullReindex || store[s]?.reconcileGeneration == nil {
+                // R3(full-unchanged 仍建 identity)或首次建立:進 durable-change 路徑。
+                bumpGeneration(s)
+                do { try saveDurably() } catch {
+                    store = backup   // FAILED 純度:bump 一併回捲
+                    return .failed(error)
+                }
+                return .committed(transitions)   // transitions 必空(store==backup);gen++ ⇒ 非 .unchanged
+            }
+            // I1:generation UNCONFIRMED(process 起始/他方寫入/C7c 之後)⇒ 先補一次 durable
+            // no-op save;只有它成功才得回 .unchanged(否則 .failed,watermark 不得前進)。
+            // A′:同 identity 的 re-confirm 不是新 reconciliation ⇒ 不 bump(bump 表列 3)。
+            if confirmedStateBlob == nil, stateURL != nil {
+                do { try saveDurably() } catch {
+                    store = backup   // 內容本就相等;僅為對稱與未來安全
+                    return .failed(error)
+                }
+            }
+            return .unchanged   // replay/no-op:durable 已確認,watermark 可安全追上(row 6/10)
+        }
+        // #83 U5(R1/R2 粒度收斂)+ W4(clearing-2):bump/establish 規則(owner)——
+        //   subject slice changed ∨ generation missing ∨ successful full 需 completion identity
+        //   ⇒ bump 主體;unrelated provider / derived 變化永不 bump 主體。
+        // gen-missing 腿:identity establishment 獨立於 reading mutation——否則他 provider 混入
+        // 的 changed 讀數會令本次 durable commit 通過而主體 watermark 先於 identity 前進。
+        if let s = reconcilingProvider,
+           fullReindex || store[s] != backup[s] || store[s]?.reconcileGeneration == nil {
+            bumpGeneration(s)
+        }
+        do {
+            try saveDurably()
+            return .committed(transitions)   // durable 成立 → publish(已在)→ transitions 可交付
+        } catch {
+            store = backup   // FAILED 純度(owner):authoritative memory 觀測等價於 pre-call
+            return .failed(error)
+        }
+    }
+
+    /// tests-only shim(@testable;production 一律走三態 `ingest`):展開三態為 transitions,
+    /// 供既有測試延用;`.failed` 直接 fatalError——測試環境的 save 不應失敗。
+    func ingestTransitions(readings: [RateLimitReading], settings: CoreSettings,
+                           fullReindex: Bool = false, now: Date? = nil,
+                           reconcilingProvider: String? = nil) -> [LimitTransition] {
+        switch ingest(readings: readings, settings: settings, fullReindex: fullReindex, now: now,
+                      reconcilingProvider: reconcilingProvider) {
+        case .unchanged: return []
+        case .committed(let t): return t
+        case .failed(let e): fatalError("test-shim ingest failed: \(e)")
+        }
+    }
+
+    /// #83 U3/G2 shared boundary predicate——sweep 與 fold 的**全部** official-reset 發射點共用
+    /// 唯一規則:同一 logical 5h reset boundary 已由 estimated 路徑「交付」⇒ official 重複不發;
+    /// handled-but-not-delivered 絕不抑制(delivered 語義純淨,由 `estimatedResetDeliveredAt`
+    /// 專載)。tolerance = resetRecency(owner 2026-08-14:5h 窗結構排除同窗第二真 boundary 的
+    /// false-positive;SEV1 真實形態 estimated↔official 可差十餘分鐘,120s 會令修復失效)。
+    static func estimatedAlreadyDeliveredSameBoundary(deliveredAt: Date?, windowName: String,
+                                                      boundary: Date?) -> Bool {
+        guard windowName == "5h", let d = deliveredAt, let b = boundary else { return false }
+        return abs(b.timeIntervalSince(d)) <= resetRecency
     }
 
     private func fold(window stored: PersistedWindow?, reading: RateLimitWindowReading, observedAt: Date,
                       providerId: String, windowName: String, settings: CoreSettings,
-                      fullReindex: Bool, now: Date, transitions: inout [LimitTransition]) -> PersistedWindow {
+                      fullReindex: Bool, now: Date, estimatedResetDeliveredAt: Date? = nil,
+                      transitions: inout [LimitTransition]) -> PersistedWindow {
         // 翻轉證據(本讀數)距當下太久 → 狀態照常採納,但不得發「剛剛重置」的慶祝/通知。
         let rolloverIsFresh = now.timeIntervalSince(observedAt) <= Self.resetRecency
         guard var current = stored else {
@@ -249,6 +460,15 @@ public final class LimitEngine {
             // 候選作廢;亂序/重放的較舊現任讀數不得打斷進行中的確認。
             if let p = current.pending, observedAt > p.observedAt { current.pending = nil }
             let previous = current.percent
+            if !fullReindex, observedAt <= current.observedAt {
+                // #49 I2(supersede #44「同窗無條件 max」的 monotonic-guard 措辭):committed
+                // observedAt 之前(**含 equal**,owner 拍板不用 max tie-break)的觀測不得 mutate
+                // committed value —— timestamp 是唯一 mutation authority;這使 decrease-ending
+                // batch 的 replay 冪等(S2:[90@t1,30@t2,29@t3] commit 後,90@t1 不得抬回)。
+                // 完全 inert:不動 percent/resetsAt/windowMinutes/observedAt/history
+                //(與 testOldObservationsAreFullyInert 同向;fullReindex 為重建授權,不受此 gate)。
+                return current
+            }
             if fullReindex {
                 current.corrected = reading.usedPercent < previous - 0.5
                 if current.corrected {
@@ -313,11 +533,20 @@ public final class LimitEngine {
             return current
         }
 
+        // #83 U3:三個 fold 發射點與 sweep 共用同一 boundary predicate(舊窗邊界 = 本次翻轉的
+        // logical boundary;estimated 已交付同 boundary ⇒ 抑制 official 重複)。
+        // #83 W2(clearing-2):nil-resetsAt 窗(nil-reset 來源 / 未建邊界)以 observedAt 為
+        // logical reset 時點 fallback——「deliveredAt ↔ official observedAt 在既有 recency 窗內
+        // 判同一 logical reset」(owner;15 分鐘窗維持)。engine 級防禦,不依賴 per-provider 假設。
+        let boundaryAlreadyDelivered = Self.estimatedAlreadyDeliveredSameBoundary(
+            deliveredAt: estimatedResetDeliveredAt, windowName: windowName,
+            boundary: current.resetsAt ?? observedAt)
         if looksLikeNilRollover {
-            // nil-reset 來源沒有窗口邊界可比對,維持既有行為:>20 點驟降即視為翻轉。
+            // nil-reset 來源沒有 resetsAt 可比對窗口身分,維持既有行為:>20 點驟降即視為翻轉;
+            // G2/W2 的 delivery-identity 比對以 observedAt 為 logical reset 時點(上方 fallback)。
             guard observedAt > current.observedAt else { return current }
             if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled,
-               rolloverIsFresh {
+               rolloverIsFresh, !boundaryAlreadyDelivered {
                 transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
             }
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
@@ -345,7 +574,7 @@ public final class LimitEngine {
         let incumbentProvablyLive = current.resetsAt.map { $0 > observedAt } ?? false
         if !incumbentProvablyLive {
             if current.percent >= 30, reading.usedPercent < current.percent - 20, !current.expiryHandled,
-               rolloverIsFresh {
+               rolloverIsFresh, !boundaryAlreadyDelivered {   // U3:shared boundary predicate
                 transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
             }
             return PersistedWindow(percent: reading.usedPercent, resetsAt: reading.resetsAt,
@@ -373,7 +602,7 @@ public final class LimitEngine {
             if p.count >= 2 {
                 // 已確認換窗。expiryHandled 表示 sweepExpiredWindows 已為此窗發過重置,不重複。
                 if current.percent >= 30, p.percent < current.percent - 20, !current.expiryHandled,
-                   rolloverIsFresh {
+                   rolloverIsFresh, !boundaryAlreadyDelivered {   // U3:shared boundary predicate
                     transitions.append(.reset(providerId: providerId, window: windowName, estimated: false))
                 }
                 return PersistedWindow(percent: p.percent, resetsAt: p.resetsAt,
@@ -420,22 +649,38 @@ public final class LimitEngine {
     /// 首次刷新補發的是陳舊消息,一天前的 reset 不該說 "just reset"(codex SEV1 round-2)。
     static let resetRecency: TimeInterval = 15 * 60
 
-    public func sweepExpiredWindows(now: Date = Date()) -> [LimitTransition] {
+    /// `excluding`:#83 U2——poisoned providers(row 5/8)整輪 fail-closed,派生 pass 亦不得
+    /// 寫 marker / 交付 reset;coordinator 每輪傳入本輪 poison 集。
+    public func sweepExpiredWindows(now: Date = Date(), excluding: Set<String> = []) -> [LimitTransition] {
+        let backupForSweep = store   // #49:候選語義(失敗整份還原)
         var transitions: [LimitTransition] = []
         var changed = false
-        for (providerId, var provider) in store {
+        for (providerId, var provider) in store where !excluding.contains(providerId) {
             var providerChanged = false
             for keyPath in [\PersistedProvider.primary, \PersistedProvider.secondary] {
                 guard var w = provider[keyPath: keyPath], let resetsAt = w.resetsAt,
                       resetsAt < now, !w.expiryHandled else { continue }
                 // 新鮮度閘:過期太久的 reset 只靜默標記(expiryHandled 照設,不重複檢查),不慶祝。
-                if w.percent >= 30, now.timeIntervalSince(resetsAt) <= Self.resetRecency {
+                // #83 G2/U3(shared boundary predicate,讀側統一):同一 logical 5h boundary 若
+                // estimated 已**交付**,official 不再發——與 fold 三發射點共用同一 helper。
+                let windowName = keyPath == \PersistedProvider.primary ? "5h" : "weekly"
+                let estimatedDeliveredSameBoundary = Self.estimatedAlreadyDeliveredSameBoundary(
+                    deliveredAt: provider.estimatedResetDeliveredAt, windowName: windowName, boundary: resetsAt)
+                if w.percent >= 30, now.timeIntervalSince(resetsAt) <= Self.resetRecency,
+                   !estimatedDeliveredSameBoundary {
                     transitions.append(.reset(providerId: providerId,
                                               window: keyPath == \PersistedProvider.primary ? "5h" : "weekly",
                                               estimated: false))
                 }
                 w.expiryHandled = true
-                if keyPath == \PersistedProvider.primary { provider.primary = w } else { provider.secondary = w }
+                if keyPath == \PersistedProvider.primary {
+                    provider.primary = w
+                    // #49 I3:同一 logical 5h reset boundary 只有一個 durable delivery identity——
+                    // official 處理(無論慶祝與否)於**同一 durable commit** 抑制 estimated fallback,
+                    // 關閉 S3 的 official→estimated 跨 cycle 重發(restore 亦不會回退到未抑制態,
+                    // 因為抑制與 official marker 同一 candidate/同一 barrier)。
+                    provider.estimatedResetHandled = true
+                } else { provider.secondary = w }
                 providerChanged = true
             }
             if providerChanged {
@@ -443,7 +688,16 @@ public final class LimitEngine {
                 changed = true
             }
         }
-        if changed { save() }
+        guard changed else { return transitions }
+        // #49 amendment:durable-marker-before-delivery —— marker 未 durable 前不得交付 reset
+        //(否則 persist 失敗 + recency 窗內 reload ⇒ 同一 reset 重發 = invariant 2 違反)。
+        // 失敗:整份還原候選、記 loud、0 transitions、下輪重算重試;crash-after-commit-before-
+        // delivery 仍可能漏一次通知 = 既定 at-most-once 方向(owner)。
+        do { try saveDurably() } catch {
+            store = backupForSweep
+            recordDerivedFailure(error)
+            return []
+        }
         return transitions
     }
 
@@ -486,6 +740,7 @@ public final class LimitEngine {
             if now.timeIntervalSince(storedEnd) <= Self.resetRecency,
                !hasUsableWindow(provider.primary, now: now, lastEventAt: lastEventAt) {
                 transitions.append(.reset(providerId: providerId, window: "5h", estimated: true))
+                provider.estimatedResetDeliveredAt = storedEnd   // G2:delivery identity 記錄(同一 barrier)
             }
             provider.estimatedResetHandled = true
             changed = true
@@ -505,8 +760,13 @@ public final class LimitEngine {
             }
         }
         if changed {
+            let backup = store   // #49 amendment:durable-marker-before-delivery(同 sweep)
             store[providerId] = provider
-            save()
+            do { try saveDurably() } catch {
+                store = backup
+                recordDerivedFailure(error)
+                return []   // marker 未 durable ⇒ estimated reset 不得交付;下輪重算重試
+            }
         }
         return transitions
     }

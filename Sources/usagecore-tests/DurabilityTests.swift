@@ -16,6 +16,8 @@ import Foundation
 final class DurabilityOpsRecorder {
     var calls: [String] = []
     var failSyncFile = false
+    /// 第 k 次 syncFile 呼叫起才失敗(nil = 不用;供「ingest 成功、sweep 失敗」類複合情境;#49)。
+    var failSyncFileFrom: Int? = nil
     var failStatFile = false
     var failRename = false
     var failSyncDirectory = false
@@ -24,6 +26,8 @@ final class DurabilityOpsRecorder {
         DurabilityOps(
             syncFile: { fd in
                 self.calls.append("syncFile")
+                let nth = self.calls.filter { $0 == "syncFile" }.count
+                if let from = self.failSyncFileFrom, nth >= from { return -1 }
                 return self.failSyncFile ? -1 : DurabilityOps.production.syncFile(fd)
             },
             statFile: { fd, st in

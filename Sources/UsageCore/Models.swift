@@ -489,9 +489,21 @@ public struct FileScanMark: Codable, Sendable, Hashable {
 /// 每個 adapter 的掃描進度(檔案 path → 已處理位移),持久化以支援增量刷新。
 public struct ScanState: Codable, Sendable {
     public var files: [String: FileScanMark]
+    /// #83 A′ R5/R6:本 provider 最後 acknowledge 的 limits reconciliation generation——只在該
+    /// generation durably committed 之後寫入(R5)。scan-state 走 lag-safe 寫入:ack 落後(gen>ack)
+    /// = ordinary replay 收斂即可;ack 超前(gen<ack)= poison。舊檔解碼為 nil。
+    public var ackGeneration: UInt64?
+    /// #83 A′ R7(amended):durable full-reconciliation intent 的顯式載體。唯一合法寫出點 =
+    /// R4 pre-clear(requested full 的 C-MF2 步);任何成功 reconciliation 的 adopt 恆清除。
+    /// 原 shape-encoding(wm=∅ ∧ ack==gen)被 code 證明不唯一——adapter 正常成功而 files 天然為空
+    ///(空目錄/零檔案 provider)會製造同一 shape;專用欄位使唯一性由構造保證,gen/ack 判別不變。
+    public var pendingFullReconcile: Bool?
 
-    public init(files: [String: FileScanMark] = [:]) {
+    public init(files: [String: FileScanMark] = [:], ackGeneration: UInt64? = nil,
+                pendingFullReconcile: Bool? = nil) {
         self.files = files
+        self.ackGeneration = ackGeneration
+        self.pendingFullReconcile = pendingFullReconcile
     }
 }
 
