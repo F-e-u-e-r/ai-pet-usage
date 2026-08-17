@@ -231,14 +231,27 @@
     "providerId": "antigravity",
     "modelId": "gemini-3.6-flash",
     "displayName": "Gemini 3.6 Flash",
-    "inputPerMillion": 1.5,
-    "outputPerMillion": 7.5,
+    "inputPerMillion": 0.75,
+    "outputPerMillion": 3.75,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-14)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.15,
-    "cacheWrite5mPerMillion": 0.083333
+    "cacheReadPerMillion": 0.075,
+    "cacheWrite5mPerMillion": 0.041667
+  },
+  {
+    "providerId": "antigravity",
+    "modelId": "gemini-3.7-flash",
+    "displayName": "Gemini 3.7 Flash",
+    "inputPerMillion": 0.375,
+    "outputPerMillion": 1.875,
+    "currency": "USD",
+    "effectiveFrom": "2026-08-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-14)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.0375,
+    "cacheWrite5mPerMillion": 0.020833
   },
   {
     "providerId": "antigravity",
@@ -300,13 +313,12 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.12,
-    "outputPerMillion": 0.4,
+    "inputPerMillion": 0.07,
+    "outputPerMillion": 0.34,
     "currency": "USD",
-    "effectiveFrom": "2026-08-10",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-10)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "effectiveFrom": "2026-08-17",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-17)",
+    "userOverride": false
   },
   {
     "providerId": "antigravity",
@@ -1118,12 +1130,13 @@
     "providerId": "codex",
     "modelId": "gpt-oss-120b",
     "displayName": "gpt-oss-120b",
-    "inputPerMillion": 0.037,
+    "inputPerMillion": 0.03,
     "outputPerMillion": 0.17,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
+    "effectiveFrom": "2026-08-12",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-12)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.03
   },
   {
     "providerId": "codex",
@@ -1290,6 +1303,18 @@
     "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
     "userOverride": false,
     "cacheReadPerMillion": 0.3
+  },
+  {
+    "providerId": "grok-code",
+    "modelId": "grok-4.6",
+    "displayName": "Grok 4.6",
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 6.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-08-13",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-13)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.5
   },
   {
     "providerId": "grok-code",
