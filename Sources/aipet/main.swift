@@ -14,6 +14,8 @@ import UsageCore
 //   aipet reindex                         全量重建帳本索引(寫入,持鎖)
 //   aipet diag [--json] [--out FILE]      輸出 redacted 診斷(封閉詞彙,可安全貼進 issue;唯讀、無寫入)
 //   aipet sprites [--out DIR]             匯出像素寵物 PNG contact sheets(預設 dist/sprite-preview)
+//   aipet rebaseline-opencode             【破壞性】把 OpenCode 目前可觀測的累計量立為新的
+//                                         zero-delta 記帳基準;先前的總量不會被匯入
 //   aipet install-hook [--dry-run]        安裝 Claude Code statusline hook(自動偵測既有
 //                                         statusline 並以 --wrap 包住;寫入前備份 settings.json)
 
@@ -179,6 +181,28 @@ Task {
 
     case "sources":
         print(StatusRenderer.sourcesText(infos: await coordinator.adapterInfos(), full: wantsFull))
+
+    case "rebaseline-opencode":
+        // #50 O4 recovery:顯式 accounting reset。語義必須不可誤解 —— 先講清楚效果再執行。
+        FileHandle.standardError.write(
+            ("Re-baselining OpenCode accounting.\n"
+             + "Existing OpenCode cumulative totals will become the new zero-delta baseline. "
+             + "Historical totals before this point will not be imported.\n").data(using: .utf8)!)
+        switch await coordinator.rebaselineCumulative(providerId: "opencode") {
+        case .ok(let n):
+            print("OpenCode accounting re-baselined — \(n) session incarnation(s) established at zero delta.")
+        case .failed(let why):
+            FileHandle.standardError.write("re-baseline failed: \(why)\n".data(using: .utf8)!)
+            exit(1)
+        case .outcomeUnknown(let why):
+            // R5:不得說成「失敗且未變更」—— 結果未知,需人工對帳。
+            FileHandle.standardError.write(
+                ("re-baseline OUTCOME UNKNOWN: \(why)\n"
+                 + "The authority file may or may not have been replaced, and its durability across "
+                 + "sudden power loss is uncertain. Do not retry blindly — re-run `aipet status` to "
+                 + "reconcile before relying on OpenCode figures.\n").data(using: .utf8)!)
+            exit(2)
+        }
 
     case "sprites":
         SpriteExport.run(outPath: value(for: "--out"))

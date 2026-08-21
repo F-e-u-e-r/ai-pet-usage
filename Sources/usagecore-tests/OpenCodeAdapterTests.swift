@@ -15,6 +15,7 @@ final class OpenCodeAdapterTests: XCTestCase {
         var cost: Double = 0
         var ti = 0, to = 0, tr = 0, tcr = 0, tcw = 0
         var tu: Int64 = 1_760_000_000_000   // ms
+        var tc: Int64 = 1_750_000_000_000   // time_created(#50 incarnation 判別子)
     }
 
     /// 建 fixture db:包含**額外的內容欄**(title,帶哨兵)與**同庫 credential 表**——
@@ -30,7 +31,8 @@ final class OpenCodeAdapterTests: XCTestCase {
           title TEXT, model TEXT, cost REAL DEFAULT 0 NOT NULL,
           tokens_input INTEGER DEFAULT 0 NOT NULL, tokens_output INTEGER DEFAULT 0 NOT NULL,
           tokens_reasoning INTEGER DEFAULT 0 NOT NULL, tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
-          tokens_cache_write INTEGER DEFAULT 0 NOT NULL, time_updated INTEGER NOT NULL);
+          tokens_cache_write INTEGER DEFAULT 0 NOT NULL, time_created INTEGER NOT NULL,
+          time_updated INTEGER NOT NULL);
         """)
         exec(db, "CREATE TABLE credential (id TEXT PRIMARY KEY, value TEXT);")
         exec(db, "INSERT INTO credential VALUES ('c1','SECRET-SENTINEL-NEVER-READ');")
@@ -50,7 +52,7 @@ final class OpenCodeAdapterTests: XCTestCase {
         let model = r.model.map { "'\($0)'" } ?? "NULL"
         exec(db, """
         INSERT OR REPLACE INTO session VALUES ('\(r.id)','p','\(r.dir)','TITLE-SENTINEL',\(model),
-          \(r.cost),\(r.ti),\(r.to),\(r.tr),\(r.tcr),\(r.tcw),\(r.tu));
+          \(r.cost),\(r.ti),\(r.to),\(r.tr),\(r.tcr),\(r.tcw),\(r.tc),\(r.tu));
         """)
     }
 
@@ -229,7 +231,7 @@ final class OpenCodeAdapterTests: XCTestCase {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
         exec(db, "PRAGMA journal_mode=WAL;")
-        exec(db, "INSERT OR REPLACE INTO session VALUES ('s1','p','/Users/t/proj-a','T',NULL,0,20,0,0,0,0,2000);")
+        exec(db, "INSERT OR REPLACE INTO session VALUES ('s1','p','/Users/t/proj-a','T',NULL,0,20,0,0,0,0,1000,2000);")
         exec(db, "PRAGMA wal_checkpoint(TRUNCATE);")   // 內容全數落主檔
         sqlite3_close_v2(db)
         let fm = FileManager.default

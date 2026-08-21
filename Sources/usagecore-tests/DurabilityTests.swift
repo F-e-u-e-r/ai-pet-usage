@@ -21,6 +21,9 @@ final class DurabilityOpsRecorder {
     var failStatFile = false
     var failRename = false
     var failSyncDirectory = false
+    /// 第 k 次 syncDirectory 呼叫起才失敗(nil = 不用;X1 confirm 會在 save 前多消耗一次
+    /// directory barrier,需要「confirm 成功、其後 save 的 dir-sync 失敗」的分段情境)。
+    var failSyncDirectoryFrom: Int? = nil
 
     var ops: DurabilityOps {
         DurabilityOps(
@@ -40,6 +43,8 @@ final class DurabilityOpsRecorder {
             },
             syncDirectory: { path in
                 self.calls.append("syncDirectory")
+                let nth = self.calls.filter { $0 == "syncDirectory" }.count
+                if let from = self.failSyncDirectoryFrom, nth >= from { return -1 }
                 return self.failSyncDirectory ? -1 : DurabilityOps.production.syncDirectory(path)
             })
     }

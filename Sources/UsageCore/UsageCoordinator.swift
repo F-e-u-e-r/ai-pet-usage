@@ -167,6 +167,19 @@ public actor UsageCoordinator {
     private var fullReindexPreservedProviderIds: Set<String> = []
     /// 非 nil 表示 scan-state 檔存在但讀不到 / 損壞;與 ledger/limits 的 loadError 一起閘住本輪寫入(#44 契約 A)。
     private var scanStateLoadError: Error?
+    /// F2(grok-50-r2):上一次 authority durable write 以 outcome-unknown 結束(rename 已生效、
+    /// dir-sync 失敗)。設起後:cumulative accounting 一律 fail closed(cursor/boundary 不推進),
+    /// 直到 reconcile(confirm 可見 entry durable + load() 三關)成功。
+    /// X1 之後此旗標僅為 fast-path 診斷/最佳化 —— correctness 的 durability provenance 由
+    /// `loadedAuthorityDurabilityConfirmed`(process-independent,每次 load 重置)承擔。
+    private var authorityWriteOutcomeUnknown = false
+    /// X1(grok-50-r3,owner contract):本 process 是否已對「目前載入的 exact authority」
+    /// 完成 durability confirmation。每次 `anchorStore.load()` 後重置為 false;
+    /// confirm 成功、或本 process 自己完成一次成功的 durable authority save 後為 true;
+    /// 任何 save 失敗/outcome-unknown 後回到 false(下次使用前重新 confirm)。
+    /// false 時不得執行任何 correctness-affecting 動作(pending recovery、ledger append、
+    /// anchor/boundary 推進、cursor adoption)。
+    private var loadedAuthorityDurabilityConfirmed = false
     /// 本輪 reindex 的「誠實通知」(切片保留/累計未重建等,非 error):流入 dashboard dataQuality,兩個 sink 皆辨識。
     private var refreshQualityNotes: [String] = []
     /// 跨行程互斥:app 與 CLI 對同一資料目錄的寫入階段必須互斥。
@@ -188,6 +201,12 @@ public actor UsageCoordinator {
     private var providerLastAttemptAt: [String: Date] = [:]
     private var providerAttemptCounts: [String: Int] = [:]
     private var providerStaleFlags: [String: Bool] = [:]
+
+    /// #50:cumulative provider 的 accounting authority。與 ScanState 分屬不同 durability domain ——
+    /// 必須挺過 ScanState 遺失與一般 ledger retention(C7)。
+    private let anchorStore: CumulativeAnchorStore
+    /// 本輪自磁碟載入的 authority(入鎖後重讀;C8)。
+    private var authority: AuthorityLoad = .absent
 
     private var scanStateURL: URL { dataDir.appendingPathComponent("scan-state.json") }
     private var ledgerURL: URL { dataDir.appendingPathComponent("ledger.jsonl") }
@@ -268,6 +287,185 @@ public actor UsageCoordinator {
         scanStates[pid] = adopted
     }
 
+
+
+    // MARK: - #50 explicit re-baseline(operator recovery)
+
+    public enum RebaselineOutcome: Sendable, Equatable {
+        case ok(sessions: Int)
+        case failed(String)
+        /// R5:rename 已成功、但其後的 directory sync 失敗 —— pathname 可能已指向新內容,
+        /// 而其跨斷電的耐久性未知。**不得**回報成「失敗且未變更」。呼叫端必須:
+        /// 不自動重試、不假定 rollback、強制重讀 authority 對帳。
+        case outcomeUnknown(String)
+    }
+
+    /// **顯式 accounting reset**:把當下可觀測的 cumulative 狀態立為新的 zero-delta authority。
+    ///
+    /// 這是使用者明確要求的破壞性動作,是 O4「ambiguous authority ⇒ fail closed ⇒ explicit
+    /// re-baseline」的恢復入口。它刻意**不**做以下任何一件事:
+    ///   - 自 legacy `ScanState.context` 搬 counters
+    ///   - 自 retained ledger 倒推 baseline
+    ///   - 回填 pre-existing 總量、或產生任何「歷史補帳」事件
+    ///   - 擴大 SQLite table/action allowlist(走與正常 refresh **相同**的 census)
+    ///   - 清空或改寫既有 ledger
+    ///
+    /// 任一步驟失敗即整體失敗:不宣稱完成、不留下 partial authority。
+    public func rebaselineCumulative(providerId pid: String) async -> RebaselineOutcome {
+        guard let adapter = adapters.first(where: { $0.providerId == pid }),
+              let ca = adapter as? CumulativeAnchorAdapter else {
+            return .failed("\(pid) is not a cumulative provider with an authoritative anchor")
+        }
+        guard adapter.detectAvailability().available else {
+            return .failed("\(pid) source is unavailable — re-baseline requires a readable source")
+        }
+        guard await refreshLock.acquireAsync(timeout: refreshLockTimeout) else {
+            return .failed("another AI Pet Usage process holds the data lock")
+        }
+        defer { refreshLock.release() }
+
+        // 與正常路徑同一個 census(同一 authorizer / privacy boundary);
+        // 傳入空 anchors + establishOnly ⇒ 每個可觀測 incarnation 都取得 zero-delta baseline。
+        // R2:先把所有未完成的 pending settle 掉;任一無法完成即整體失敗,絕不丟棄合法未完成的記帳。
+        // F2:上一次 authority 寫入 outcome-unknown 未對帳前,不得在其上做任何 accounting
+        //(含 settle/census)。confirm 失敗即失敗返回 —— 不盲目重做原寫入;dir-sync 持續
+        // 失敗時,底下的 saveDurably 反正也過不了同一 barrier。
+        reconcileAuthorityIfNeeded()
+        if authorityWriteOutcomeUnknown {
+            return .failed("a previous authority write ended outcome-unknown and the visible entry's durability cannot be confirmed — resolve the storage fault first")
+        }
+        var existing: [IncarnationKey: CumulativeAnchor] = [:]
+        authority = anchorStore.load()
+        loadedAuthorityDurabilityConfirmed = false   // X1:重新載入 ⇒ 重新確認
+        if case .loaded = authority {
+            do {
+                try anchorStore.confirmLoadedAuthorityDurable()
+                loadedAuthorityDurabilityConfirmed = true
+            } catch {
+                // X1:settle/census/append 都是 correctness-affecting —— 未確認前一律拒絕。
+                return .failed("the loaded authority's durability cannot be confirmed — resolve the storage fault first")
+            }
+        }
+        if case .loaded(let a) = authority {
+            for (rawKey, anchor) in a.providers[pid] ?? [:] {
+                if let k = IncarnationKey(encoded: rawKey) { existing[k] = anchor }
+            }
+        } else if case .rejected(let why) = authority {
+            return .failed("existing authority is unreadable — resolve it before re-baselining: \(why)")
+        }
+        if existing.values.contains(where: { $0.pending != nil }) {
+            let settled = settlePendings(existing, pid: pid)
+            guard settled.allSatisfy({ $0.value.pending == nil }) else {
+                return .failed("outstanding reconciliation could not be settled — re-baseline refused so that no committed usage is discarded")
+            }
+            existing = settled
+        }
+
+        // F5(grok-50-r2):成功完成的 re-baseline 本身就是一次 complete census —— 記下其
+        // 開始時刻,成功 durable 寫入時經由**同一個** saveAnchors helper 推進
+        // lastCompleteCensusMs(不建第二套 boundary 邏輯)。否則 boundary 永不推進,
+        // 恢復後建立的新 session 會被誤當 zero-delta 或歧義。取 census 開始**前**的時刻
+        // 是保守方向:census 讀取時,所有 tc <= censusStart 的列皆已可見。
+        let censusStart = Date()
+        let derivation: CumulativeDerivation
+        do {
+            derivation = try ca.censusCumulative(anchors: existing, scanState: ScanState(),
+                                                 boundaryMs: nil, establishAll: true)
+        } catch {
+            return .failed("source census failed — no accounting state was changed: \(error)")
+        }
+        // 防禦:establishment 依定義不得產生事件。
+        guard derivation.events.isEmpty else {
+            return .failed("internal invariant violated — re-baseline must not produce usage events")
+        }
+        // X4:re-baseline 是顯式 all-or-nothing recovery —— 任何無法納入 census 的列都使
+        // 本輪無法認證 complete census(F5 boundary 是 re-baseline 的核心產物),整體失敗、
+        // 不留 partial recovery state(與既有「任一步驟失敗即整體失敗」哲學一致)。
+        guard derivation.excludedRows == 0 else {
+            return .failed("\(derivation.excludedRows) source row(s) cannot join the census — the re-baseline cannot certify a complete census; repair the source first")
+        }
+
+        // R2:自既有 authority 出發,只 upsert 當下可觀測者 —— 暫時缺席 ≠ 刪除。
+        var fresh = existing
+        for (k, prop) in derivation.proposals { fresh[k] = prop.target }
+        do {
+            // F5:boundary 與 anchors 同一次 durable write 推進 —— census complete、
+            // 無 unresolved ambiguity(establishAll 不產 ambiguous)、durable 寫入成功,三條件齊。
+            try saveAnchors(fresh, for: pid, completeCensusAt: censusStart)
+        } catch let u as AuthorityOutcomeUnknown {
+            // F2:同 refresh 路徑 —— in-memory authority 失效,任何後續 accounting 前先 reconcile。
+            authorityWriteOutcomeUnknown = true
+            return .outcomeUnknown(u.detail)
+        } catch {
+            return .failed("durable write failed — previous accounting state remains authoritative: \(error)")
+        }
+        return .ok(sessions: fresh.count)
+    }
+
+    /// F2:outcome-unknown 之後、恢復 accounting 之前的 reconcile —— 確認目前可見的
+    /// directory entry durable,成功才清旗標;失敗則旗標保持,cumulative accounting
+    /// 繼續 fail closed。驗證半部(parse → integrity → semantic)由呼叫端隨後的
+    /// anchorStore.load() 完成 —— 這裡刻意**不**重做原 accounting 寫入。
+    private func reconcileAuthorityIfNeeded() {
+        guard authorityWriteOutcomeUnknown else { return }
+        if (try? anchorStore.confirmVisibleEntryDurable()) != nil {
+            authorityWriteOutcomeUnknown = false
+        }
+    }
+
+    /// #50:把單一 provider 的 anchors 併回整份 authority 並 durable 落盤。
+    private func saveAnchors(_ m: [IncarnationKey: CumulativeAnchor], for pid: String,
+                             completeCensusAt: Date? = nil) throws {
+        var providers: [String: [String: CumulativeAnchor]] = [:]
+        var boundaries: [String: Int64] = [:]
+        if case .loaded(let a) = authority { providers = a.providers; boundaries = a.lastCompleteCensusMs }
+        providers[pid] = m.reduce(into: [String: CumulativeAnchor]()) { acc, kv in
+            acc[kv.key.encoded] = kv.value
+        }
+        // R1:只有一輪 census 完整成功且無未解決 authority failure 時才推進 boundary。
+        // F5:單調推進 —— boundary 是 provenance 高水位,任何路徑(refresh / re-baseline)
+        // 皆不得使其倒退。
+        if let at = completeCensusAt {
+            let ms = Int64((at.timeIntervalSince1970 * 1000).rounded())
+            boundaries[pid] = max(boundaries[pid] ?? 0, ms)
+        }
+        var next = CumulativeAuthority(providers: providers, lastCompleteCensusMs: boundaries)
+        // X1:寫入期間 durability provenance 未定 —— 任何 throw(含 outcome-unknown)都必須
+        // 讓後續使用重新 confirm;成功的 save 自帶完整 barrier,exact 新 state 即為 confirmed。
+        loadedAuthorityDurabilityConfirmed = false
+        try anchorStore.saveDurably(next)
+        next.integrity = CumulativeAnchorStore.canonicalDigest(of: next)
+        authority = .loaded(next)
+        loadedAuthorityDurabilityConfirmed = true
+    }
+
+    /// R2:把所有未完成的 pending 依 P3 recovery 規則 settle(過期即 finalize;帳本已有即 finalize;
+    /// 否則重播 Pending 保存的那個 event)。回傳 settle 後的 anchors;未能完成者其 pending 仍在。
+    private func settlePendings(_ anchors: [IncarnationKey: CumulativeAnchor],
+                                pid: String) -> [IncarnationKey: CumulativeAnchor] {
+        var out = anchors
+        var replay: [UsageEvent] = []
+        for (k, anchor) in anchors {
+            guard let pend = anchor.pending else { continue }
+            if UsageLedger.isExpired(pend.event.timestamp, retentionDays: settings.retentionDays, now: Date())
+                || ledger.containsEvent(id: pend.event.id) {
+                out[k] = CumulativeAnchor(epoch: anchor.epoch, accountedThrough: pend.target)
+            } else {
+                replay.append(pend.event)
+            }
+        }
+        guard !replay.isEmpty else { return out }
+        _ = ledger.append(replay)
+        guard ledger.writeError == nil else { return out }   // 未能落盤 ⇒ pending 保留 ⇒ 呼叫端失敗
+        let done = Set(replay.map(\.id))
+        for (k, anchor) in out {
+            if let pend = anchor.pending, done.contains(pend.event.id) {
+                out[k] = CumulativeAnchor(epoch: anchor.epoch, accountedThrough: pend.target)
+            }
+        }
+        return out
+    }
+
     /// #48 gate 判定(純函式,可測):whole-file raw canonicalization → per-provider baseline 切片 →
     /// candidate 以實際持久化 bytes canonicalize → compareMonotonic。任一 raw/canonicalization
     /// failure ⇒ preserve(count-only;檔級失敗無法歸屬 provider,對本 provider 一律 fail closed)。
@@ -341,7 +539,9 @@ public actor UsageCoordinator {
     /// production 一律經 public init(針 .production,無注入面)。
     init(dataDir: URL? = nil, settings: CoreSettings = CoreSettings(),
          adapters: [ProviderAdapter]? = nil, refreshLockTimeout: TimeInterval = 60,
-         readOnly: Bool = false, limitsDurabilityOps: DurabilityOps) {
+         readOnly: Bool = false, limitsDurabilityOps: DurabilityOps,
+         anchorDurabilityOps: DurabilityOps? = nil,
+         ledgerDurabilityOps: DurabilityOps? = nil) {
         let dir = dataDir ?? AppPaths.dataDirectory()
         self.dataDir = dir
         self.settings = settings
@@ -351,8 +551,12 @@ public actor UsageCoordinator {
         self.refreshLockTimeout = refreshLockTimeout
         if !readOnly { try? AppPaths.ensureDirectory(dir) }
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
-        self.ledger = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"))
+        self.ledger = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl"),
+                                  durabilityOps: ledgerDurabilityOps ?? .production)
         self.limits = LimitEngine(stateURL: dir.appendingPathComponent("limits-state.json"), durabilityOps: limitsDurabilityOps)
+        // #50:借 #64 的 DurabilityOps syscall contract,不抽共用 store。
+        self.anchorStore = CumulativeAnchorStore(fileURL: dir.appendingPathComponent("cumulative-anchors.json"),
+                                                 durabilityOps: anchorDurabilityOps ?? .production)
         do {
             self.scanStates = try AtomicJSON.readOrThrow([String: ScanState].self, from: dir.appendingPathComponent("scan-state.json")) ?? [:]
         } catch {
@@ -495,8 +699,15 @@ public actor UsageCoordinator {
         // 採用——磁碟缺標記或含異 db-path 標記皆不會把 baseline 清成空而 zero-baseline overcount(回到本 PR 前的安全
         // 基線;這是最小 pre-PR 回復,非新 heuristic)。cumulative 的 durable-state/recovery——mark identity、generation、
         // 合法刪除/tombstone、跨行程收斂,含 codex「disk 非空但缺 live mark」案例——為 blocking follow-up(見追蹤)。
+        // #50 C8:accounting authority 已移出 ScanState;實作 CumulativeAnchorAdapter 的 provider
+        // 不再保留 process-local 記憶體,改由入鎖後自磁碟重讀的 authority 承載。
+        // F2:先對帳上一次 outcome-unknown 的寫入(confirm 可見 entry durable),再重讀;
+        // confirm 失敗則旗標保持,本輪 cumulative 分支一律 fail closed。
+        reconcileAuthorityIfNeeded()
+        authority = anchorStore.load()
+        loadedAuthorityDurabilityConfirmed = false   // X1:新載入的 bytes 尚未確認 durability
         let cumulativeInMemory = adapters
-            .filter { $0.historyModel == .cumulativeSnapshotOnly }
+            .filter { $0.historyModel == .cumulativeSnapshotOnly && !($0 is CumulativeAnchorAdapter) }
             .reduce(into: [String: ScanState]()) { acc, adapter in
                 if let s = scanStates[adapter.providerId] { acc[adapter.providerId] = s }
             }
@@ -693,6 +904,148 @@ public actor UsageCoordinator {
                         recordReindexOutcome(pid, requested: fullReindex, .preservedIncomplete)
                         refreshQualityNotes.append("\(pid): reindex incomplete — history preserved")   // 誠實通知(非 error)
                     }
+                } else if let ca = adapter as? CumulativeAnchorAdapter {
+                    // ── #50 P1 + P3 ────────────────────────────────────────────────
+                    //  authority(入鎖後已重讀)→ recover pending → census(不受 cursor 過濾)
+                    //  → durable prepare(accountedThrough 不動)→ durable ledger append
+                    //  → durable finalize   ===== ACCOUNTING COMMIT COMPLETE =====
+                    //  → limits projection(失敗 loud,不回撤)→ 才更新 convenience cursor
+                    // F2:in-memory authority 已因 outcome-unknown 失效 ⇒ 本輪不得做任何
+                    // cumulative accounting(cursor/boundary 亦不推進),直到 reconcile 成功。
+                    if authorityWriteOutcomeUnknown {
+                        let msg = "authority durable-write outcome is unknown — cumulative accounting is deferred until the on-disk authority is reconciled"
+                        refreshErrors[pid] = msg
+                        refreshQualityNotes.append("\(pid): \(msg)")
+                        continue
+                    }
+                    var anchors: [IncarnationKey: CumulativeAnchor] = [:]
+                    switch authority {
+                    case .rejected(let why):
+                        let msg = "cumulative accounting authority rejected: \(why) — explicit re-baseline required"
+                        refreshErrors[pid] = msg
+                        refreshQualityNotes.append("\(pid): \(msg)")
+                        continue
+                    case .absent:
+                        // B:無 authority 時,只有在完全沒有既往記帳證據時才可顯式 zero-delta 建立。
+                        let hasPriorEvidence = ledger.newestEvent(providerId: pid) != nil
+                            || !(scanStates[pid]?.files.isEmpty ?? true)
+                        if hasPriorEvidence {
+                            let msg = "cumulative accounting authority is absent while \(pid) accounting evidence exists — explicit re-baseline required"
+                            refreshErrors[pid] = msg
+                            refreshQualityNotes.append("\(pid): \(msg)")
+                            continue
+                        }
+                    case .loaded(let a):
+                        for (rawKey, anchor) in a.providers[pid] ?? [:] {
+                            if let k = IncarnationKey(encoded: rawKey) { anchors[k] = anchor }
+                        }
+                    }
+
+                    // X1(grok-50-r3,owner contract):載入的 authority 在 durability
+                    // confirmation 成功前 = UNCONFIRMED for this process —— fresh process 無從
+                    // 得知上一個 process 的 rename 是否通過 directory barrier。confirm 只重做
+                    // durability barrier(不重寫、不 mutate accounting);失敗 ⇒ 本 provider
+                    // fail closed:零 replay、零 ledger append、零 anchor/boundary/cursor 推進。
+                    if case .loaded = authority, !loadedAuthorityDurabilityConfirmed {
+                        do {
+                            try anchorStore.confirmLoadedAuthorityDurable()
+                            loadedAuthorityDurabilityConfirmed = true
+                        } catch {
+                            let why = (error as? AuthorityOutcomeUnknown)?.detail ?? String(describing: error)
+                            let msg = "loaded authority durability unconfirmed: \(why) — cumulative accounting is deferred"
+                            refreshErrors[pid] = msg
+                            refreshQualityNotes.append("\(pid): \(msg)")
+                            continue
+                        }
+                    }
+
+                    // P3 recovery —— 完全不依賴來源列是否仍存在。
+                    var recoveryEvents: [UsageEvent] = []
+                    for (k, anchor) in anchors {
+                        guard let pend = anchor.pending else { continue }
+                        if UsageLedger.isExpired(pend.event.timestamp,
+                                                 retentionDays: settings.retentionDays, now: now) {
+                            // 過期 span 對任何可觀測聚合的貢獻恆為 0 ⇒ finalize、不 resurrection。
+                            anchors[k] = CumulativeAnchor(epoch: anchor.epoch, accountedThrough: pend.target)
+                            refreshQualityNotes.append("\(pid): reconciliation intent older than retention — finalized without replay")
+                        } else if ledger.containsEvent(id: pend.event.id) {
+                            anchors[k] = CumulativeAnchor(epoch: anchor.epoch, accountedThrough: pend.target)
+                        } else {
+                            recoveryEvents.append(pend.event)   // 重播 Pending 保存的**那個** event
+                        }
+                    }
+                    if !recoveryEvents.isEmpty {
+                        inserted += ledger.append(recoveryEvents)
+                        if let we = ledger.writeError { throw we }
+                        let replayed = Set(recoveryEvents.map(\.id))
+                        for (k, anchor) in anchors {
+                            if let pend = anchor.pending, replayed.contains(pend.event.id) {
+                                anchors[k] = CumulativeAnchor(epoch: anchor.epoch, accountedThrough: pend.target)
+                            }
+                        }
+                        try saveAnchors(anchors, for: pid)
+                    }
+
+                    var boundaryMs: Int64? = nil
+                    if case .loaded(let a) = authority { boundaryMs = a.lastCompleteCensusMs[pid] }
+                    let derivation = try ca.censusCumulative(anchors: anchors,
+                                                             scanState: scanStates[pid] ?? ScanState(),
+                                                             boundaryMs: boundaryMs,
+                                                             establishAll: false)
+                    // R1:歧義 incarnation ⇒ 整輪 fail closed,不得猜測。
+                    if !derivation.ambiguous.isEmpty {
+                        let msg = "\(pid): \(derivation.ambiguous.count) session incarnation(s) predate the last complete observation boundary but have no authoritative anchor — fail closed; explicit re-baseline required"
+                        refreshErrors[pid] = msg
+                        refreshQualityNotes.append(msg)
+                        continue
+                    }
+
+                    // durable prepare:有事件者只登記 intent —— accountedThrough **不動**。
+                    var staged = anchors
+                    for (k, prop) in derivation.proposals {
+                        guard let ev = prop.event else { staged[k] = prop.target; continue }
+                        let prev = anchors[k]?.accountedThrough ?? AnchorCounters()
+                        staged[k] = CumulativeAnchor(
+                            epoch: prop.target.epoch, accountedThrough: prev,
+                            pending: PendingReconciliation(event: ev, previous: prev,
+                                                           target: prop.target.accountedThrough,
+                                                           epoch: prop.target.epoch))
+                    }
+                    try saveAnchors(staged, for: pid)
+
+                    inserted += ledger.append(derivation.events)
+                    if let we = ledger.writeError { throw we }
+
+                    // durable finalize —— ACCOUNTING COMMIT COMPLETE
+                    // X4(owner contract):任何無法納入 census 的列使本輪不具 complete-census
+                    // 資格 —— valid rows 照常入帳,但 boundary 不推進 + loud;該列修復後
+                    // 會在舊的 valid boundary 下正常 reconcile,而非被假新 boundary 打成歧義。
+                    var finalized = staged
+                    for (k, prop) in derivation.proposals { finalized[k] = prop.target }
+                    let censusComplete = derivation.excludedRows == 0
+                    if !censusComplete {
+                        refreshQualityNotes.append("\(pid): \(derivation.excludedRows) source row(s) could not join the census — complete-census boundary not advanced")
+                    }
+                    try saveAnchors(finalized, for: pid, completeCensusAt: censusComplete ? now : nil)
+                    refreshErrors[pid] = nil
+
+                    // limits 是 ledger 的投影:失敗 loud,但不回撤已提交的帳(P1)。
+                    switch limits.ingest(readings: [], settings: settings, fullReindex: fullReindex,
+                                         now: now, reconcilingProvider: pid) {
+                    case .unchanged: break
+                    case .committed(let t): transitions += t
+                    case .failed(let err):
+                        refreshQualityNotes.append("\(pid): limits projection failed — accounting already committed; will catch up from the ledger next refresh")
+                        refreshErrors[pid] = String(describing: err)
+                    }
+
+                    adoptScanState(pid, derivation.scanState)
+                    parseErrorCounts[pid] = derivation.parseErrors
+                    providerLastOkAt[pid] = now
+                    if fullReindex {
+                        providerOutcomes[pid] = .appendedCumulative
+                        refreshQualityNotes.append("\(pid): reindex kept cumulative history — not rebuildable")
+                    }
                 } else {
                     let state = scanStates[pid] ?? ScanState()
                     let (result, newState) = try adapter.refreshUsage(state: state)
@@ -737,6 +1090,15 @@ public actor UsageCoordinator {
                         }
                     }
                 }
+            } catch let u as AuthorityOutcomeUnknown {
+                // F2(grok-50-r2):R5 outcome-unknown 不是一般錯誤 —— pathname 可能已指向新
+                // 內容且其耐久性未知。本 provider 的 accounting pass 立即中止(cursor/boundary
+                // 不推進),in-memory authority 失效,後續任何 accounting 前必須先 reconcile。
+                authorityWriteOutcomeUnknown = true
+                let msg = "authority write outcome unknown: \(u.detail) — accounting halted for this provider; reconciliation runs before the next accounting pass"
+                refreshErrors[pid] = msg
+                refreshQualityNotes.append("\(pid): \(msg)")
+                if fullReindex { providerOutcomes[pid] = .failedBeforeCommit }   // #48 §7:commit 前失敗如實
             } catch {
                 refreshErrors[pid] = String(describing: error)
                 if fullReindex { providerOutcomes[pid] = .failedBeforeCommit }   // #48 §7:commit 前失敗如實

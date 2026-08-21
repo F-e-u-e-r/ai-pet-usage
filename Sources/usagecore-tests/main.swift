@@ -910,4 +910,91 @@ runSuite("Limit49V3Tests", [
     ("testV3CumulativeEstablishesGenAndAck", l49v3.testV3CumulativeEstablishesGenAndAck),
 ])
 
+// #50 protocol v3 ground truth(第一批)。
+let oc50gt = OpenCode50GroundTruthTests()
+runSuite("OpenCode50GroundTruthTests", [
+    ("testRetentionThenMarkLossMustNotRecount", oc50gt.testRetentionThenMarkLossMustNotRecount),
+    ("testMarkLossWithoutCompactionMustNotRecountAndMustCountNewGrowth", oc50gt.testMarkLossWithoutCompactionMustNotRecountAndMustCountNewGrowth),
+    ("testCrossProcessMustDeriveFromDurableAuthority", oc50gt.testCrossProcessMustDeriveFromDurableAuthority),
+    ("testCursorMustNotHideRollback", oc50gt.testCursorMustNotHideRollback),
+])
+
+// #50 authority load contract(D)。
+let oc50auth = OpenCode50AuthorityTests()
+runSuite("OpenCode50AuthorityTests", [
+    ("testValidAuthorityLoads", oc50auth.testValidAuthorityLoads),
+    ("testAbsentFileIsAbsentNotRejected", oc50auth.testAbsentFileIsAbsentNotRejected),
+    ("testIntegrityMismatchOnRecordOmissionRejected", oc50auth.testIntegrityMismatchOnRecordOmissionRejected),
+    ("testD1NegativeCountersRejected", oc50auth.testD1NegativeCountersRejected),
+    ("testD1bOverSaneCapCountersRejected", oc50auth.testD1bOverSaneCapCountersRejected),
+    ("testD2NonPositiveEpochRejected", oc50auth.testD2NonPositiveEpochRejected),
+    ("testD3PendingTargetBelowPreviousRejected", oc50auth.testD3PendingTargetBelowPreviousRejected),
+    ("testD3bPendingPreviousMismatchRejected", oc50auth.testD3bPendingPreviousMismatchRejected),
+    ("testD3cPendingEpochMismatchRejected", oc50auth.testD3cPendingEpochMismatchRejected),
+    ("testD3dPendingEventInconsistentWithTransitionRejected", oc50auth.testD3dPendingEventInconsistentWithTransitionRejected),
+    ("testUnparseableIncarnationKeyRejected", oc50auth.testUnparseableIncarnationKeyRejected),
+    ("testEpochAtIntMaxIsRejectedNotTrapped", oc50auth.testEpochAtIntMaxIsRejectedNotTrapped),
+    ("testCensusBoundaryTamperIsRejectedByDigest", oc50auth.testCensusBoundaryTamperIsRejectedByDigest),
+    ("testX3NonPositiveCensusBoundaryRejected", oc50auth.testX3NonPositiveCensusBoundaryRejected),
+    ("testX5PendingIdMutationRejectedEvenWithRecomputedDigest", oc50auth.testX5PendingIdMutationRejectedEvenWithRecomputedDigest),
+    ("testX5PendingCostTransitionWithoutProviderCostRejected", oc50auth.testX5PendingCostTransitionWithoutProviderCostRejected),
+])
+
+// #50 acceptance evidence。
+let oc50acc = OpenCode50AcceptanceTests()
+runSuite("OpenCode50AcceptanceTests", [
+    ("testFirstContactEstablishesZeroDeltaAndDoesNotBackfill", oc50acc.testFirstContactEstablishesZeroDeltaAndDoesNotBackfill),
+    ("testA1A3SourceRowGoneRecoveryReplaysExactPreparedEvent", oc50acc.testA1A3SourceRowGoneRecoveryReplaysExactPreparedEvent),
+    ("testA2LedgerAlreadyHasEventFinalizesWithoutDuplicate", oc50acc.testA2LedgerAlreadyHasEventFinalizesWithoutDuplicate),
+    ("testA4ExpiredPendingFinalizesWithoutResurrection", oc50acc.testA4ExpiredPendingFinalizesWithoutResurrection),
+    ("testRetentionCutoffBoundariesMatchCompaction", oc50acc.testRetentionCutoffBoundariesMatchCompaction),
+    ("testB2bMissingKnownAuthorityFailsClosed", oc50acc.testB2bMissingKnownAuthorityFailsClosed),
+    ("testB2cAbsentAuthorityWithPriorEvidenceFailsClosed", oc50acc.testB2cAbsentAuthorityWithPriorEvidenceFailsClosed),
+    ("testE1LimitsRepeatedFailureKeepsAccountingExactlyOnce", oc50acc.testE1LimitsRepeatedFailureKeepsAccountingExactlyOnce),
+    ("testE2LimitsRecoversProjectionFromDurableLedger", oc50acc.testE2LimitsRecoversProjectionFromDurableLedger),
+    ("testLegacyRefreshUsageRemainsProductionUnreachable", oc50acc.testLegacyRefreshUsageRemainsProductionUnreachable),
+    ("testR1LegacyEvidenceWithoutAuthorityFailsClosedAndNamesRecovery", oc50acc.testR1LegacyEvidenceWithoutAuthorityFailsClosedAndNamesRecovery),
+    ("testR2ExplicitRebaselineEstablishesCurrentCountersAndCountsOnlyLaterGrowth", oc50acc.testR2ExplicitRebaselineEstablishesCurrentCountersAndCountsOnlyLaterGrowth),
+    ("testR5RebaselineWithUnavailableSourceFailsWithoutMutation", oc50acc.testR5RebaselineWithUnavailableSourceFailsWithoutMutation),
+    ("testR6RebaselineDurableWriteFailureLeavesPreviousAuthority", oc50acc.testR6RebaselineDurableWriteFailureLeavesPreviousAuthority),
+    ("testR9RebaselineOnHealthyAuthorityIsAllowed", oc50acc.testR9RebaselineOnHealthyAuthorityIsAllowed),
+    ("testReproGrokF1EmptySourceMaterializesAuthorityDefeatingZeroDeltaFirstContact", oc50acc.testReproGrokF1EmptySourceMaterializesAuthorityDefeatingZeroDeltaFirstContact),
+    ("testReproLunaF1RebaselineErasesPendingAndLeadsLedger", oc50acc.testReproLunaF1RebaselineErasesPendingAndLeadsLedger),
+])
+
+// #50 owner-approved contract matrix(oracle)。
+let oc50cm = OpenCode50ContractMatrixTests()
+runSuite("OpenCode50ContractMatrixTests", [
+    ("testC1FirstEverEstablishmentIsZeroDelta", oc50cm.testC1FirstEverEstablishmentIsZeroDelta),
+    ("testC2IncarnationCreatedAfterCensusBoundaryCountsFirstWindow", oc50cm.testC2IncarnationCreatedAfterCensusBoundaryCountsFirstWindow),
+    ("testC3IncarnationOlderThanBoundaryWithoutAnchorFailsClosed", oc50cm.testC3IncarnationOlderThanBoundaryWithoutAnchorFailsClosed),
+    ("testC4EventIdsAreIndependentAcrossIncarnations", oc50cm.testC4EventIdsAreIndependentAcrossIncarnations),
+    ("testC5RebaselineNeverDiscardsOutstandingPending", oc50cm.testC5RebaselineNeverDiscardsOutstandingPending),
+    ("testC5bRebaselineFailsWhenPendingCannotSettle", oc50cm.testC5bRebaselineFailsWhenPendingCannotSettle),
+    ("testC6RebaselinePreservesUnobservedAnchors", oc50cm.testC6RebaselinePreservesUnobservedAnchors),
+    ("testC7OverflowingPendingTokensRejectAuthorityWithoutTrapping", oc50cm.testC7OverflowingPendingTokensRejectAuthorityWithoutTrapping),
+    ("testC8PostRenameDirSyncFailureIsOutcomeUnknown", oc50cm.testC8PostRenameDirSyncFailureIsOutcomeUnknown),
+    ("testC9ExplicitProviderCostSuppressesRegistryFallback", oc50cm.testC9ExplicitProviderCostSuppressesRegistryFallback),
+    ("testReproGrokR2F1ZeroFirstWindowIncarnationLosesAnchor", oc50cm.testReproGrokR2F1ZeroFirstWindowIncarnationLosesAnchor),
+    ("testF1ZeroWindowAnchorPersistsAcrossRefreshesThenCountsExactlyOnce", oc50cm.testF1ZeroWindowAnchorPersistsAcrossRefreshesThenCountsExactlyOnce),
+    ("testR6CostPrecedenceReachesConsumerCostResult", oc50cm.testR6CostPrecedenceReachesConsumerCostResult),
+    ("testF4EpochAtAdvanceBoundFailsClosedWithoutTrapping", oc50cm.testF4EpochAtAdvanceBoundFailsClosedWithoutTrapping),
+    ("testF2RefreshOutcomeUnknownHaltsAccountingUntilReconciledThenCountsOnce", oc50cm.testF2RefreshOutcomeUnknownHaltsAccountingUntilReconciledThenCountsOnce),
+    ("testF5RebaselineAdvancesBoundarySoLaterNewSessionsCountFirstWindow", oc50cm.testF5RebaselineAdvancesBoundarySoLaterNewSessionsCountFirstWindow),
+    ("testF5BoundaryNeverRegressesOnLaterCensus", oc50cm.testF5BoundaryNeverRegressesOnLaterCensus),
+    ("testX1FreshProcessConfirmsAuthorityDurabilityBeforeAnyLedgerAppend", oc50cm.testX1FreshProcessConfirmsAuthorityDurabilityBeforeAnyLedgerAppend),
+    ("testX2ConsecutiveCostOnlyChangesEachCountExactlyOnce", oc50cm.testX2ConsecutiveCostOnlyChangesEachCountExactlyOnce),
+    ("testX3NegativeBoundaryFailsClosedWithoutBackfill", oc50cm.testX3NegativeBoundaryFailsClosedWithoutBackfill),
+    ("testX4IdentityInvalidRowBlocksBoundaryButNotValidRows", oc50cm.testX4IdentityInvalidRowBlocksBoundaryButNotValidRows),
+    ("testEmptySourceCensusSucceedsAndAdvancesBoundary", oc50cm.testEmptySourceCensusSucceedsAndAdvancesBoundary),
+    ("testR4ACostRollbackBumpsEpochSoRepeatedCostTransitionCounts", oc50cm.testR4ACostRollbackBumpsEpochSoRepeatedCostTransitionCounts),
+    ("testR4ASimultaneousTokenAndCostRollbackBumpsEpochExactlyOnce", oc50cm.testR4ASimultaneousTokenAndCostRollbackBumpsEpochExactlyOnce),
+    ("testR4BEmptySessionIdExcludedFromCensusAndBoundaryHeld", oc50cm.testR4BEmptySessionIdExcludedFromCensusAndBoundaryHeld),
+    ("testR4BRebaselineRefusesEmptySessionIdAndLeavesAuthorityUntouched", oc50cm.testR4BRebaselineRefusesEmptySessionIdAndLeavesAuthorityUntouched),
+    ("testR5ASubEpsilonCostDecreaseIsRollback", oc50cm.testR5ASubEpsilonCostDecreaseIsRollback),
+    ("testR5ASubEpsilonPositiveCostOnlyGrowthCounts", oc50cm.testR5ASubEpsilonPositiveCostOnlyGrowthCounts),
+    ("testR5AExactlyEqualCostIsNeitherGrowthNorRollback", oc50cm.testR5AExactlyEqualCostIsNeitherGrowthNorRollback),
+    ("testS6PersistedSubEpsilonPendingSurvivesFreshProcessValidationAndRecovers", oc50cm.testS6PersistedSubEpsilonPendingSurvivesFreshProcessValidationAndRecovers),
+])
+
 finishTestRun()

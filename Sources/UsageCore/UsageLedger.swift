@@ -266,6 +266,30 @@ public final class UsageLedger {
         return inserted.count
     }
 
+    // MARK: - #50 R-retention:單一 retention predicate
+    //
+    // compaction 的丟棄判定與 #50 pending recovery 的過期判定**必須語義完全相同**,
+    // 否則兩套獨立實作會產生 off-by-one drift(某個 timestamp 被 compaction 視為過期而刪除,
+    // 卻被 recovery 視為未過期而去查它是否仍在帳本 —— 查不到就會誤判成「事件未落盤」)。
+    // 兩者一律走這裡。
+
+    public static func retentionCutoff(retentionDays: Int, now: Date) -> Date {
+        now.addingTimeInterval(-Double(retentionDays) * 86400)
+    }
+
+    /// 與 compaction 的丟棄條件逐字同義:`timestamp < cutoff` 才算過期(等於 cutoff 不算)。
+    public static func isExpired(_ timestamp: Date, retentionDays: Int, now: Date) -> Bool {
+        timestamp < retentionCutoff(retentionDays: retentionDays, now: now)
+    }
+
+    /// #50:某個決定性事件 id 是否已在帳本(含 raw-only 保留 id)。
+    ///
+    /// **只在該事件未過期時才可作為證據** —— compaction 會把過期事件的 id 一併移除且不留
+    /// tombstone,故「不存在」對過期事件不可判定。呼叫端須先以 `isExpired` 分流。
+    public func containsEvent(id: String) -> Bool {
+        ids.contains(id) || reservedRawIDs.contains(id)
+    }
+
     /// 清除上一輪的落盤失敗旗標(coordinator 於每輪刷新起始呼叫,避免陳舊 writeError 誤觸後續 break;R2-NIT)。
     public func clearWriteError() {
         writeError = nil
@@ -358,7 +382,7 @@ public final class UsageLedger {
     @discardableResult
     public func compact(retentionDays: Int, now: Date = Date()) -> CompactResult {
         guard loadError == nil else { return .poisoned }
-        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
+        let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)   // #50 R-retention:單一 predicate
         // O(1) 短路:最舊事件仍在保留期內 → 無事可壓縮(原本每輪 refresh 都 filter
         // 整個 9 萬+ 陣列,只為發現「沒東西可丟」)。
         if let oldest = events.first, oldest.timestamp >= cutoff { return .noop }
@@ -400,7 +424,7 @@ public final class UsageLedger {
         guard loadError == nil else { return .poisoned }
         guard let fileURL else { return compact(retentionDays: retentionDays, now: now) }   // 記憶體模式無 raw 可保
         guard rewritePreflightOK() else { return .failed }
-        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
+        let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)   // #50 R-retention:單一 predicate
         var newData = Data()
         var dropped = 0
         for line in raw.split(separator: 0x0A, omittingEmptySubsequences: false) {
@@ -474,7 +498,7 @@ public final class UsageLedger {
     /// 不得在 monotonic gate 之前發生於可疑檔案上。
     public func compactWouldAct(retentionDays: Int, now: Date = Date()) -> Bool {
         guard loadError == nil else { return false }
-        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86400)
+        let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)   // #50 R-retention:單一 predicate
         return events.contains { $0.timestamp < cutoff }
     }
 
