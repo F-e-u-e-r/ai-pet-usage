@@ -324,13 +324,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-31b-it",
     "displayName": "Gemma 4 31B",
-    "inputPerMillion": 0.09,
+    "inputPerMillion": 0.1,
     "outputPerMillion": 0.34,
     "currency": "USD",
-    "effectiveFrom": "2026-08-19",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-19)",
+    "effectiveFrom": "2026-08-21",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-21)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "cacheReadPerMillion": 0.1
   },
   {
     "providerId": "claude-code",
@@ -1044,27 +1044,27 @@
     "providerId": "codex",
     "modelId": "gpt-5.6-sol",
     "displayName": "GPT-5.6 Sol",
-    "inputPerMillion": 2.5,
-    "outputPerMillion": 15.0,
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 10.0,
     "currency": "USD",
-    "effectiveFrom": "2026-08-18",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-18)",
+    "effectiveFrom": "2026-08-22",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-22)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.25,
-    "cacheWrite5mPerMillion": 3.125
+    "cacheReadPerMillion": 0.2,
+    "cacheWrite5mPerMillion": 2.5
   },
   {
     "providerId": "codex",
     "modelId": "gpt-5.6-sol-pro",
     "displayName": "GPT-5.6 Sol Pro",
-    "inputPerMillion": 2.5,
-    "outputPerMillion": 15.0,
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 10.0,
     "currency": "USD",
-    "effectiveFrom": "2026-08-18",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-18)",
+    "effectiveFrom": "2026-08-22",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-22)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.25,
-    "cacheWrite5mPerMillion": 3.125
+    "cacheReadPerMillion": 0.2,
+    "cacheWrite5mPerMillion": 2.5
   },
   {
     "providerId": "codex",
@@ -1130,13 +1130,12 @@
     "providerId": "codex",
     "modelId": "gpt-oss-120b",
     "displayName": "gpt-oss-120b",
-    "inputPerMillion": 0.03,
+    "inputPerMillion": 0.037,
     "outputPerMillion": 0.17,
     "currency": "USD",
-    "effectiveFrom": "2026-08-12",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-12)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.03
+    "effectiveFrom": "2026-08-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-23)",
+    "userOverride": false
   },
   {
     "providerId": "codex",
