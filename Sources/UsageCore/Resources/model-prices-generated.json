@@ -300,17 +300,6 @@
   },
   {
     "providerId": "antigravity",
-    "modelId": "gemma-3n-e4b-it",
-    "displayName": "Gemma 3n 4B",
-    "inputPerMillion": 0.06,
-    "outputPerMillion": 0.12,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
     "inputPerMillion": 0.07,
