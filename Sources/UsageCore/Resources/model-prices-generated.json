@@ -313,13 +313,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-31b-it",
     "displayName": "Gemma 4 31B",
-    "inputPerMillion": 0.1,
+    "inputPerMillion": 0.09,
     "outputPerMillion": 0.34,
     "currency": "USD",
-    "effectiveFrom": "2026-08-21",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-21)",
+    "effectiveFrom": "2026-08-27",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-27)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.1
+    "cacheReadPerMillion": 0.05
   },
   {
     "providerId": "claude-code",
