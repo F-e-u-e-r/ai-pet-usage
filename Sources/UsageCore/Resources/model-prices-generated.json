@@ -244,14 +244,14 @@
     "providerId": "antigravity",
     "modelId": "gemini-3.7-flash",
     "displayName": "Gemini 3.7 Flash",
-    "inputPerMillion": 0.375,
-    "outputPerMillion": 1.875,
+    "inputPerMillion": 0.75,
+    "outputPerMillion": 3.75,
     "currency": "USD",
-    "effectiveFrom": "2026-08-14",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-14)",
+    "effectiveFrom": "2026-08-29",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-29)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.0375,
-    "cacheWrite5mPerMillion": 0.020833
+    "cacheReadPerMillion": 0.075,
+    "cacheWrite5mPerMillion": 0.041667
   },
   {
     "providerId": "antigravity",
@@ -667,10 +667,10 @@
     "inputPerMillion": 0.1,
     "outputPerMillion": 0.4,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-08-29",
+    "source": "openrouter.ai/api/v1/models (generated 2026-08-29)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.025
+    "cacheReadPerMillion": 0.03
   },
   {
     "providerId": "codex",
