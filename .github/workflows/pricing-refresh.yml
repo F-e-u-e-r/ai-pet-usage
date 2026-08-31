@@ -22,9 +22,16 @@
 #     全過才 approve(findings 進 review body)→ 普通 squash merge;1-review
 #     ruleset 原樣生效、絕不用 --admin;任何存疑只留言不合併,人工路徑永遠保留。
 #
-# 已知殘餘限制:GITHUB_TOKEN 開的 PR 不會再觸發 pricing-validate.yml / swift-tests
-# (GitHub 防遞迴設計)。故本 job 內建 validate 作為機械閘門;owner 合併前仍會看 diff。
-# 若日後要在 auto-PR 上再跑 Swift Codable 端對端測試,需改用 PAT 觸發。
+# GitHub 行為變更(本 repo 首見 2026-08-21,官方文件同步描述):GITHUB_TOKEN
+# 開/更新的 PR 現在「會」建立 pull_request workflow runs,但停在 approval gate
+# (conclusion=action_required、jobs 不執行;merge+刪分支時被蓋成 failure ——
+# Actions 頁面上本分支的紅/黃字多為此類從未執行的殘影,非真實紅燈)。
+# verify-merge routine 已於 2026-09-01 升級:偵測 held runs,並要求 swift-tests
+# + pricing-validate 真綠才 approve+merge。routine 的雲端環境「無法」自行
+# approve 這些 runs —— 現行 owner-assisted 模式(owner 決策 2026-09-01):由
+# owner 手動按 Approve 啟動 CI,routine 於後續窗口確認雙綠後才 approve+merge;
+# 紅/超時/CI 狀態不明一律留言不合併。本 job 內建 validate 仍是第一道機械閘門
+# (壞資料進不了 PR),PR CI 是其上的真 CI 第二層(免 PAT,代價一次人工 click)。
 #
 # 【前置 repo 設定 — 一次性;缺這個,最後的 gh pr create 會失敗】
 #   首個排程 run(#1)即因此紅字:
