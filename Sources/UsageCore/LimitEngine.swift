@@ -906,12 +906,32 @@ public final class LimitEngine {
     // MARK: - Claude 5 小時區塊估算(帳本推導)
 
     /// 區塊規則:第一個事件所在整點開窗,5 小時後關窗;窗外的下一個事件開新窗。
+    /// 單一演算法(FiveHourBlockAccumulator)、兩個入口:array 版保留歷史簽名與防禦性排序
+    ///(測試/任意輸入);ledger 串流版免 materialize(RAM P0 2026-09-02:兩個 production
+    /// 呼叫點原本每 tick 各複製 trailing-8d 上萬筆子陣列,純為餵本函式)。
     public static func fiveHourBlock(events: [UsageEvent], now: Date) -> (start: Date, end: Date, tokens: Int)? {
-        guard !events.isEmpty else { return nil }
-        var blockStart: Date?
-        var blockEnd = Date.distantPast
-        var tokens = 0
-        for e in events.sorted(by: { $0.timestamp < $1.timestamp }) {
+        var acc = FiveHourBlockAccumulator()
+        for e in events.sorted(by: { $0.timestamp < $1.timestamp }) { acc.add(e) }
+        return acc.result(now: now)
+    }
+
+    /// 免複製串流入口:走訪 ledger 的排序 COW 快照(events 依 timestamp 升冪是 indexRange
+    /// 的既有前提,故不需重排),不建中間陣列;與 array 版共用同一 accumulator,勿分岔。
+    public static func fiveHourBlock(ledger: UsageLedger, interval: DateInterval,
+                                     providerId: String, now: Date) -> (start: Date, end: Date, tokens: Int)? {
+        var acc = FiveHourBlockAccumulator()
+        ledger.forEachEvent(in: interval, providerId: providerId) { acc.add($0) }
+        return acc.result(now: now)
+    }
+
+    /// fiveHourBlock 的逐事件核心(輸入必須已按 timestamp 升冪;零事件 → result nil,
+    /// 等價於舊版的 isEmpty guard)。
+    private struct FiveHourBlockAccumulator {
+        private var blockStart: Date?
+        private var blockEnd = Date.distantPast
+        private var tokens = 0
+
+        mutating func add(_ e: UsageEvent) {
             if e.timestamp >= blockEnd {
                 let cal = Calendar.current
                 var comps = cal.dateComponents([.year, .month, .day, .hour], from: e.timestamp)
@@ -922,14 +942,17 @@ public final class LimitEngine {
             }
             tokens += e.tokens.total
         }
-        guard let start = blockStart, now < blockEnd else { return nil }
-        return (start, blockEnd, tokens)
+
+        func result(now: Date) -> (start: Date, end: Date, tokens: Int)? {
+            guard let start = blockStart, now < blockEnd else { return nil }
+            return (start, blockEnd, tokens)
+        }
     }
 
     private func claudeState(ledger: UsageLedger, settings: CoreSettings, now: Date,
                              lastEvent: UsageEvent?, burn: Double) -> ProviderLimitState {
-        let recent = ledger.events(in: .trailing(days: 8, now: now), providerId: "claude-code")
-        let block = Self.fiveHourBlock(events: recent, now: now)
+        let block = Self.fiveHourBlock(ledger: ledger, interval: .trailing(days: 8, now: now),
+                                       providerId: "claude-code", now: now)   // RAM P0:免 12k 複本
         let weeklyTokens = ledger.totals(in: .trailing(days: 7, now: now), providerId: "claude-code").total
 
         func percent(_ tokens: Int, budget: Int?) -> Double? {

@@ -100,24 +100,17 @@ struct DashboardRoot: View {
         }
     }
 
-    @ViewBuilder private var refreshedLabel: some View {
-        if let last = model.dashboard.lastRefreshAt {
-            Text("Refreshed \(timeAgo(last))")
-                .font(Theme.FontScale.secondaryInfo)
-                .foregroundStyle(Theme.textSecondary)
-                .fixedSize()   // 完整呈現,不被工具列裁切
-        }
-    }
+    // Observation 隔離(RAM P0 2026-09-02):工具列兩個每-tick 變動的讀取
+    // (dashboard.lastRefreshAt、refreshing)必須住在自己的子 view,讓
+    // DashboardRoot.body 只追蹤 $tab。容器 body 每次重評都重建 TabView 的
+    // view-list,而 macOS 26 SwiftUI 把每組 tabItem(4 個 Label + TagIndexProjection)
+    // 記進 selection StoredLocation 的內部字典且永不回收 —— 視窗開著時每 tick
+    // 洩約 4 組、重度使用數日累積數百 MB(retain-path 證據:兩個相距 14k 的
+    // 物件皆收斂到同一 StoredLocation<DashboardTab>;reviews/ram-p0-2026-09-02/)。
+    // 勿把 model 的可觀測屬性讀回 DashboardRoot.body。
+    private var refreshedLabel: some View { RefreshedToolbarLabel() }
 
-    private var refreshButton: some View {
-        Button {
-            Task { await model.userRefresh() }
-        } label: {
-            if model.refreshing { ProgressView().controlSize(.small) }
-            else { Label("Refresh", systemImage: "arrow.clockwise") }
-        }
-        .keyboardShortcut("r")
-    }
+    private var refreshButton: some View { RefreshToolbarButton() }
 
     private var exportButton: some View {
         Button {
@@ -139,6 +132,39 @@ struct DashboardRoot: View {
         case .projects: return "Export Range"
         case .trends: return "Export Trends"
         }
+    }
+}
+
+/// DashboardRoot 工具列的「Refreshed …」標籤;獨立 view = Observation 追蹤邊界
+/// (見 DashboardRoot 內註解;此處變動只重評本 view,不重建 TabView view-list)。
+private struct RefreshedToolbarLabel: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        // L1(xcheck r1 luna):補讀 refreshing —— 恢復修前「refresh 開始/結束都順帶重算
+        // 相對時間」的節奏;依賴留在本 child,DashboardRoot/TabView 的隔離不回退。
+        let _ = model.refreshing
+        if let last = model.dashboard.lastRefreshAt {
+            Text("Refreshed \(timeAgo(last))")
+                .font(Theme.FontScale.secondaryInfo)
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize()   // 完整呈現,不被工具列裁切
+        }
+    }
+}
+
+/// DashboardRoot 工具列的刷新鈕;獨立 view 隔離 refreshing 的每-tick 翻轉。
+private struct RefreshToolbarButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button {
+            Task { await model.userRefresh() }
+        } label: {
+            if model.refreshing { ProgressView().controlSize(.small) }
+            else { Label("Refresh", systemImage: "arrow.clockwise") }
+        }
+        .keyboardShortcut("r")
     }
 }
 

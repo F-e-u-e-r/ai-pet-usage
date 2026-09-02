@@ -487,7 +487,7 @@ public struct FileScanMark: Codable, Sendable, Hashable {
 }
 
 /// 每個 adapter 的掃描進度(檔案 path → 已處理位移),持久化以支援增量刷新。
-public struct ScanState: Codable, Sendable {
+public struct ScanState: Codable, Sendable, Equatable {
     public var files: [String: FileScanMark]
     /// #83 A′ R5/R6:本 provider 最後 acknowledge 的 limits reconciliation generation——只在該
     /// generation durably committed 之後寫入(R5)。scan-state 走 lag-safe 寫入:ack 落後(gen>ack)
