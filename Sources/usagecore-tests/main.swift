@@ -346,6 +346,29 @@ runSuite("CompactionLockTests", [
     ("testInitIsReadOnlyAndCompactionRunsUnderRefresh", compactionLock.testInitIsReadOnlyAndCompactionRunsUnderRefresh),
 ])
 
+// RAM P0(2026-09-02):C parity / D scan-state 快取 oracle / B retention characterization
+let fiveHourParity = FiveHourBlockParityTests()
+runSuite("FiveHourBlockParityTests", [
+    ("testStreamingEntryMatchesArrayEntryAndPinnedSemantics",
+     fiveHourParity.testStreamingEntryMatchesArrayEntryAndPinnedSemantics),
+])
+
+let scanStateCache = ScanStateCacheTests()
+runSuite("ScanStateCacheTests", [
+    ("testIdleRefreshSkipsScanStateRewrite", scanStateCache.testIdleRefreshSkipsScanStateRewrite),
+    ("testCrossProcessScanStateChangeObservedAndPreserved",
+     scanStateCache.testCrossProcessScanStateChangeObservedAndPreserved),
+    ("testMalformedScanStateStillAbortsRefresh", scanStateCache.testMalformedScanStateStillAbortsRefresh),
+])
+
+let retentionCharacterization = RetentionObservabilityCharacterizationTests()
+runSuite("RetentionObservabilityCharacterizationTests", [
+    ("testExpiredEventsRemainObservableUntilPhysicalCompaction",
+     retentionCharacterization.testExpiredEventsRemainObservableUntilPhysicalCompaction),
+    ("testPostCutoffExpiryKeepsHeavyCompactionEligibleEveryMinute",
+     retentionCharacterization.testPostCutoffExpiryKeepsHeavyCompactionEligibleEveryMinute),
+])
+
 let refreshLock = RefreshLockTests()
 runSuite("RefreshLockTests", [
     ("testRefreshSkipsWhenLockHeldByAnotherProcess", refreshLock.testRefreshSkipsWhenLockHeldByAnotherProcess),

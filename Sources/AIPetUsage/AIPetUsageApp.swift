@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// 顏色經 ImageRenderer 烤成非 template NSImage;烤製失敗時退回純文字。
 struct MenuBarLabel: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         // 讀取 appearanceTick,使深/淺色切換時重新烤圖
@@ -84,5 +85,13 @@ struct MenuBarLabel: View {
             }
         }
         .accessibilityLabel(model.menuBarAccessibilityLabel)
+        .onAppear {
+            // 測試縫(RAM P0 receipt 用,同 AIPET_DATA_DIR 哲學):隔離 instance 無輔助取用
+            // 權限可點選單,receipt 需要「dashboard 開著 + 高頻 refresh」的實跑;
+            // 未設環境變數時零行為變化。審查時可裁決拆除。
+            if ProcessInfo.processInfo.environment["AIPET_DEBUG_OPEN_DASHBOARD"] == "1" {
+                openWindow(id: "dashboard")
+            }
+        }
     }
 }

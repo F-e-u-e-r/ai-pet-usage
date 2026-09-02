@@ -167,6 +167,11 @@ public actor UsageCoordinator {
     private var fullReindexPreservedProviderIds: Set<String> = []
     /// 非 nil 表示 scan-state 檔存在但讀不到 / 損壞;與 ledger/limits 的 loadError 一起閘住本輪寫入(#44 契約 A)。
     private var scanStateLoadError: Error?
+    /// RAM P0(2026-09-02):scan-state 讀取快取 —— fingerprint(#44 契約 D 同款:dev+ino+size+mtime)
+    /// 未變即重用上次解碼結果(每 tick 省 ~1.9MB 解碼)。AtomicJSON.write 為原子替換(必換 inode),
+    /// 任何行程的寫出都使其失效;判定永遠對「持鎖後的磁碟現況」stat,絕不以本行程記憶體是否變動
+    /// 為準(#44 契約 C「持鎖後磁碟唯一真相」不受影響)。
+    private var scanStateReadCache: (fingerprint: FileFingerprint, states: [String: ScanState])?
     /// F2(grok-50-r2):上一次 authority durable write 以 outcome-unknown 結束(rename 已生效、
     /// dir-sync 失敗)。設起後:cumulative accounting 一律 fail closed(cursor/boundary 不推進),
     /// 直到 reconcile(confirm 可見 entry durable + load() 三關)成功。
@@ -652,6 +657,43 @@ public actor UsageCoordinator {
 
     // MARK: 刷新
 
+    /// RAM P0(2026-09-02):scan-state 的 fingerprint 快取讀取。
+    /// 不變式:回傳/擲出與「此刻 AtomicJSON.readOrThrow 一次」完全同義 —— tri-state 原樣保留
+    ///(nil=真缺檔可建新;throw=unreadable/malformed;值=解碼結果;斷 symlink 沿用
+    /// pathIsGenuinelyMissing 判定,#44 契約 A / C-MF7)。fingerprint 與內容繫在同一個 fd
+    ///(stat 描述的就是讀到的那份 bytes);本函式只在 refresh 持鎖後呼叫,跨行程寫出
+    ///(原子替換必換 inode)必致失效 —— 契約 C 的「磁碟唯一真相」由磁碟 stat 維持。
+    private func readScanStatesCached() throws -> [String: ScanState]? {
+        let fd = open(scanStateURL.path, O_RDONLY)
+        if fd < 0 {
+            let openErrno = errno
+            if AtomicJSON.pathIsGenuinelyMissing(scanStateURL.path) {
+                scanStateReadCache = nil
+                return nil
+            }
+            throw StateReadError.unreadable(underlying: NSError(domain: NSPOSIXErrorDomain, code: Int(openErrno)))
+        }
+        defer { close(fd) }
+        guard let fp = UsageLedger.fingerprint(ofFD: fd) else {
+            throw StateReadError.unreadable(underlying: NSError(domain: NSPOSIXErrorDomain, code: Int(errno)))
+        }
+        if let cached = scanStateReadCache, cached.fingerprint == fp { return cached.states }
+        let data: Data
+        do {
+            data = try FileHandle(fileDescriptor: fd, closeOnDealloc: false).readToEnd() ?? Data()
+        } catch {
+            throw StateReadError.unreadable(underlying: error)
+        }
+        do {
+            let decoded = try AtomicJSON.decoder().decode([String: ScanState].self, from: data)
+            scanStateReadCache = (fp, decoded)
+            return decoded
+        } catch {
+            scanStateReadCache = nil
+            throw StateReadError.malformed(underlying: error)
+        }
+    }
+
     public func refresh(fullReindex: Bool = false) async -> RefreshOutcome {
         let now = Date()
         if refreshInFlight {
@@ -684,7 +726,7 @@ public actor UsageCoordinator {
         limits.reloadFromDisk()
         var diskStates: [String: ScanState]? = nil
         do {
-            diskStates = try AtomicJSON.readOrThrow([String: ScanState].self, from: scanStateURL)
+            diskStates = try readScanStatesCached()   // RAM P0:tri-state 同 readOrThrow,僅省未變 bytes 的重複解碼
             scanStateLoadError = nil
         } catch {
             scanStateLoadError = error
@@ -1121,8 +1163,8 @@ public actor UsageCoordinator {
 
         // Claude 估算區塊的重置偵測(U2:poisoned 亦排除)
         if settings.enabledProviders.contains("claude-code"), !poisonedThisRefresh.contains("claude-code") {
-            let recent = ledger.events(in: .trailing(days: 8, now: now), providerId: "claude-code")
-            let block = LimitEngine.fiveHourBlock(events: recent, now: now)
+            let block = LimitEngine.fiveHourBlock(ledger: ledger, interval: .trailing(days: 8, now: now),
+                                                  providerId: "claude-code", now: now)   // RAM P0:免 12k 複本
             transitions += limits.noteEstimatedBlock(providerId: "claude-code",
                                                      blockEnd: block?.end,
                                                      blockTokens: block?.tokens ?? 0,
@@ -1138,10 +1180,20 @@ public actor UsageCoordinator {
             refreshQualityNotes.append("limits derived-state save failed (recomputed next refresh): \(derr)")
         }
 
-        do {
-            try AtomicJSON.write(scanStates, to: scanStateURL)   // C-MF8:寫失敗不再靜默
-        } catch {
-            refreshQualityNotes.append("scan-state write failed — will re-scan next refresh")
+        // RAM P0(2026-09-02):canonical == durable 才寫。相等判準 = 與「本輪持鎖後讀到的磁碟內容」
+        // 逐值相等(ScanState: Equatable)—— 不是「本行程沒動過」:跨行程寫入已在讀取段被 fingerprint
+        // 對磁碟現況收斂進 diskStates,故此處相等 ⇔ durable 已是 canonical,重寫只是每 tick ~1.9MB
+        // 的無效 churn(含 cumulative 標記:記憶體與磁碟不等 —— 例如磁碟遺失標記 —— 必然落入寫出分支,
+        // #50 durable-marks 再持久化不受影響)。不等(含 diskStates=nil 首建)→ 照舊 C-MF8 寫出。
+        if let disk = diskStates, disk == scanStates {
+            // no-op:磁碟未動,fingerprint 讀取快取仍有效。
+        } else {
+            do {
+                try AtomicJSON.write(scanStates, to: scanStateURL)   // C-MF8:寫失敗不再靜默
+                scanStateReadCache = nil   // 寫出後失效:下一輪對磁碟現況重建(不在 write 後補 stat,避免額外競態面)
+            } catch {
+                refreshQualityNotes.append("scan-state write failed — will re-scan next refresh")
+            }
         }
         lastRefreshAt = now
         return RefreshOutcome(transitions: transitions, dashboard: dashboard(now: now),
