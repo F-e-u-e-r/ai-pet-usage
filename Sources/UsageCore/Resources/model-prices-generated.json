@@ -255,6 +255,19 @@
   },
   {
     "providerId": "antigravity",
+    "modelId": "gemini-3.8-flash",
+    "displayName": "Gemini 3.8 Flash",
+    "inputPerMillion": 0.75,
+    "outputPerMillion": 3.75,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-04",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-04)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.075,
+    "cacheWrite5mPerMillion": 0.041667
+  },
+  {
+    "providerId": "antigravity",
     "modelId": "gemma-2-27b-it",
     "displayName": "Gemma 2 27B",
     "inputPerMillion": 0.65,
@@ -351,6 +364,20 @@
   },
   {
     "providerId": "claude-code",
+    "modelId": "claude-fable-5-1*",
+    "displayName": "Claude Fable 5.1",
+    "inputPerMillion": 10.0,
+    "outputPerMillion": 50.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-02",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-02)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.25,
+    "cacheWrite5mPerMillion": 12.5,
+    "cacheWrite1hPerMillion": 20.0
+  },
+  {
+    "providerId": "claude-code",
     "modelId": "claude-haiku-4-5*",
     "displayName": "Claude Haiku 4.5",
     "inputPerMillion": 1.0,
@@ -435,20 +462,6 @@
   },
   {
     "providerId": "claude-code",
-    "modelId": "claude-opus-4-7-fast*",
-    "displayName": "Claude Opus 4.7 (Fast)",
-    "inputPerMillion": 30.0,
-    "outputPerMillion": 150.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 3.0,
-    "cacheWrite5mPerMillion": 37.5,
-    "cacheWrite1hPerMillion": 60.0
-  },
-  {
-    "providerId": "claude-code",
     "modelId": "claude-opus-4-8*",
     "displayName": "Claude Opus 4.8",
     "inputPerMillion": 5.0,
@@ -463,20 +476,6 @@
   },
   {
     "providerId": "claude-code",
-    "modelId": "claude-opus-4-8-fast*",
-    "displayName": "Claude Opus 4.8 (Fast)",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 50.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 1.0,
-    "cacheWrite5mPerMillion": 12.5,
-    "cacheWrite1hPerMillion": 20.0
-  },
-  {
-    "providerId": "claude-code",
     "modelId": "claude-opus-5*",
     "displayName": "Claude Opus 5",
     "inputPerMillion": 5.0,
@@ -488,20 +487,6 @@
     "cacheReadPerMillion": 0.5,
     "cacheWrite5mPerMillion": 6.25,
     "cacheWrite1hPerMillion": 10.0
-  },
-  {
-    "providerId": "claude-code",
-    "modelId": "claude-opus-5-fast*",
-    "displayName": "Claude Opus 5 (Fast)",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 50.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 1.0,
-    "cacheWrite5mPerMillion": 12.5,
-    "cacheWrite1hPerMillion": 20.0
   },
   {
     "providerId": "claude-code",
@@ -1080,6 +1065,32 @@
     "userOverride": false,
     "cacheReadPerMillion": 0.2,
     "cacheWrite5mPerMillion": 2.5
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-astra",
+    "displayName": "GPT-6 Astra",
+    "inputPerMillion": 10.0,
+    "outputPerMillion": 50.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-05)",
+    "userOverride": false,
+    "cacheReadPerMillion": 1.0,
+    "cacheWrite5mPerMillion": 12.5
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-astra-pro",
+    "displayName": "GPT-6 Astra Pro",
+    "inputPerMillion": 10.0,
+    "outputPerMillion": 50.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-05)",
+    "userOverride": false,
+    "cacheReadPerMillion": 1.0,
+    "cacheWrite5mPerMillion": 12.5
   },
   {
     "providerId": "codex",
