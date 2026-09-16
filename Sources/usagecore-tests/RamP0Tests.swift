@@ -246,6 +246,11 @@ final class ScanStateCacheTests: XCTestCase {
 // MARK: - B:retention 可觀測性 characterization(production 凍結)
 
 final class RetentionObservabilityCharacterizationTests: XCTestCase {
+    // v3.3 顯式翻轉(design RAM_P0B_RETENTION §4 amendment 註記):原 characterization 釘
+    // 「過期未壓縮事件對 product 可見 = 無 consumer 級 logical filter」——B 落地後 contract
+    // 翻轉:retention 是 shared LOGICAL visibility contract(§1),product 視圖於壓縮前即
+    // 收斂;ledger 原語(totals/dailyBuckets 對任意 interval)保持 full-physical(internal,
+    // 非 product surface)。原行為證據保存於 reviews/ram-p0-2026-09-02/。
     func testExpiredEventsRemainObservableUntilPhysicalCompaction() throws {
         let dir = ramTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -256,19 +261,21 @@ final class RetentionObservabilityCharacterizationTests: XCTestCase {
         let fresh = ramEvent("new", "claude-code", at: now.addingTimeInterval(-3600), input: 3)
         XCTAssertEqual(ledger.append([old, edge, fresh]), 3)
 
-        // 特性化事實 1:cutoff 已過、物理壓縮尚未執行 → 無任何 consumer 級 logical filter,
-        // 無下限聚合(All-time 等價的 epoch 區間)把過期事件照算;≤90d 顯示面天然構不到。
-        // 這就是「compaction 節流」會把 #50 P3『過期貢獻恆 0』與顯示面拆成兩套時間語義的
-        // 執行證據(B 的 merge bar 由此而來;見 reviews/ram-p0-2026-09-02/)。
+        // full-physical 原語(internal):過期物理在場對任意 interval 查詢仍可見 —— 這是
+        // §1b FULL PHYSICAL LEDGER 層的明文語義,非 product 洩漏。
         let allTime = DateInterval(start: Date(timeIntervalSince1970: 0), end: now)
-        XCTAssertEqual(ledger.totals(in: allTime).total, 123, "過期未壓縮的事件對 All-time 可見")
+        XCTAssertEqual(ledger.totals(in: allTime).total, 123, "full-physical 原語對過期在場事件可見")
         XCTAssertEqual(ledger.dailyBuckets(in: allTime).count, 3)
+        // v3.3 翻轉核心:product 視圖(clamped)於**壓縮前**即收斂 —— logical invisibility
+        // 先於 physical removal(merge bar 2:compaction timing 永不改變 product-observable)。
+        let clamped = UsageLedger.clampToRetained(allTime, retentionDays: 92, now: now)
+        XCTAssertEqual(ledger.totals(in: clamped).total, 23, "product 視圖壓縮前即不含過期(edge 92d−1h 屬 retained)")
         // edge(91d23h 前)落在 90d 顯示上限與 92d cutoff 之間的縫隙:Trends 最大 90d 天然
         // 構不到 cutoff 附近 —— 只有 fresh 可見。
         let ninety = DateInterval(start: now.addingTimeInterval(-90 * 86400), end: now)
         XCTAssertEqual(ledger.totals(in: ninety).total, 3, "≤90d 顯示範圍構不到 92d cutoff")
 
-        // 特性化事實 2:物理壓縮是唯一 enforcement —— 壓縮後 All-time 才收斂。
+        // 物理壓縮(housekeeping)後 full-physical 原語亦收斂(product 視圖不變 —— 上已 23)。
         XCTAssertTrue(ledger.compactWouldAct(retentionDays: 92, now: now))
         let raw = try Data(contentsOf: dir.appendingPathComponent("ledger.jsonl"))
         if case .applied = ledger.compactRawPreserving(retentionDays: 92, now: now, raw: raw) {} else {
@@ -279,11 +286,12 @@ final class RetentionObservabilityCharacterizationTests: XCTestCase {
     }
 
     func testPostCutoffExpiryKeepsHeavyCompactionEligibleEveryMinute() throws {
-        // 合成 09-10 之後的常態(不必等真日期):最舊事件剛過 cutoff,其後每分鐘再過期一筆。
-        // 特性化:compactWouldAct 在每個相繼分鐘恆真、raw-preserving 每次 .applied 且每次
-        // 重讀+重寫全檔 —— 而 coordinator 對它 1:1 掛在每次 refresh(唯一 production 呼叫點
-        // 在 UsageCoordinator.refresh 的壓縮塊,無任何時間/批量節流;CompactionLockTests 已證
-        // refresh 必經壓縮)。即:節流前,每個 refresh 都是一次全檔重寫級的重操作。
+        // v3.3 顯式翻轉(09-10 炸彈拆除的直接 pin;design §4 amendment 註記):原
+        // characterization 釘「每分鐘 compactWouldAct 恆真 + coordinator 1:1 掛每 refresh
+        // = 無節流的全檔重寫 storm」。B 落地後 production 排程改走批次 scheduler
+        //(shouldPhysicallyCompact:N_batch=64 ∨ overdueAge≥1h)—— 同一 fixture 下每分鐘
+        // 過期一筆**不再**每 refresh heavy;overdue 滿 1h 才一次 heavy 清全部。
+        // 原 storm 行為證據保存於 reviews/ram-p0-2026-09-02/。
         let dir = ramTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let ledgerURL = dir.appendingPathComponent("ledger.jsonl")
@@ -301,14 +309,21 @@ final class RetentionObservabilityCharacterizationTests: XCTestCase {
         for j in 0..<5 {
             let t = now0.addingTimeInterval(Double(j) * 60)
             XCTAssertTrue(ledger.compactWouldAct(retentionDays: 92, now: t),
-                          "第 \(j) 分鐘:又有事件過期 → 重壓縮路徑再度合格(無節流 = 每 refresh 都跑)")
-            let raw = try Data(contentsOf: ledgerURL)   // 與 coordinator 相同:每次重讀全檔
-            if case .applied = ledger.compactRawPreserving(retentionDays: 92, now: t, raw: raw) {} else {
-                return XCTFail("第 \(j) 輪 raw-preserving 應 applied")
-            }
-            XCTAssertEqual(ledger.events.count, 6 - (j + 1), "每輪恰好再移除一筆")
+                          "急判定(對照,production 已不用):第 \(j) 分鐘仍有過期在場")
+            XCTAssertFalse(ledger.shouldPhysicallyCompact(retentionDays: 92, now: t),
+                           "批次 scheduler:\(j + 1) 筆 < N_batch 且 overdue < 1h → 本 refresh 不 heavy")
         }
-        XCTAssertEqual(ledger.events.count, 1)
-        XCTAssertFalse(ledger.compactWouldAct(retentionDays: 92, now: now0.addingTimeInterval(300)))
+        XCTAssertEqual(ledger.events.count, 6, "節流窗內零重寫(storm 拆除)")
+        // 最老過期行 overdue 滿 1h → 一次 heavy 清掉全部已過期
+        let t1h = now0.addingTimeInterval(3601)
+        XCTAssertTrue(ledger.shouldPhysicallyCompact(retentionDays: 92, now: t1h),
+                      "oldest-expired overdueAge ≥ 1h → overdue 觸發")
+        let raw = try Data(contentsOf: ledgerURL)
+        if case .applied = ledger.compactRawPreserving(retentionDays: 92, now: t1h, raw: raw) {} else {
+            return XCTFail("overdue 批次應 applied")
+        }
+        XCTAssertEqual(ledger.events.count, 1, "一次 heavy 清全部過期(非逐分鐘五次)")
+        XCTAssertFalse(ledger.shouldPhysicallyCompact(retentionDays: 92, now: t1h),
+                       "same-snapshot:成功後兩 trigger 皆 false")
     }
 }

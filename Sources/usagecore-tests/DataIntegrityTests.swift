@@ -282,7 +282,8 @@ final class DataIntegrityReindexTests: XCTestCase {
         let base = try AtomicJSON.encoder().encode(diEvent("p-1", provider: "p")) + Data([0x0A])
         let decision = UsageCoordinator.monotonicGateDecision(
             baselineRaw: base, providerId: "p",
-            candidate: [diEvent("p-1", provider: "p"), diEvent("q-1", provider: "q")])
+            candidate: [diEvent("p-1", provider: "p"), diEvent("q-1", provider: "q")],
+            retentionDays: 3650, now: Date())   // v3.3:大 retention 使 projection 不涉入(本測試驗 L4)
         guard case .preserve(_, _, _, _, let canon) = decision, canon >= 1 else {
             XCTAssertTrue(false, "外來 provider 事件必須令 gate preserve,實得 \(decision)"); return
         }

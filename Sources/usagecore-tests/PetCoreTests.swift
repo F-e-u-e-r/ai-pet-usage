@@ -475,7 +475,9 @@ final class CoordinatorIntegrationTests: XCTestCase {
         let dataDir = makeTempDir()
         let coordinator = UsageCoordinator(
             dataDir: dataDir,
-            settings: CoreSettings(claudeFiveHourTokenBudget: 1_000_000),
+            // v3.3:fixture 為固定歷史日期(2026-01-15);本測試驗聚合/匯出管線,retention
+            // 語義另由 RamP0B/RetentionVisibility 測試覆蓋 → 放大 retention 讓 fixture 在窗內。
+            settings: CoreSettings(retentionDays: 3650, claudeFiveHourTokenBudget: 1_000_000),
             adapters: [CodexAdapter(roots: [codexRoot]), ClaudeCodeAdapter(roots: [claudeRoot], statuslineFiles: [], planConfigFiles: [])]
         )
 

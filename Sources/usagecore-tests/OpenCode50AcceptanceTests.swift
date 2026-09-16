@@ -402,6 +402,57 @@ final class OpenCode50AcceptanceTests: XCTestCase {
         XCTAssertTrue(anchors(dir).isEmpty, "R1:不得建立任何 authority")
     }
 
+    // v3.3 §7 O4 raw-only 案(RAM_P0B_RETENTION §1b arm;xcheck r5 gate):provider 僅存
+    // classifier-rejected(raw-only)ledger 行 + authority absent ⇒ 仍 require re-baseline
+    //(不得 zero-delta)。classifier unification 使該行離開 typed events(newestEvent 看不到),
+    // typed 集縮小不得使 O4 證據提前於 physical compaction 消失(non-regression)。
+    // 混合檔避免全-raw-only 的 poisoned 路徑(該路徑由 ClassifierUnificationTests 另 pin)。
+    func testR1cRawOnlyLedgerEvidenceAloneStillBlocksZeroDelta() throws {
+        let dir = makeTempDir()
+        let dbURL = dir.appendingPathComponent("opencode.db")
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        makeDb(at: dbURL, [Row(id: "s1", ti: 500, tu: now - Self.msPerDay)])
+        let ledgerURL = dir.appendingPathComponent("ledger.jsonl")
+        _ = UsageLedger(fileURL: ledgerURL).append([
+            UsageEvent(id: "cc:1", providerId: "claude-code", timestamp: Date(),
+                       tokens: TokenBreakdown(input: 1), sourceKind: "test"),
+        ])
+        let rawLine = #"{"id":"oc:ghost:1","providerId":"opencode","timestamp":"2000-01-01T00:00:00+15:00","tokens":{"input":1,"output":0,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheWriteUnknown":0},"sourceKind":"opencode-session"}"# + "\n"
+        let fh = try FileHandle(forWritingTo: ledgerURL)
+        try fh.seekToEnd()
+        try fh.write(contentsOf: Data(rawLine.utf8))
+        try fh.close()
+
+        let out = runRefresh(coord(dir, dbURL))
+        XCTAssertTrue(out.dashboard.dataQuality.contains { $0.contains("re-baseline") },
+                      "O4 arm:raw-only 在場證據必須擋 zero-delta 並指向 explicit re-baseline")
+        XCTAssertTrue(anchors(dir).isEmpty, "O4 arm:不得建立 authority")
+        XCTAssertEqual(inputTotal(dir), 0, "O4 arm:不得記帳(opencode)")
+    }
+
+    // v3.3 §7 O4 non-regression 案:provider 僅存 **typed 過期**(>92d、尚未物理 compact)
+    // ledger 行 + authority absent ⇒ 仍 require re-baseline(不得 zero-delta)——
+    // hasPriorEvidence 的 newestEvent arm 為 full-physical,不套 retained projection(§1b)。
+    // fixture 讓過期行 overdue < 1h(批次窗內、不觸發 compaction);compact 後失去證據
+    // = adjudicated pre-existing #50 limitation(owner DEFER),不在本案。
+    func testR1dTypedExpiredLedgerEvidenceAloneStillBlocksZeroDelta() throws {
+        let dir = makeTempDir()
+        let dbURL = dir.appendingPathComponent("opencode.db")
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        makeDb(at: dbURL, [Row(id: "s1", ti: 500, tu: now - Self.msPerDay)])
+        let cutoff = UsageLedger.retentionCutoff(retentionDays: 92, now: Date())
+        _ = UsageLedger(fileURL: dir.appendingPathComponent("ledger.jsonl")).append([
+            UsageEvent(id: "oc:old:1", providerId: "opencode",
+                       timestamp: cutoff.addingTimeInterval(-1800),   // 過期 30min(批次窗內)
+                       tokens: TokenBreakdown(input: 1), sourceKind: "opencode-session"),
+        ])
+        let out = runRefresh(coord(dir, dbURL))
+        XCTAssertTrue(out.dashboard.dataQuality.contains { $0.contains("re-baseline") },
+                      "O4:typed 過期在場證據(full-physical newestEvent)仍必須擋 zero-delta")
+        XCTAssertTrue(anchors(dir).isEmpty, "O4:不得建立 authority")
+        XCTAssertEqual(inputTotal(dir), 1, "既有過期事件不動、不得新增記帳")
+    }
+
     // 2/3/4/7/8) 顯式 re-baseline:現值成為 authority、零用量;legacy 值永不被複製;既有帳本不動
     func testR2ExplicitRebaselineEstablishesCurrentCountersAndCountsOnlyLaterGrowth() throws {
         let dir = makeTempDir()

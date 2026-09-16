@@ -380,6 +380,21 @@ public enum CanonicalLedgerV1 {
         case fail(missingEvents: Int, changedEvents: Int)
     }
 
+    /// v3.3 §3 gate projection(design RAM_P0B_RETENTION;#48 merge bar 3):比較視圖上豁免
+    /// 「可證明過期」的行 —— 豁免判準與 compactRawPreserving 丟棄判準**逐字同義**
+    ///(ledgerEventClassifier = ISO8601.parse strict ∧ < cutoff;單一分類器,#50 單一
+    /// predicate 第三接點)。不可證明過期(malformed / lenient-only / 值域外 timestamp)
+    /// → **不豁免**(缺席仍 → missing → preserve;compact 不會刪它,gate 也不得假設它可
+    /// 消失)。Raw 層不動:projection 只作用於比較視圖;candidate 端 reindex 本以同 now
+    /// 過濾,雙側套用保持對稱與單一函式。
+    public static func projectRetained(_ slice: Slice, cutoff: Date) -> Slice {
+        Slice(events: slice.events.filter { _, ev in
+            guard case .string(let ts)? = ev.fields["timestamp"],
+                  let d = ISO8601.parse(ts, strict: true) else { return true }
+            return d >= cutoff
+        })
+    }
+
     /// 前提:兩側 Slice 皆出自本型別的 canonicalize(duplicate 已在該層 fail closed)。
     public static func compareMonotonic(baseline: Slice, candidate: Slice) -> Verdict {
         var missing = 0, changed = 0, enriched = 0
