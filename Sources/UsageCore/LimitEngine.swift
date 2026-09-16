@@ -775,7 +775,8 @@ public final class LimitEngine {
 
     public func limitState(providerId: String, ledger: UsageLedger, settings: CoreSettings,
                            now: Date = Date()) -> ProviderLimitState {
-        let lastEvent = ledger.newestEvent(providerId: providerId)
+        let lastEvent = ledger.newestRetainedEvent(providerId: providerId,
+                                                   retentionDays: settings.retentionDays, now: now)   // v3.3 §1a:staleness 走 retained
         let burn = ledger.burnRatePerHour(providerId: providerId, window: 3600, now: now)
 
         // Claude Code:官方 statusline 讀值逐窗口優先;窗口過期後由 hasUsableWindow

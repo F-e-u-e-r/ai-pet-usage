@@ -196,7 +196,11 @@ public actor UsageCoordinator {
     /// 快取讓「無新事件的刷新」變 O(1)。世代任一推進即失效,絕不回傳過期聚合。
     private var cachedProjectPage: (revision: UInt64, pricingStamp: UInt64, start: Date, end: Date, data: ProjectPageData)?
     private var cachedTrends: (revision: UInt64, pricingStamp: UInt64, days: Int, day: Date,
-                               computedAt: Date, timeZoneID: String, data: TrendsData)?
+                               computedAt: Date, timeZoneID: String, cutoff: Date, data: TrendsData)?
+    /// internal(tests-only via `@testable`,同上方 DurabilityOps 注入 seam 的慣例):trends 重算
+    /// 次數。快取命中與否對回傳值不可觀測(等價即正確),測試需以此判別「該 miss 有 miss、
+    /// 該 hit 仍 hit」;production 無讀者。
+    var trendsRecomputeCount = 0
     /// 價目世代:使用者覆寫寫入時 +1(價目影響所有成本聚合)。
     private var pricingStamp: UInt64 = 0
     /// F17 信任層(契約 v5 §1/§3):per-provider local 源的觀測記錄與遲滯 stale 旗標。
@@ -478,8 +482,13 @@ public actor UsageCoordinator {
         case pass
         case preserve(retained: Int, missing: Int, changed: Int, duplicates: Int, canonicalizationErrors: Int)
     }
+    /// v3.3 §3:gate 比較於 **retained projection 視圖**上進行 —— 可證明過期
+    ///(ledgerEventClassifier 接受 ∧ < cutoff)的行雙側豁免;不可證明過期(malformed/
+    /// lenient-only timestamp)不豁免(缺席仍 → missing → preserve)。豁免集 ≡ compact 將刪集
+    ///(單一分類器)。retentionDays/now 由 caller 傳同一 refresh 的值(same-now 紀律)。
     public static func monotonicGateDecision(baselineRaw: Data, providerId: String,
-                                      candidate: [UsageEvent]) -> MonotonicGateDecision {
+                                      candidate: [UsageEvent],
+                                      retentionDays: Int, now: Date) -> MonotonicGateDecision {
         func canonErrors(_ f: CanonicalLedgerV1.FailureSummary) -> Int {
             f.malformedLines + f.missingRequiredKeys + f.unknownTopLevelKeys + f.unknownTokenKeys
                 + f.duplicateJSONMembers + f.escapedKeyNames + f.bomCount + f.nulByteCount
@@ -504,7 +513,12 @@ public actor UsageCoordinator {
                 return .preserve(retained: b.count, missing: 0, changed: 0,
                                  duplicates: f.duplicateIDs, canonicalizationErrors: canonErrors(f))
             case .success(let c):
-                switch CanonicalLedgerV1.compareMonotonic(baseline: b, candidate: c) {
+                // v3.3 §3:雙側 retained projection(candidate 端本以同 now 過濾,projection
+                // 對其冪等 —— 仍套用,保持對稱與單一函式)。
+                let cutoff = UsageLedger.retentionCutoff(retentionDays: retentionDays, now: now)
+                let pb = CanonicalLedgerV1.projectRetained(b, cutoff: cutoff)
+                let pc = CanonicalLedgerV1.projectRetained(c, cutoff: cutoff)
+                switch CanonicalLedgerV1.compareMonotonic(baseline: pb, candidate: pc) {
                 case .pass:
                     return .pass
                 case .fail(let missing, let changed):
@@ -760,7 +774,12 @@ public actor UsageCoordinator {
         //     可疑時跳過本輪 compact(證據保留;destructive gate 稍後對同一 raw 自然 fail closed)。
         // (b) compact 落盤失敗 ⇒ 契約 step 4:本輪不得比較或 replacement(旗標令 gate 短路 preserve)。
         var compactBlockedReason: String? = nil   // nil = compact 正常(applied/noop);非 nil = gate 必須 preserve
-        if ledger.compactWouldAct(retentionDays: settings.retentionDays, now: now) {
+        // v3.3 §2:heavy path 由批次 scheduler 觸發(expiredCount ≥ 64 ∨ overdueAge ≥ 1h),
+        // 不再每 refresh(steady-expiry rewrite storm 拆除)。本 refresh 的 `now` 即該 attempt
+        // 的 fixed cutoff snapshot(same-snapshot 紀律:compactRawPreserving 以同一 now 求
+        // cutoff 一次)。未達門檻時過期行合法暫存 —— logical layer(§1)保證 product 不可見,
+        // §3 projection 保證 gate 不把它們判成 history loss。
+        if ledger.shouldPhysicallyCompact(retentionDays: settings.retentionDays, now: now) {
             // gate-r2 luna L1-殘餘:讀不到 raw 或 canonicalization 失敗**一律**跳過 compact(fail closed)
             // ——typed 重寫會消滅 malformed/duplicate/unknown-key raw 證據,不得在可疑/不可驗檔上發生。
             if let raw = try? Data(contentsOf: ledgerURL),
@@ -774,11 +793,11 @@ public actor UsageCoordinator {
             } else {
                 compactBlockedReason = "raw-suspect"
             }
-        } else {
-            switch ledger.compact(retentionDays: settings.retentionDays, now: now) {   // no-op 快速路徑(保留 poisoned 回報)
-            case .noop, .applied: break
-            case .failed, .poisoned, .skippedSuspectRaw: compactBlockedReason = "compact-failed"
-            }
+        } else if ledger.loadError != nil {
+            // 原 compact() no-op 快速路徑的唯一實效 = poisoned 回報。批次化後 else 分支可能
+            // 有(未達門檻的)過期行,不得再呼叫 compact() —— 它是 typed 全檔重寫,會在
+            // 每個未達門檻的 refresh 做 heavy 丟棄並消滅 raw-only 行。
+            compactBlockedReason = "compact-failed"
         }
 
         if fullReindex {
@@ -887,7 +906,8 @@ public actor UsageCoordinator {
                             refreshQualityNotes.append("\(pid): reindex blocked — history mismatch (retained 0, missing 0, changed 0, duplicate 0, canonicalization 0)")
                             continue
                         }
-                        switch Self.monotonicGateDecision(baselineRaw: baselineRaw, providerId: pid, candidate: freshKept) {
+                        switch Self.monotonicGateDecision(baselineRaw: baselineRaw, providerId: pid, candidate: freshKept,
+                                                          retentionDays: settings.retentionDays, now: now) {
                         case .pass:
                             // C-MF2 安全排序:先把此 provider 的 watermark 持久化為空,再 replace,最後才提交 newState。
                             // #83 R4:pre-clear 保留 acknowledged generation(寫入當下 gen——該 gen 已 durable
@@ -969,7 +989,11 @@ public actor UsageCoordinator {
                         continue
                     case .absent:
                         // B:無 authority 時,只有在完全沒有既往記帳證據時才可顯式 zero-delta 建立。
+                        // v3.3 §1b O4 arm:classifier unification 後 raw-only 行不在 typed events,
+                        // 但仍是 full-physical-ledger evidence —— 一併納入,typed 集縮小不得使
+                        // 證據提前於 physical compaction 消失(non-regression)。
                         let hasPriorEvidence = ledger.newestEvent(providerId: pid) != nil
+                            || ledger.hasRawOnlyEvidence(providerId: pid)
                             || !(scanStates[pid]?.files.isEmpty ?? true)
                         if hasPriorEvidence {
                             let msg = "cumulative accounting authority is absent while \(pid) accounting evidence exists — explicit re-baseline required"
@@ -1168,7 +1192,9 @@ public actor UsageCoordinator {
             transitions += limits.noteEstimatedBlock(providerId: "claude-code",
                                                      blockEnd: block?.end,
                                                      blockTokens: block?.tokens ?? 0,
-                                                     lastEventAt: ledger.newestEvent(providerId: "claude-code")?.timestamp,
+                                                     lastEventAt: ledger.newestRetainedEvent(providerId: "claude-code",
+                                                                                             retentionDays: settings.retentionDays,
+                                                                                             now: now)?.timestamp,   // v3.3 §1a
                                                      now: now)
         }
         // 官方與估算同窗撞 reset → 留官方(估算不得蓋掉官方歸因)。
@@ -1240,8 +1266,10 @@ public actor UsageCoordinator {
                 status = .unavailable
             } else if let _ = refreshErrors[pid] {
                 status = .error
-            } else if ledger.newestEvent(providerId: pid) == nil {
-                status = .noData
+            } else if ledger.newestRetainedEvent(providerId: pid,
+                                                 retentionDays: settings.retentionDays, now: now) == nil {
+                status = .noData   // v3.3 §1a:僅過期(未壓縮)事件 = product 空狀態
+
             } else {
                 switch limit.warning {
                 case .exhausted: status = .exhausted
@@ -1330,12 +1358,19 @@ public actor UsageCoordinator {
     }
 
     public func projectPage(range: DateInterval) -> ProjectPageData {
-        // 快取命中:世代未變 + 同起點 + 終點等價(兩終點都嚴格晚於最新事件 ⇒ 事件集相同;
+        // v3.3 §1:product 查詢區間 clamp 進 retained window(「All-time」= all retained
+        // history;起點早於 cutoff 的請求收斂到 cutoff,end 不動)。
+        let range = UsageLedger.clampToRetained(range, retentionDays: settings.retentionDays)
+        // 快取命中:世代未變 + 起點等價 + 終點等價(兩終點都嚴格晚於最新事件 ⇒ 事件集相同;
         // events(in:) 對終點半開)。today/All-time 的 end=now 每次呼叫都不同,故不能只比 end。
+        // v3.3 起點等價:cutoff 隨 now 連續前移,clamped start 每次不同 —— 兩起點都 ≤ 最舊
+        // 事件 ⇒ 下界不切任何事件 ⇒ 事件集相同(穩態 cutoff ≤ oldest 恆命中;有過期未壓縮
+        // 事件的暫態則保守重算,正確性優先)。
         let rev = ledger.revision
         let newest = ledger.newestEvent()?.timestamp
+        let oldest = ledger.events.first?.timestamp
         if let c = cachedProjectPage, c.revision == rev, c.pricingStamp == pricingStamp,
-           c.start == range.start,
+           c.start == range.start || (oldest.map { c.start <= $0 && range.start <= $0 } ?? true),
            c.end == range.end || (newest.map { c.end > $0 && range.end > $0 } ?? true) {
             var data = c.data
             data.range = range
@@ -1370,23 +1405,33 @@ public actor UsageCoordinator {
         //     的事件被當時的計算排除,等號命中會讓它同日內永遠隱形(xcheck r2 三鏡)。
         // (2) computedAt ≤ now:系統時鐘回撥後,舊快取的 end 反而比現在寬 —— 不得沿用;
         // (3) 時區身分:同一 `today` 瞬間在歷史 offset 不同的時區下,日桶邊界不同。
+        // (4) v3.3 §1 起點等價(P0-B impl xcheck r1 sol-F1;鏡射 projectPage):streak 綁
+        //     retained window 後 cutoff 是結果的輸入,而 cutoff 隨 now(與 retentionDays)變動。
+        //     快取記下**當時實際使用**的 cutoff,不從現行 retentionDays 反推;兩個 cutoff 皆
+        //     ≤ 最舊事件 ⇒ 下界不切任何事件 ⇒ 事件集相同(穩態恆命中;有過期未壓縮事件的
+        //     暫態保守重算,收斂時點不得由 compaction timing 決定)。
+        let retained = UsageLedger.retainedInterval(retentionDays: settings.retentionDays, now: now)
+        let oldest = ledger.events.first?.timestamp
         if let c = cachedTrends, c.revision == ledger.revision, c.pricingStamp == pricingStamp,
            c.days == days, c.day == today,
            c.computedAt <= now,
            (ledger.newestEvent()?.timestamp ?? .distantPast) < c.computedAt,
-           c.timeZoneID == TimeZone.current.identifier {
+           c.timeZoneID == TimeZone.current.identifier,
+           (oldest.map { c.cutoff <= $0 && retained.start <= $0 } ?? true) {
             return c.data
         }
+        trendsRecomputeCount += 1
         let start = cal.date(byAdding: .day, value: -(max(1, days) - 1), to: today) ?? today
         let daily = ledger.dailyBuckets(in: DateInterval(start: start, end: now), pricing: pricing)
-        let streak = ledger.usageStreak(now: now)
+        let streak = ledger.usageStreak(in: retained, now: now)   // v3.3 §1:streak 綁 retained window
         let thisWeekStart = cal.date(byAdding: .day, value: -6, to: today) ?? today
         let lastWeekStart = cal.date(byAdding: .day, value: -13, to: today) ?? today
         let thisWeek = ledger.totals(in: DateInterval(start: thisWeekStart, end: now)).total
         let lastWeek = ledger.totals(in: DateInterval(start: lastWeekStart, end: thisWeekStart)).total
         let data = TrendsData(rangeDays: days, startDay: start, endDay: today, daily: daily,
                               streak: streak, thisWeekTokens: thisWeek, lastWeekTokens: lastWeek)
-        cachedTrends = (ledger.revision, pricingStamp, days, today, now, TimeZone.current.identifier, data)
+        cachedTrends = (ledger.revision, pricingStamp, days, today, now, TimeZone.current.identifier,
+                        retained.start, data)
         return data
     }
 
@@ -1400,7 +1445,9 @@ public actor UsageCoordinator {
             period = .today(now: now)
             title = "Daily Usage Report"
         case let .range(r, t):
-            period = r
+            // v3.3 §1/B3:報告期間 clamp 進 retained window(CLI 已於入口 min-clamp 天數並
+            // 明示告知;此處為所有 .range caller 的兜底,same-now)。
+            period = UsageLedger.clampToRetained(r, retentionDays: settings.retentionDays, now: now)
             title = t
         }
         let dash = dashboard(now: now)
@@ -1473,7 +1520,8 @@ public actor UsageCoordinator {
             unknownModels: unknown,
             dataQuality: dash.dataQuality,
             petSummary: petSummary,
-            streak: ledger.usageStreak(now: now),
+            streak: ledger.usageStreak(in: UsageLedger.retainedInterval(retentionDays: settings.retentionDays, now: now),
+                                       now: now),   // v3.3 §1:streak 綁 retained window
             dailyHeat: ledger.dailyBuckets(in: period)
         )
     }

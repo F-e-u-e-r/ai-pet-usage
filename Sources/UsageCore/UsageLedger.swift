@@ -49,6 +49,12 @@ public final class UsageLedger {
     /// canonicalize 的重複)。於 load/reload/compact/replace/reset 隨檔案內容一致重建;append 熱路徑
     /// 只查此集合(不重掃檔),其可信度由 MF2 fingerprint preflight 在未漂移期間保證。
     private var reservedRawIDs: Set<String> = []
+    /// v3.3 §1b O4 raw-only 在場證據 arm:raw-only(classifier-rejected)行的 providerId 集合。
+    /// classifier unification 使 strict-rejected 行離開 typed events → `newestEvent` 不再見它們;
+    /// 但它們仍是 full-physical-ledger evidence —— O4 hasPriorEvidence 不得因 typed 集縮小而
+    /// 提前於 physical compaction 失去證據(non-regression)。與 reservedRawIDs 同生命週期
+    ///(load/reload/compact/replace 隨檔案內容一致重建)。
+    private var rawOnlyProviderIDs: Set<String> = []
     private let fileURL: URL?
     /// 記憶體事件集的單調世代號:load / append / compact / replace / reset 成功提交時 +1。
     /// 供上層(coordinator)做聚合快取的失效鍵 —— 世代未變 ⇒ 事件集完全相同。
@@ -116,6 +122,25 @@ public final class UsageLedger {
         load()
     }
 
+    /// v3.3 classifier unification(design RAM_P0B_RETENTION §2;xcheck r4 verified blocker):
+    /// ledger event-line 的 typed decode 必須與 compactRawPreserving 的 removal 判準**同源**
+    ///(ledgerEventClassifier = `ISO8601.parse(strict:)`)。Foundation `.iso8601` 與 strict
+    /// parser 的 acceptance domain 不同(超值域 offset/`:60`/`24:00`/`02-30`/垃圾後綴等 8 類
+    /// probe 實證)→ 「scheduler 數得到、compactor 刪不掉」= permanent per-refresh heavy
+    /// `.noop` loop。僅限本 ledger 的 event-line decode;全域 AtomicJSON 不動。
+    static func ledgerLineDecoder() -> JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .custom { decoder in
+            let s = try decoder.singleValueContainer().decode(String.self)
+            guard let date = ISO8601.parse(s, strict: true) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                    debugDescription: "timestamp not accepted by ledgerEventClassifier (strict ISO8601)"))
+            }
+            return date
+        }
+        return d
+    }
+
     /// 讀入帳本。三態:不存在(空帳本合法)、存在但 I/O 失敗(unreadable→poisoned)、
     /// 內容已收尾/中段行損壞(malformed→poisoned)。尾端未收尾片段(部分 append)可容忍。
     private func load() {
@@ -124,6 +149,7 @@ public final class UsageLedger {
         events = []
         ids = []
         reservedRawIDs = []
+        rawOnlyProviderIDs = []
         internPool = [:]
         revision &+= 1   // 任何重建都推進世代(過度失效安全;失效不足才是 bug)
         guard let fileURL else { return }
@@ -155,7 +181,7 @@ public final class UsageLedger {
             if attempt >= 3 { data = d; stableFingerprint = fpAfter; needsReload = true; break }   // R2-MF5:仍不穩 → needsReload 強制下輪重載(不靠 nil 哨兵)
         }
         expectedFingerprint = stableFingerprint
-        let decoder = AtomicJSON.decoder()
+        let decoder = Self.ledgerLineDecoder()   // v3.3:typed membership ≡ removal classifier
         var loaded: [UsageEvent] = []
         var firstDecodeError: Error?
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
@@ -171,7 +197,12 @@ public final class UsageLedger {
                 // #48 MF3 clearing twin:decoder 拒收但仍是完整 JSON 且能抽出 stable id 的行 ⇒ 保留
                 // 為 collision-reserved(斷尾片段抽不出 id ⇒ 自然不納入,維持既有 torn-tail 容忍)。
                 if let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
-                   let rid = obj["id"] as? String { reservedRawIDs.insert(rid) }
+                   let rid = obj["id"] as? String {
+                    reservedRawIDs.insert(rid)
+                    // v3.3 §1b O4 arm:同一 raw-only 界定(有 stable id)之下提取 providerId
+                    // 在場證據(classifier-rejected 行仍是 full-physical-ledger evidence)。
+                    if let pid = obj["providerId"] as? String { rawOnlyProviderIDs.insert(pid) }
+                }
             }
         }
         // 契約 A:非空內容卻解不出任何有效事件(含只有換行位元組的損壞檔)→ malformed(poisoned,不覆寫;C-MF7b)。
@@ -198,6 +229,7 @@ public final class UsageLedger {
         guard fileURL != nil, needsReload || currentFingerprint() != expectedFingerprint else { return }
         let priorEvents = events, priorIds = ids, priorFingerprint = expectedFingerprint
         let priorReserved = reservedRawIDs
+        let priorRawOnlyProviders = rawOnlyProviderIDs
         load()
         if loadError != nil {
             // 非破壞式:讀取失敗不得清掉既有記憶體(否則後續寫入會覆寫好資料)。
@@ -205,6 +237,7 @@ public final class UsageLedger {
             events = priorEvents
             ids = priorIds
             reservedRawIDs = priorReserved
+            rawOnlyProviderIDs = priorRawOnlyProviders
             expectedFingerprint = priorFingerprint
             needsReload = true   // 讀取失敗 → 保持強制重載,下輪再試
             revision &+= 1       // 狀態又換回舊集 → 再推進一次世代(只多不少)
@@ -288,6 +321,14 @@ public final class UsageLedger {
     /// tombstone,故「不存在」對過期事件不可判定。呼叫端須先以 `isExpired` 分流。
     public func containsEvent(id: String) -> Bool {
         ids.contains(id) || reservedRawIDs.contains(id)
+    }
+
+    /// v3.3 §1b O4 raw-only 在場證據:此 provider 是否有 classifier-rejected(raw-only)行
+    /// 物理在場。hasPriorEvidence 的 ledger arm 必須含此源 —— classifier unification 使
+    /// strict-rejected 行離開 typed events,typed 集縮小不得使 O4 證據提前於 physical
+    /// compaction 消失(§1b non-regression;僅 authority-establishment 用,非 product surface)。
+    public func hasRawOnlyEvidence(providerId: String) -> Bool {
+        rawOnlyProviderIDs.contains(providerId)
     }
 
     /// 清除上一輪的落盤失敗旗標(coordinator 於每輪刷新起始呼叫,避免陳舊 writeError 誤觸後續 break;R2-NIT)。
@@ -392,6 +433,7 @@ public final class UsageLedger {
             events = kept
             ids = Set(kept.map(\.id))
             reservedRawIDs = []   // #48 MF3 clearing twin:typed 重寫丟棄所有 raw-only 行
+            rawOnlyProviderIDs = []   // v3.3:與 reservedRawIDs 同步(typed 重寫後無 raw-only 行)
             rebuildInternPool()    // 事件被移除 → 池重建才有界(xcheck r1)
             revision &+= 1
             return .applied
@@ -405,6 +447,7 @@ public final class UsageLedger {
             events = kept                                     // 成功才提交記憶體
             ids = Set(kept.map(\.id))
             reservedRawIDs = []   // #48 MF3 clearing twin:typed 重寫丟棄所有 raw-only 行
+            rawOnlyProviderIDs = []   // v3.3:與 reservedRawIDs 同步
             rebuildInternPool()                               // 事件被移除 → 池重建才有界(xcheck r1)
             expectedFingerprint = fp   // 寫入當下捕捉(sol r3 MF2),取代事後 re-stat
             revision &+= 1
@@ -449,13 +492,16 @@ public final class UsageLedger {
         var reloaded: [UsageEvent] = []
         var reloadedIDs = Set<String>()
         var reloadedReserved = Set<String>()
-        let decoder = AtomicJSON.decoder()
+        var reloadedRawOnlyProviders = Set<String>()   // v3.3:O4 raw-only 證據隨檔案重建
+        let decoder = Self.ledgerLineDecoder()   // v3.3:與 load 同一 classifier(重建視角一致)
         for line in newData.split(separator: 0x0A, omittingEmptySubsequences: true) {
             if let e = try? decoder.decode(UsageEvent.self, from: Data(line)) {
                 if reloadedIDs.insert(e.id).inserted { reloaded.append(e) }
             } else if let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
                       let rid = obj["id"] as? String {
                 reloadedReserved.insert(rid)   // #48 MF3 clearing twin:保留的 raw-only 行 id ⇒ collision-reserved
+                // v3.3 §1b O4 arm:與 load 同界(有 id 的 raw-only 行)提取 providerId 證據。
+                if let pid = obj["providerId"] as? String { reloadedRawOnlyProviders.insert(pid) }
             }
         }
         if reloaded.isEmpty && !newData.isEmpty {
@@ -466,6 +512,7 @@ public final class UsageLedger {
             events = reloaded.sorted { $0.timestamp < $1.timestamp }
             ids = reloadedIDs
             reservedRawIDs = reloadedReserved   // #48 MF3 clearing twin:保留的 raw-only id 隨檔案重建
+            rawOnlyProviderIDs = reloadedRawOnlyProviders   // v3.3:raw-only provider 證據隨檔案重建
             rebuildInternPool()   // 事件被移除 → 池重建才有界(xcheck r1;與 compact 同原則)
             expectedFingerprint = fp
             revision &+= 1        // 事件集已變 → 推進世代(聚合快取失效鍵)
@@ -500,6 +547,28 @@ public final class UsageLedger {
         guard loadError == nil else { return false }
         let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)   // #50 R-retention:單一 predicate
         return events.contains { $0.timestamp < cutoff }
+    }
+
+    /// v3.3 §2 physical-compaction scheduler(implementation policy,非產品語義;owner B2
+    /// SETTLED:N_batch=64 / T_max=1h)。retention 已是 logical contract(§1),physical
+    /// rewrite 降格為批次 housekeeping —— 本判定拆掉「steady expiry → 每 refresh 全檔 heavy
+    /// rewrite」的 storm。trigger 由 **durable event timestamps + then-current cutoff** 推出
+    ///(無任何 lastPhysicalCompactAt,process-local 或 durable 皆無;restart → 由 durable
+    /// ledger 重算,不 reset —— crash-before-attempt 的 r2 dilemma 就此關閉;
+    /// crash-DURING-attempt 之 fault-model contract 見 design §2 v3.2:retry 合法、
+    /// 不承諾 restart-independent bound)。participating set = typed events
+    ///(classifier unification 後 ≡ removal set,§2 硬鎖)。
+    /// expiredCount==0 ⇒ oldestExpired==nil ⇒ timer 分支 false(零過期絕不重寫,owner 硬鎖)。
+    public func shouldPhysicallyCompact(retentionDays: Int, now: Date = Date()) -> Bool {
+        guard loadError == nil else { return false }
+        let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)   // 同一 shared predicate
+        // events 升冪 ⇒ cutoff 下界 = expiredCount(O(log n),不掃全檔);
+        // oldestExpired = events[0](若 expiredCount > 0)。
+        let expiredCount = indexRange(of: DateInterval(start: .distantPast, end: cutoff)).count
+        guard expiredCount > 0 else { return false }
+        if expiredCount >= 64 { return true }                                        // N_batch(高流量)
+        let overdueAge = cutoff.timeIntervalSince(events[0].timestamp)               // 最老過期 row 已越界多久
+        return overdueAge >= 3600                                                    // T_max(低流量)
     }
 
     /// #48 CAS gate:帳本檔目前修訂(以 (dev,ino,size,mtime) 指紋為代理;nil = 檔缺/不可 stat)。
@@ -703,6 +772,7 @@ public final class UsageLedger {
             events = merged
             ids = seen
             reservedRawIDs = []   // #48 MF3 clearing twin:非-preservingRaw typed 重寫丟棄 raw-only 行
+            rawOnlyProviderIDs = []   // v3.3:同步
             rebuildInternPool()    // 舊切片事件被移除 → 池重建才有界(xcheck r1)
             revision &+= 1
             return accepted
@@ -711,6 +781,7 @@ public final class UsageLedger {
         events = merged
         ids = seen
         reservedRawIDs = []   // #48 MF3 clearing twin:非-preservingRaw typed 重寫丟棄 raw-only 行
+        rawOnlyProviderIDs = []   // v3.3:同步
         rebuildInternPool()                                // 舊切片事件被移除 → 池重建才有界(xcheck r1)
         expectedFingerprint = fp   // 寫入當下捕捉(sol r3 MF2),取代事後 re-stat
         revision &+= 1
@@ -722,6 +793,7 @@ public final class UsageLedger {
         events = []
         ids = []
         reservedRawIDs = []
+        rawOnlyProviderIDs = []   // v3.3:同步
         internPool = [:]
         expectedFingerprint = nil
         revision &+= 1
@@ -774,6 +846,37 @@ public final class UsageLedger {
     public func newestEvent(providerId: String? = nil) -> UsageEvent? {
         if providerId == nil { return events.last }
         return events.last(where: { $0.providerId == providerId })
+    }
+
+    // MARK: - v3.3 shared logical retained view(design RAM_P0B_RETENTION §1;#50 R-retention
+    // 單一 predicate 的延伸)。retention 是 shared LOGICAL visibility contract:
+    // event 對產品可觀測 usage 可見 iff timestamp ≥ cutoff(`< cutoff` expired、`== cutoff` KEPT,
+    // 與 isExpired / compact 丟棄條件逐字同義)。physical removal 降格為 housekeeping。
+    // 禁止任何 consumer 自算 cutoff —— 一律經此三個 API。
+
+    /// retained window = [cutoff, now]。
+    public static func retainedInterval(retentionDays: Int, now: Date = Date()) -> DateInterval {
+        DateInterval(start: retentionCutoff(retentionDays: retentionDays, now: now), end: now)
+    }
+
+    /// 把任意查詢區間的起點 clamp 進 retained window(end 不動;全區間過期 → 空區間)。
+    public static func clampToRetained(_ interval: DateInterval, retentionDays: Int,
+                                       now: Date = Date()) -> DateInterval {
+        let cutoff = retentionCutoff(retentionDays: retentionDays, now: now)
+        let start = max(interval.start, cutoff)
+        return DateInterval(start: start, end: max(interval.end, start))
+    }
+
+    /// §1a product newestEvent:最新 **retained** 事件(timestamp ≥ cutoff)。retained set 空
+    /// → nil(product 空狀態,沿用既有「no usage events」封閉語彙,不顯示過期時間戳)。
+    /// full-physical `newestEvent` 保留給 O4 hasPriorEvidence 與內部快取等價判定
+    ///(§1b 兩層;v3.3 API rule:不 globally redefine full-physical primitive)。
+    public func newestRetainedEvent(providerId: String? = nil, retentionDays: Int,
+                                    now: Date = Date()) -> UsageEvent? {
+        let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)
+        // 升冪 ⇒ 某(provider 的)最新事件若過期,其更早事件必過期 —— 查最新一筆再驗 cutoff 即可。
+        let newest = providerId == nil ? events.last : events.last(where: { $0.providerId == providerId })
+        return newest.flatMap { $0.timestamp >= cutoff ? $0 : nil }
     }
 
     /// 尾隨窗口的燃燒率(tokens/小時)。
@@ -842,9 +945,25 @@ public final class UsageLedger {
 
     /// 使用連續天數(current + longest)。以「有事件的本地日」集合計算;
     /// 相鄰判斷用日差(對 DST 安全),current 允許今天尚未使用時以昨天結尾。
+    /// full-history 版(既有測試相容);production 一律走 retained 版(v3.3 §1:
+    /// 「All-time」= all retained history,streak/longest 綁 retained window)。
     public func usageStreak(now: Date = Date(), calendar: Calendar = .current) -> UsageStreak {
         var days = Set<Date>()
         for e in events { days.insert(calendar.startOfDay(for: e.timestamp)) }   // 免中間陣列
+        return Self.streak(fromDays: days, now: now, calendar: calendar)
+    }
+
+    /// v3.3 §1 consumer 接線:迭代綁 retained window 的 streak(呼叫端傳
+    /// `retainedInterval(retentionDays:now:)`;forEachEvent 對區間半開 [start,end),
+    /// 故 end 直傳 now 時「此刻整秒」事件不計 —— streak 以日為粒度,無影響)。
+    public func usageStreak(in interval: DateInterval, now: Date = Date(),
+                            calendar: Calendar = .current) -> UsageStreak {
+        var days = Set<Date>()
+        forEachEvent(in: interval) { days.insert(calendar.startOfDay(for: $0.timestamp)) }
+        return Self.streak(fromDays: days, now: now, calendar: calendar)
+    }
+
+    private static func streak(fromDays days: Set<Date>, now: Date, calendar: Calendar) -> UsageStreak {
         guard !days.isEmpty else { return UsageStreak(current: 0, longest: 0) }
 
         let sorted = days.sorted()

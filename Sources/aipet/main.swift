@@ -106,7 +106,16 @@ Task {
             let days = value(for: "--days").flatMap(Int.init)
             let kind: ReportKind
             if let days, days > 1 {
-                kind = .range(.trailing(days: days), title: "Usage Report — last \(days) days")
+                // v3.3 B3(owner SETTLED):--days > retention ⇒ effectiveDays = min(N, retention);
+                // 接受指令、只顯示 retained 窗、明示 clamp 不 silent(非 error、非假裝取得 N 天)。
+                let retention = await coordinator.currentSettings().retentionDays
+                let effectiveDays = min(days, retention)
+                if days > retention {
+                    print("note: only the most recent \(retention) days are retained; " +
+                          "showing \(retention) days instead of the requested \(days).")
+                }
+                kind = .range(.trailing(days: effectiveDays),
+                              title: "Usage Report — last \(effectiveDays) days")
             } else {
                 kind = .today
             }

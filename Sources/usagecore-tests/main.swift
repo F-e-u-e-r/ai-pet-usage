@@ -186,6 +186,10 @@ runSuite("AggregationCacheTests", [
     ("testProjectPageCacheHitAndInvalidation", aggCache.testProjectPageCacheHitAndInvalidation),
     ("testTrendsInvalidatesOnNewEvents", aggCache.testTrendsInvalidatesOnNewEvents),
     ("testTrendsSeesFutureTimestampedEventAsNowAdvances", aggCache.testTrendsSeesFutureTimestampedEventAsNowAdvances),
+    ("testTrendsCacheMissesWhenRetentionCutoffPassesOldestEvent", aggCache.testTrendsCacheMissesWhenRetentionCutoffPassesOldestEvent),
+    ("testTrendsCachePreservedWhileBothCutoffsPrecedeOldestEvent", aggCache.testTrendsCachePreservedWhileBothCutoffsPrecedeOldestEvent),
+    ("testTrendsCacheEqualityBoundaryAtCutoff", aggCache.testTrendsCacheEqualityBoundaryAtCutoff),
+    ("testTrendsCacheInvalidatesWhenRetentionSettingGrows", aggCache.testTrendsCacheInvalidatesWhenRetentionSettingGrows),
 ])
 
 let limits = LimitEngineTests()
@@ -977,6 +981,8 @@ runSuite("OpenCode50AcceptanceTests", [
     ("testE2LimitsRecoversProjectionFromDurableLedger", oc50acc.testE2LimitsRecoversProjectionFromDurableLedger),
     ("testLegacyRefreshUsageRemainsProductionUnreachable", oc50acc.testLegacyRefreshUsageRemainsProductionUnreachable),
     ("testR1LegacyEvidenceWithoutAuthorityFailsClosedAndNamesRecovery", oc50acc.testR1LegacyEvidenceWithoutAuthorityFailsClosedAndNamesRecovery),
+    ("testR1cRawOnlyLedgerEvidenceAloneStillBlocksZeroDelta", oc50acc.testR1cRawOnlyLedgerEvidenceAloneStillBlocksZeroDelta),
+    ("testR1dTypedExpiredLedgerEvidenceAloneStillBlocksZeroDelta", oc50acc.testR1dTypedExpiredLedgerEvidenceAloneStillBlocksZeroDelta),
     ("testR2ExplicitRebaselineEstablishesCurrentCountersAndCountsOnlyLaterGrowth", oc50acc.testR2ExplicitRebaselineEstablishesCurrentCountersAndCountsOnlyLaterGrowth),
     ("testR5RebaselineWithUnavailableSourceFailsWithoutMutation", oc50acc.testR5RebaselineWithUnavailableSourceFailsWithoutMutation),
     ("testR6RebaselineDurableWriteFailureLeavesPreviousAuthority", oc50acc.testR6RebaselineDurableWriteFailureLeavesPreviousAuthority),
@@ -1018,6 +1024,45 @@ runSuite("OpenCode50ContractMatrixTests", [
     ("testR5ASubEpsilonPositiveCostOnlyGrowthCounts", oc50cm.testR5ASubEpsilonPositiveCostOnlyGrowthCounts),
     ("testR5AExactlyEqualCostIsNeitherGrowthNorRollback", oc50cm.testR5AExactlyEqualCostIsNeitherGrowthNorRollback),
     ("testS6PersistedSubEpsilonPendingSurvivesFreshProcessValidationAndRecovers", oc50cm.testS6PersistedSubEpsilonPendingSurvivesFreshProcessValidationAndRecovers),
+])
+
+// P0-B design v3.3 red-first(classifier unification;RamP0BTests.swift)。
+let classifierUnification = ClassifierUnificationTests()
+runSuite("ClassifierUnificationTests", [
+    ("testGapTimestampLinesAreRawOnlyNotTyped", classifierUnification.testGapTimestampLinesAreRawOnlyNotTyped),
+    ("testMixedGapExpiredRowsDoNotArmCompaction", classifierUnification.testMixedGapExpiredRowsDoNotArmCompaction),
+    ("testAllGapFileFailsClosedAsPoisoned", classifierUnification.testAllGapFileFailsClosedAsPoisoned),
+    ("testConverseAndFractionalClassificationPinned", classifierUnification.testConverseAndFractionalClassificationPinned),
+    ("testRawOnlyProviderEvidencePreserved", classifierUnification.testRawOnlyProviderEvidencePreserved),
+    ("testSelfWrittenRoundTripAllTyped", classifierUnification.testSelfWrittenRoundTripAllTyped),
+])
+
+let retentionVisibility = RetentionVisibilityTests()
+runSuite("RetentionVisibilityTests", [
+    ("testBoundaryThreePointsFourWayAgreement", retentionVisibility.testBoundaryThreePointsFourWayAgreement),
+    ("testExpiredPhysicalInvisibleToProductButVisibleToO4", retentionVisibility.testExpiredPhysicalInvisibleToProductButVisibleToO4),
+    ("testClampToRetainedGeometry", retentionVisibility.testClampToRetainedGeometry),
+])
+
+let gateProjection = GateProjectionTests()
+runSuite("GateProjectionTests", [
+    ("testLegitimateExpiryDoesNotTripGate", gateProjection.testLegitimateExpiryDoesNotTripGate),
+    ("testUnprovableExpiryMissingStillPreserves", gateProjection.testUnprovableExpiryMissingStillPreserves),
+    ("testNonExpiredMissingStillPreserves", gateProjection.testNonExpiredMissingStillPreserves),
+    ("testEquivalenceProjectedVsPhysicallyCompactedBaseline", gateProjection.testEquivalenceProjectedVsPhysicallyCompactedBaseline),
+    ("testEventAtCutoffIsRetainedNotExempt", gateProjection.testEventAtCutoffIsRetainedNotExempt),
+])
+
+let schedulerBatching = SchedulerBatchingTests()
+runSuite("SchedulerBatchingTests", [
+    ("testScheduleEnumeration", schedulerBatching.testScheduleEnumeration),
+    ("testRestartRecomputesFromDurableLedger", schedulerBatching.testRestartRecomputesFromDurableLedger),
+    ("testSuccessfulCompactClearsTriggersUnderSameSnapshot", schedulerBatching.testSuccessfulCompactClearsTriggersUnderSameSnapshot),
+])
+
+let crashDuring = CrashDuringAttemptContractTests()
+runSuite("CrashDuringAttemptContractTests", [
+    ("testCrashDuringAttemptContractCase", crashDuring.testCrashDuringAttemptContractCase),
 ])
 
 finishTestRun()

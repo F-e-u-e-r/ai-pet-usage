@@ -2658,6 +2658,7 @@ final class AggregationCacheTests: XCTestCase {
         }
         var settings = CoreSettings()
         settings.enabledProviders = ["mock"]
+        settings.retentionDays = 3650   // v3.3:固定歷史日期 fixture;本測試驗快取等價,非 retention
         let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
         runRefresh(coord)
 
@@ -2726,6 +2727,135 @@ final class AggregationCacheTests: XCTestCase {
         let q2 = trends(coord, days: 7, now: t10.addingTimeInterval(3600))   // 11:00,revision 未變
         XCTAssertEqual(q2.daily.reduce(0) { $0 + $1.tokens }, 150,
                        "now 越過 skewed 事件後必須納入 —— same-day 快取(含等號快取)不得沿用")
+    }
+
+    /// v3.3 §1 把 streak 綁 retained window 後,cutoff 成為 trends 結果的輸入;same-day 快取
+    /// (revision/newest/day 皆未變)不得跨 cutoff 沿用(P0-B impl xcheck r1 sol-F1):事件於當日
+    /// 跨出 retention 後,idle 查詢(無 append、批次門檻未達無 compact)必須立刻把它從 streak 移除,
+    /// 收斂時點不得由 compaction timing 決定(merge bar 2)。
+    func testTrendsCacheMissesWhenRetentionCutoffPassesOldestEvent() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        let cal = Calendar.current
+        let t0 = cal.startOfDay(for: Date()).addingTimeInterval(10 * 3600)   // 今天本地 10:00
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        settings.retentionDays = 92
+        let cutoff0 = UsageLedger.retentionCutoff(retentionDays: 92, now: t0)
+        let oldA = cutoff0.addingTimeInterval(1800)                      // t0 時 retained;t0+1h 時過期
+        let oldB = cal.date(byAdding: .day, value: 1, to: oldA)!         // 與 oldA 連續兩日 → longest 2
+        box.events = [mkEvent("oldA", oldA, tokens: 1), mkEvent("oldB", oldB, tokens: 1),
+                      mkEvent("new", t0.addingTimeInterval(-60), tokens: 1)]
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)   // 恰一次:compaction 檢查先於 adapter 掃描,故三筆皆物理留存、無 compact
+        let q1 = trends(coord, days: 30, now: t0)
+        XCTAssertEqual(q1.streak.longest, 2, "t0:oldA/oldB 皆 retained,連續兩日")
+        // 前進 1h:cutoff 嚴格越過 oldA;revision/newest/day/tz 全未變 —— 快取必須 miss
+        let q2 = trends(coord, days: 30, now: t0.addingTimeInterval(3600))
+        XCTAssertEqual(q2.streak.longest, 1,
+                       "cutoff 越過 oldA 後 streak 必須立刻收斂 —— same-day 快取不得跨 cutoff 沿用")
+    }
+
+    private func recomputeCount(_ coord: UsageCoordinator) -> Int {
+        let sem = DispatchSemaphore(value: 0)
+        var out = 0
+        Task { out = await coord.trendsRecomputeCount; sem.signal() }
+        sem.wait()
+        return out
+    }
+
+    /// 反向臂:cutoff 前移但新舊 cutoff 皆 ≤ 最舊事件 ⇒ 事件集相同 ⇒ 快取必須續命中
+    ///(釘「cutoff 一動就永遠 miss」的過度修法;命中與否對回傳值不可觀測,故以重算計數判別)。
+    func testTrendsCachePreservedWhileBothCutoffsPrecedeOldestEvent() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        let cal = Calendar.current
+        let t0 = cal.startOfDay(for: Date()).addingTimeInterval(10 * 3600)
+        let a = t0.addingTimeInterval(-10 * 86400)                       // 遠在 92d cutoff 之內
+        let b = cal.date(byAdding: .day, value: 1, to: a)!
+        box.events = [mkEvent("a", a, tokens: 1), mkEvent("b", b, tokens: 1),
+                      mkEvent("new", t0.addingTimeInterval(-60), tokens: 1)]
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        settings.retentionDays = 92
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)
+        XCTAssertEqual(trends(coord, days: 30, now: t0).streak.longest, 2)
+        XCTAssertEqual(recomputeCount(coord), 1)
+        let q2 = trends(coord, days: 30, now: t0.addingTimeInterval(3600))   // cutoff 前移 1h,仍 ≤ a
+        XCTAssertEqual(q2.streak.longest, 2)
+        XCTAssertEqual(recomputeCount(coord), 1, "兩 cutoff 皆 ≤ 最舊事件 ⇒ 等價 ⇒ 不得重算")
+    }
+
+    /// 等號邊界:最舊事件 timestamp == cutoff 屬 retained(canonical `== cutoff` KEPT),
+    /// 等價臂用 `<=`:兩 cutoff 皆 == 最舊事件 ⇒ 仍命中(`<` mutation 必紅);cutoff 再前進 1s
+    /// 即越過該事件 ⇒ 必 miss。
+    func testTrendsCacheEqualityBoundaryAtCutoff() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        let cal = Calendar.current
+        let t0 = cal.startOfDay(for: Date()).addingTimeInterval(10 * 3600)
+        let cutoff0 = UsageLedger.retentionCutoff(retentionDays: 92, now: t0)
+        let b = cal.date(byAdding: .day, value: 1, to: cutoff0)!
+        box.events = [mkEvent("at", cutoff0, tokens: 1), mkEvent("b", b, tokens: 1),
+                      mkEvent("new", t0.addingTimeInterval(-60), tokens: 1)]
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        settings.retentionDays = 92
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)
+        XCTAssertEqual(trends(coord, days: 30, now: t0).streak.longest, 2, "== cutoff 屬 retained")
+        XCTAssertEqual(recomputeCount(coord), 1)
+        XCTAssertEqual(trends(coord, days: 30, now: t0).streak.longest, 2)
+        XCTAssertEqual(recomputeCount(coord), 1, "同 now 再查:兩 cutoff 皆 == 最舊事件,`<=` ⇒ 命中")
+        let q3 = trends(coord, days: 30, now: t0.addingTimeInterval(1))
+        XCTAssertEqual(q3.streak.longest, 1, "cutoff 前進 1s 越過 == cutoff 事件 ⇒ 必 miss 並收斂")
+        XCTAssertEqual(recomputeCount(coord), 2)
+    }
+
+    /// retentionDays 由 X 變 Y(coordinator.updateSettings;revision/newest/day 皆未變):
+    /// 快取必須以**當時實際使用**的 cutoff 判等價,不得從現行 Y 反推舊邊界 ——
+    /// 反推會把「X 下被切掉、Y 下應納入」的事件繼續藏在快取裡。
+    func testTrendsCacheInvalidatesWhenRetentionSettingGrows() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        let cal = Calendar.current
+        let t0 = cal.startOfDay(for: Date()).addingTimeInterval(10 * 3600)
+        let a = t0.addingTimeInterval(-10 * 86400)                       // X=5d 時過期;Y=3650d 時 retained
+        let b = cal.date(byAdding: .day, value: 1, to: a)!
+        box.events = [mkEvent("a", a, tokens: 1), mkEvent("b", b, tokens: 1),
+                      mkEvent("new", t0.addingTimeInterval(-60), tokens: 1)]
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        settings.retentionDays = 5
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)   // 恰一次:refresh 的 compaction 檢查先於掃描 ⇒ a/b 物理留存(過期未壓縮)
+        XCTAssertEqual(trends(coord, days: 30, now: t0).streak.longest, 1, "X=5d:a/b 過期,只剩 new")
+        settings.retentionDays = 3650
+        let sem = DispatchSemaphore(value: 0)
+        Task { await coord.updateSettings(settings); sem.signal() }
+        sem.wait()
+        let q2 = trends(coord, days: 30, now: t0.addingTimeInterval(60))
+        XCTAssertEqual(q2.streak.longest, 2, "Y=3650d:a/b 應納入 —— 快取不得沿用 X 下的結果")
+        // 反向(Y→X 縮回):新 cutoff 越過 a/b,快取(在 Y 下算得)亦不得沿用
+        settings.retentionDays = 5
+        let sem2 = DispatchSemaphore(value: 0)
+        Task { await coord.updateSettings(settings); sem2.signal() }
+        sem2.wait()
+        let q3 = trends(coord, days: 30, now: t0.addingTimeInterval(120))
+        XCTAssertEqual(q3.streak.longest, 1, "縮回 X=5d:a/b 再度過期 —— 不得沿用 Y 下的結果")
     }
 }
 
