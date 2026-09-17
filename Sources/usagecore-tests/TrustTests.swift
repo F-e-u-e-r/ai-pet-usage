@@ -366,6 +366,7 @@ final class TrustWiringTests: XCTestCase {
     private final class ThrowingMockAdapter: ProviderAdapter {
         struct Failure: Error {}
         let providerId = "mock"
+        var reportedLimitCapability: ReportedLimitCapability { .notProvided }
         let box: Box
         init(box: Box) { self.box = box }
         var displayName: String { providerId }

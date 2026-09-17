@@ -20,6 +20,8 @@ import Foundation
 ///   2. session 中途換 model 時,本次掃描產生的事件一律歸屬 summary.json 目前的 model。
 public struct GrokCodeAdapter: ProviderAdapter {
     public let providerId = "grok-code"
+    /// 只有 plan-only 讀值;官方 status-line 無 rate-limit summary(M0-2)→ 沒有 provider-reported limit 來源。
+    public var reportedLimitCapability: ReportedLimitCapability { .notProvided }
     public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Grok Code"
 

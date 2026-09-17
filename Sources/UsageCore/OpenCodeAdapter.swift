@@ -24,6 +24,8 @@ import SQLite3
 //     credential 變更不觸發 refresh(grok G3/codex C5)。
 public struct OpenCodeAdapter: ProviderAdapter, CumulativeAnchorAdapter {
     public let providerId = "opencode"
+    /// adapter 契約明示 `rateLimits: []`:沒有 provider-reported limit 來源。
+    public var reportedLimitCapability: ReportedLimitCapability { .notProvided }
     // db 只存目前累計(非可重播歷史)→ 不可重掃重建;reindex 保留既有切片、只走增量(codex MF2)。
     public var historyModel: ProviderHistoryModel { .cumulativeSnapshotOnly }
     public let displayName = "OpenCode"

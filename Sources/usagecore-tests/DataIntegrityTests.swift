@@ -123,6 +123,7 @@ private func diEvent(_ id: String, provider: String = "mock", at ts: Date = Date
 
 final class MockAdapter: ProviderAdapter {
     let providerId: String
+    var reportedLimitCapability: ReportedLimitCapability { .notProvided }
     let historyModel: ProviderHistoryModel
     private let make: (ScanState) -> (AdapterRefreshResult, ScanState)
     var lastSeenState: ScanState?

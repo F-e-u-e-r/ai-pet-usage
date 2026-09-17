@@ -325,35 +325,38 @@ struct StatusBadge: View {
     }
 }
 
-struct LimitBar: View {
+/// Limits 頁 Claude 本機估算 bar(v0.8 A2b)。**顯示的 main / secondary 文字全部**來自
+/// `EstimateBarText.render`(→ `EstimateRowText`);本 view 不自呼 `ResetLabel.countdown`、
+/// 不讀 `Date()`、不自行格式化 tokens / % / `no budget set` / `rolling 7-day` —— 所有相對 reset
+/// 文字由呼叫端注入的 `now` 控制,與 Today 卡 / CLI 同一張 estimate vocabulary。gauge 由 estimate-domain
+/// `usedPercent` 餵、affordance 用抽出的共用 predicate(規則不改);`.help` 是固定句 chrome(非 vocabulary)。
+struct EstimateBar: View {
     @Environment(\.openSettings) private var openSettings
     let title: String
     let window: LimitWindowState
+    let kind: LimitWindowKind
+    let now: Date
     let warn: Double
     var danger: Double = 99.5
     var showBudgetAffordance = false
 
     var body: some View {
+        let m = EstimateBarText.render(window: window, kind: kind, now: now)
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title).font(.caption.weight(.medium)).foregroundStyle(Theme.textPrimary)
                 Spacer()
-                Text(valueText).font(.caption).monospacedDigit().foregroundStyle(Theme.textPrimary)
+                Text(m.main).font(.caption).monospacedDigit().foregroundStyle(Theme.textPrimary)
             }
-            GaugeBar(percent: window.usedPercent ?? 0, warn: warn, danger: danger)
+            GaugeBar(percent: m.gaugePercent ?? 0, warn: warn, danger: danger)
                 .frame(height: 6)
-                .opacity(window.usedPercent == nil ? 0.25 : 1)
+                .opacity(m.gaugePercent == nil ? 0.25 : 1)
             HStack {
-                Text(resetText).font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
+                Text(m.secondary).font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
                 Spacer()
-                if window.corrected {
-                    Text("corrected").font(.caption2).foregroundStyle(.orange)
-                }
-                Text(window.confidence.rawValue).font(.caption2).foregroundStyle(Theme.textMuted)
             }
-            // review #3:百分比缺失時,原因與解法直接放在卡片裡
-            // 只有「真的沒設 budget 且非 idle」才提示設定;idle/有 budget 不提示(cross-model round-2)。
-            if window.usedPercent == nil, !window.idle, window.budgetTokens == nil, showBudgetAffordance {
+            // affordance predicate byte-semantic unchanged(抽成共用 helper);chrome 保留。
+            if BudgetAffordance.limitsEstimateBarShowsBudgetButton(window: window, showBudgetAffordance: showBudgetAffordance) {
                 HStack(spacing: 6) {
                     Text("Percent unavailable").font(.caption2).foregroundStyle(Theme.textMuted)
                     Button("Set estimated budget…") {
@@ -368,32 +371,12 @@ struct LimitBar: View {
         .help(helpText)
     }
 
-    /// idle / no-data 的說明性 tooltip(第三位 reviewer:主文短、tooltip 詳)。空字串 = 無 tooltip。
+    /// idle / no-data 的固定說明句 tooltip(chrome;非 vocabulary —— 不格式化任何數值,只依 window 布林選一句)。
     private var helpText: String {
         if window.idle { return "No active 5h window found in local Claude logs." }
         if window.usedPercent == nil, window.usedTokens == nil, showBudgetAffordance {
             return "No local Claude usage found."
         }
-        return ""
-    }
-
-    private var valueText: String {
-        if window.idle { return "idle" }
-        if let p = window.usedPercent {
-            var s = String(format: "%.1f%%", p)
-            if let t = window.usedTokens, let b = window.budgetTokens {
-                s += "  (\(tk(t))/\(tk(b)))"
-            }
-            return s
-        }
-        if let t = window.usedTokens { return "\(tk(t)) tokens · — %" }
-        return "unknown"   // 無 active block、無用量、非 idle → 明確標「unknown」(有別於 idle)
-    }
-
-    private var resetText: String {
-        if window.idle { return "no active 5h window" }
-        if let reset = window.resetAt { return "resets in \(countdown(to: reset))" }
-        if window.windowMinutes >= 10080, window.usedTokens != nil { return "rolling 7-day" }
         return ""
     }
 }
@@ -548,6 +531,8 @@ struct TodayView: View {
     var body: some View {
         let dash = model.dashboard
         let cost = costDisplay(dash.todayCost)
+        // D46/D51:相對時間片段(`resets in …`)由投影顯式接收 `now`,整個 render cycle 共用一個時刻。
+        let now = Date()
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 // 首次使用/缺資料時的主動引導(不只被動空狀態)
@@ -575,7 +560,9 @@ struct TodayView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
                     ForEach(model.orderedSnapshots) { snap in
                         AgentCard(snapshot: snap,
-                                  limit: dash.limitStates.first { $0.providerId == snap.providerId })
+                                  limit: dash.limitStates.first { $0.providerId == snap.providerId },
+                                  reported: dash.reportedLimits.first { $0.providerId == snap.providerId },
+                                  now: now)
                     }
                 }
 
@@ -716,10 +703,16 @@ struct AgentCard: View {
     @Environment(\.openSettings) private var openSettings
     let snapshot: UsageSnapshot
     let limit: ProviderLimitState?
+    /// provider-reported 四態投影(usage ≠ limits split,M1);與本機用量是兩個資料域。
+    let reported: ProviderReportedLimits?
+    /// 相對時間片段的單一時刻(D46/D51:投影不自讀 `Date()`)。
+    let now: Date
 
     var body: some View {
         let brand = ProviderBrands.brand(for: snapshot.providerId, displayName: snapshot.displayName)
+        // 固定行序;第 1–7 行恆渲染(三張卡行數恆等,A3);第 8–9 行條件渲染(與今日相同)。
         VStack(alignment: .leading, spacing: 8) {
+            // 1. header
             HStack(spacing: 6) {
                 ProviderDot(brand: brand)
                 Text(snapshot.displayName).font(Theme.FontScale.cardTitle)
@@ -730,15 +723,30 @@ struct AgentCard: View {
                 StatusBadge(status: snapshot.status)
             }
             .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
-            HStack(spacing: 14) {
-                metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
-                metric("5h window", snapshot.sessionUsagePercent.map { String(format: "%.0f%%", $0) }
-                        ?? (limit?.fiveHour.idle == true ? "idle"
-                            : (snapshot.providerId == "claude-code" ? "unknown" : "— %")))
-                metric("weekly", snapshot.weeklyUsagePercent.map { String(format: "%.0f%%", $0) } ?? "— %")
-            }
-            if snapshot.sessionUsagePercent == nil, snapshot.providerId == "claude-code",
-               limit?.fiveHour.idle != true, limit?.fiveHour.budgetTokens == nil {
+
+            // 2. 本機觀測用量標題
+            sectionLabel("Local observed usage · This Mac · based on local logs")
+            // 3. today metric + 既有 in / out / cache 行
+            metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
+            Text("in \(tk(snapshot.tokenInput ?? 0)) · out \(tk(snapshot.tokenOutput ?? 0)) · cache \(tk(snapshot.tokenCache ?? 0))")
+                .font(Theme.FontScale.secondaryInfo)
+                .foregroundStyle(Theme.textSecondary)
+
+            // 4. provider-reported 標題(封閉字串)
+            sectionLabel(ReportedLimitText.header(providerId: snapshot.providerId))
+            // 5. 5h(四態投影;now 顯式注入,corrected 不進 Today 卡)
+            Text("5h: \(reportedInline(\.fiveHour))")
+                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
+            // 6. weekly
+            Text("weekly: \(reportedInline(\.weekly))")
+                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
+            // 7. estimate 行(恆渲染;非 claude → `—`)
+            Text(estimateLine)
+                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
+                .help(snapshot.providerId == "claude-code" ? "" : "Budget estimates are available for Claude Code only")
+
+            // 8. Set estimated budget 按鈕(predicate 與今日 byte-identical;estimate 域控制,D13)
+            if BudgetAffordance.todayButtonVisible(snapshot: snapshot, limit: limit) {
                 Button("Set estimated budget…") {
                     NSApp.activate(ignoringOtherApps: true)
                     openSettings()
@@ -746,26 +754,30 @@ struct AgentCard: View {
                 .buttonStyle(.link)
                 .font(.caption2)
             }
-            // A3:reset 行恆渲染(無資料顯示 —)→ 三張卡行數一致、等高不跳動。
-            Text(snapshot.resetAt.map { "5h resets in \(countdown(to: $0))" }
-                    ?? (limit?.fiveHour.idle == true ? "no active 5h window"
-                        : (snapshot.providerId == "claude-code" ? "no local Claude usage found" : "5h resets: —")))
-                .font(Theme.FontScale.secondaryInfo)
-                .foregroundStyle(Theme.textSecondary)
-                .help(limit?.fiveHour.idle == true ? "No active 5h window found in local Claude logs." : "")
+            // 9. 既有 shareSafeError 行(條件行,不改)
             if let err = snapshot.shareSafeError {
                 Text(err).font(.caption2).foregroundStyle(.red).lineLimit(2)
             }
-            Text("in \(tk(snapshot.tokenInput ?? 0)) · out \(tk(snapshot.tokenOutput ?? 0)) · cache \(tk(snapshot.tokenCache ?? 0))")
-                .font(Theme.FontScale.secondaryInfo)
-                .foregroundStyle(Theme.textSecondary)
-            Text("data: \(timeAgo(snapshot.updatedAt))")
-                .font(Theme.FontScale.secondaryInfo)
-                .foregroundStyle(Theme.textMuted)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// 四態單行文字(主文,次行非空時接 ` · 次行`);載體缺席時 `—`(A3 佔位,不縮行)。
+    private func reportedInline(_ kp: KeyPath<ProviderReportedLimits, ReportedLimitField>) -> String {
+        guard let reported else { return "—" }
+        return ReportedLimitText.inline(field: reported[keyPath: kp], cue: reported.cue, now: now)
+    }
+
+    /// Today 卡第 7 行:claude 至少一窗 active → estimate 文字;非 claude / 載體缺席 → `—`。
+    private var estimateLine: String {
+        guard let reported, let limit else { return "—" }
+        return EstimateRowText.todayLine(reported: reported, limit: limit, now: now)
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text).font(.caption2).foregroundStyle(Theme.textMuted)
     }
 
     private func metric(_ title: String, _ value: String) -> some View {
@@ -783,16 +795,22 @@ struct LimitsView: View {
 
     var body: some View {
         let dash = model.dashboard
+        // D46/D51:相對時間片段共用單一 `now`。
+        let now = Date()
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(model.orderedLimitStates) { limit in
                     LimitRow(limit: limit,
                              snapshot: dash.snapshots.first { $0.providerId == limit.providerId },
+                             reported: dash.reportedLimits.first { $0.providerId == limit.providerId },
+                             now: now,
                              warn: model.settings.core.warnThresholdPercent,
                              danger: model.settings.core.dangerThresholdPercent)
                 }
 
-                if dash.limitStates.first(where: { $0.providerId == "claude-code" })?.fiveHour.usedPercent == nil {
+                // D7:提示改由 presence 驅動 —— 任一 hook 落地檔皆不存在(`.hookNotInstalled` 的超集,
+                // 殘留 provided 期間也顯);不再用 `usedPercent == nil` 猜。提示句不改字。
+                if dash.reportedLimits.first(where: { $0.providerId == "claude-code" })?.statuslinePresent == false {
                     Label("Claude Code official limits appear automatically when a statusline hook saves Claude Code's payload locally — run `aipet install-hook` once to set it up (if your statusLine already points at a script, it wraps that script untouched). Without it, set an estimated token budget in Settings → Limits.",
                           systemImage: "info.circle")
                         .font(Theme.FontScale.note)
@@ -807,6 +825,10 @@ struct LimitsView: View {
 struct LimitRow: View {
     let limit: ProviderLimitState
     let snapshot: UsageSnapshot?
+    /// provider-reported 四態投影;與本機估算是兩個資料域。
+    let reported: ProviderReportedLimits?
+    /// 相對時間片段的單一時刻(D46/D51)。
+    let now: Date
     let warn: Double
     var danger: Double = 99.5
 
@@ -823,11 +845,30 @@ struct LimitRow: View {
                 if let snapshot { StatusBadge(status: snapshot.status) }
             }
             .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
+            // provider-reported 標題(封閉字串;與 Today 卡同一張表)
+            Text(ReportedLimitText.header(providerId: limit.providerId))
+                .font(.caption2).foregroundStyle(Theme.textMuted)
+            // provider-reported 兩條 bar:只吃投影輸出 + corrected chrome(D27:型別上進不了 affordance)
             HStack(alignment: .top, spacing: 24) {
-                LimitBar(title: "5-hour window", window: limit.fiveHour, warn: warn, danger: danger,
-                         showBudgetAffordance: limit.providerId == "claude-code")
-                LimitBar(title: "Weekly window", window: limit.weekly, warn: warn, danger: danger,
-                         showBudgetAffordance: limit.providerId == "claude-code")
+                reportedBar("5-hour window", reported?.fiveHour ?? .unknownCapability)
+                reportedBar("Weekly window", reported?.weekly ?? .unknownCapability)
+            }
+            // 本機估算 bar(v0.8 A2b:新 EstimateBar,文字全來自 EstimateRowText、reset 由注入 now 控制):
+            // 只 claude、只該窗 estimate active 時渲染(D16/D30)
+            if let reported, reported.providerId == "claude-code",
+               reported.fiveHourEstimateActive || reported.weeklyEstimateActive {
+                HStack(alignment: .top, spacing: 24) {
+                    if reported.fiveHourEstimateActive {
+                        EstimateBar(title: "Estimated from local logs (your budget) · 5-hour",
+                                    window: limit.fiveHour, kind: .fiveHour, now: now,
+                                    warn: warn, danger: danger, showBudgetAffordance: true)
+                    }
+                    if reported.weeklyEstimateActive {
+                        EstimateBar(title: "Estimated from local logs (your budget) · Weekly",
+                                    window: limit.weekly, kind: .weekly, now: now,
+                                    warn: warn, danger: danger, showBudgetAffordance: true)
+                    }
+                }
             }
             HStack(spacing: 16) {
                 Label("\(tk(Int(limit.burnRateTokensPerHour)))/h burn", systemImage: "flame")
@@ -848,6 +889,50 @@ struct LimitRow: View {
         }
         .padding(14)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// provider-reported bar:由投影輸出(main / secondary / gaugePercent)+ corrected chrome 建構。
+    /// 這裡是唯一呼叫 `ReportedLimitText.render` 的地方;`ReportedLimitBar` 本身收不到 `LimitWindowState`。
+    private func reportedBar(_ title: String, _ field: ReportedLimitField) -> ReportedLimitBar {
+        let r = ReportedLimitText.render(field: field, cue: reported?.cue ?? .none, now: now)
+        var corrected = false
+        if case .provided(_, _, _, let c) = field { corrected = c }
+        return ReportedLimitBar(title: title, main: r.main, secondary: r.secondary,
+                                gaugePercent: r.gaugePercent, corrected: corrected, warn: warn, danger: danger)
+    }
+}
+
+/// provider-reported 限額的 bar(D27):輸入**只有** `ReportedLimitText` 投影輸出 + `corrected` chrome 旗標。
+/// 刻意**沒有** `LimitWindowState` / `showBudgetAffordance` 參數 —— 型別層保證 `Percent unavailable` /
+/// `Set estimated budget…` 這類 estimate 域 affordance 絕不會出現在 provider-reported 區塊。
+struct ReportedLimitBar: View {
+    let title: String
+    let main: String
+    let secondary: String
+    /// nil = 非 provided → 空軌、無 % 文字(不再 `usedPercent ?? 0`)。
+    let gaugePercent: Double?
+    let corrected: Bool
+    let warn: Double
+    var danger: Double = 99.5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(.caption.weight(.medium)).foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Text(main).font(.caption).monospacedDigit().foregroundStyle(Theme.textPrimary)
+            }
+            GaugeBar(percent: gaugePercent ?? 0, warn: warn, danger: danger)
+                .frame(height: 6)
+                .opacity(gaugePercent == nil ? 0.25 : 1)
+            HStack {
+                Text(secondary).font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
+                Spacer()
+                if corrected {
+                    Text("corrected").font(.caption2).foregroundStyle(.orange)   // chrome(不進次行片段)
+                }
+            }
+        }
     }
 }
 

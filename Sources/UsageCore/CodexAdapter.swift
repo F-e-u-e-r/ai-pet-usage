@@ -6,6 +6,8 @@ import Foundation
 /// 的 model 與 cwd。不讀取提示詞或訊息內容。
 public struct CodexAdapter: ProviderAdapter {
     public let providerId = "codex"
+    /// rollout `token_count.rate_limits` 的 primary(5h)/ secondary(weekly)官方讀值。
+    public var reportedLimitCapability: ReportedLimitCapability { .provides(windows: [.fiveHour, .weekly]) }
     public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Codex"
 

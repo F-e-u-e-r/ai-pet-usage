@@ -74,6 +74,7 @@ runSuite("ClaudeCodeAdapterTests", [
     ("testStatuslineSplitReadingsEndToEndNoCrossPollution", claude.testStatuslineSplitReadingsEndToEndNoCrossPollution),
     ("testPlanLabelMappingPriority", claude.testPlanLabelMappingPriority),
     ("testPlanOnlyReadingEmittedFromConfigFixture", claude.testPlanOnlyReadingEmittedFromConfigFixture),
+    ("testReportedLimitCapabilityDeclaration", claude.testReportedLimitCapabilityDeclaration),
 ])
 
 let codex = CodexAdapterTests()
@@ -250,6 +251,7 @@ runSuite("LimitEngineTests", [
     ("testPlanOnlyReadingSetsPlanTypeWithoutWindows", limits.testPlanOnlyReadingSetsPlanTypeWithoutWindows),
     ("testLoadSanitizesCrossTypedCodexWindows", limits.testLoadSanitizesCrossTypedCodexWindows),
     ("testCodexWeeklyOnlySnapshotTombstonesFiveHour", limits.testCodexWeeklyOnlySnapshotTombstonesFiveHour),
+    ("testOfficialWindowStatusExposureMatchesArbitration", limits.testOfficialWindowStatusExposureMatchesArbitration),
 ])
 
 let pricing = PricingTests()
@@ -673,6 +675,11 @@ runSuite("StatusRendererTests", [
     ("testSourcesDisclosureRendering", statusRenderer.testSourcesDisclosureRendering),
     ("testRootDisclosureClassify", statusRenderer.testRootDisclosureClassify),
     ("testAdapterDisclosureCustomRoots", statusRenderer.testAdapterDisclosureCustomRoots),
+    ("testFmtWindowStateVocabulary", statusRenderer.testFmtWindowStateVocabulary),
+    ("testStatusSplitsLocalUsageFromReportedLimits", statusRenderer.testStatusSplitsLocalUsageFromReportedLimits),
+    ("testStatusClaudeHeaderSaysAccountLevel", statusRenderer.testStatusClaudeHeaderSaysAccountLevel),
+    ("testFmtWindowStaleAndCorrectedMarkers", statusRenderer.testFmtWindowStaleAndCorrectedMarkers),
+    ("testStatusClaudeEstimateLineOnlyWhenActive", statusRenderer.testStatusClaudeEstimateLineOnlyWhenActive),
 ])
 
 let codexPrivacy = CodexPrivacyTests()
@@ -1058,6 +1065,38 @@ runSuite("SchedulerBatchingTests", [
     ("testScheduleEnumeration", schedulerBatching.testScheduleEnumeration),
     ("testRestartRecomputesFromDurableLedger", schedulerBatching.testRestartRecomputesFromDurableLedger),
     ("testSuccessfulCompactClearsTriggersUnderSameSnapshot", schedulerBatching.testSuccessfulCompactClearsTriggersUnderSameSnapshot),
+])
+
+let reportedLimits = ReportedLimitFieldTests()
+runSuite("ReportedLimitFieldTests", [
+    ("testPrecedence_CollisionCases", reportedLimits.testPrecedence_CollisionCases),
+    ("testPrecedence_ExhaustiveInputProductIsTotalAndSingleRule", reportedLimits.testPrecedence_ExhaustiveInputProductIsTotalAndSingleRule),
+    ("testPrecedence_DeriveIgnoresNonEnumeratedWindowFields", reportedLimits.testPrecedence_DeriveIgnoresNonEnumeratedWindowFields),
+    ("testProvenance_SynthesizedPostResetZeroIsNeverProvided", reportedLimits.testProvenance_SynthesizedPostResetZeroIsNeverProvided),
+    ("testProvenance_ClaudeBudgetEstimateIsNeverProvided", reportedLimits.testProvenance_ClaudeBudgetEstimateIsNeverProvided),
+    ("testProvenance_StaleReadingStaysProvidedWithStaleConfidence", reportedLimits.testProvenance_StaleReadingStaysProvidedWithStaleConfidence),
+    ("testCapability_NotProvidedBeatsResidualValue", reportedLimits.testCapability_NotProvidedBeatsResidualValue),
+    ("testCapability_KindOutsideDeclaredWindowsIsNotProvided", reportedLimits.testCapability_KindOutsideDeclaredWindowsIsNotProvided),
+    ("testCapability_NilIsUnknownCapability", reportedLimits.testCapability_NilIsUnknownCapability),
+    ("testCapability_ProvidesWindowsAreNonEmpty", reportedLimits.testCapability_ProvidesWindowsAreNonEmpty),
+    ("testCue_MirrorsRuleOrderAndOnlyDecoratesProvided", reportedLimits.testCue_MirrorsRuleOrderAndOnlyDecoratesProvided),
+    ("testInvariant_NoStateOtherThanProvidedCarriesPercent", reportedLimits.testInvariant_NoStateOtherThanProvidedCarriesPercent),
+    ("testVocabulary_NonProvidedStatesCarryNoGaugeOrPercent", reportedLimits.testVocabulary_NonProvidedStatesCarryNoGaugeOrPercent),
+    ("testVocabulary_StaleWithoutResetKeepsStaleMarker", reportedLimits.testVocabulary_StaleWithoutResetKeepsStaleMarker),
+    ("testVocabulary_InjectedNowControlsRelativeReset", reportedLimits.testVocabulary_InjectedNowControlsRelativeReset),
+    ("testVocabulary_ResetAtEqualsNowRendersResetsInNow", reportedLimits.testVocabulary_ResetAtEqualsNowRendersResetsInNow),
+    ("testEstimateRow_ActiveOnlyWhenOfficialNotUsable", reportedLimits.testEstimateRow_ActiveOnlyWhenOfficialNotUsable),
+    ("testEstimateRow_InactiveDuringUsableHoldAndNeverShowsSynthesizedWindow", reportedLimits.testEstimateRow_InactiveDuringUsableHoldAndNeverShowsSynthesizedWindow),
+    ("testEstimateRow_InjectedNowControlsRelativeReset", reportedLimits.testEstimateRow_InjectedNowControlsRelativeReset),
+    ("testBudgetAffordance_PredicateUnchanged", reportedLimits.testBudgetAffordance_PredicateUnchanged),
+    ("testEstimateRow_NoBudgetSetFragmentOnlyWhenBudgetNil", reportedLimits.testEstimateRow_NoBudgetSetFragmentOnlyWhenBudgetNil),
+    ("testSmoke_ProviderWindowSituationMatrix", reportedLimits.testSmoke_ProviderWindowSituationMatrix),
+    ("testDashboard_AssemblesReportedLimitsWiringPerProvider", reportedLimits.testDashboard_AssemblesReportedLimitsWiringPerProvider),
+    ("testDashboard_StatuslinePresentTrueWhenHookFileExists", reportedLimits.testDashboard_StatuslinePresentTrueWhenHookFileExists),
+    ("testDashboard_SourceHealthWiringSurfacesUnhealthy", reportedLimits.testDashboard_SourceHealthWiringSurfacesUnhealthy),
+    ("testLimitsEstimateBar_InjectedNowControlsResetText", reportedLimits.testLimitsEstimateBar_InjectedNowControlsResetText),
+    ("testEstimateVocabulary_IsIdenticalAcrossTodayLimitsAndCLI", reportedLimits.testEstimateVocabulary_IsIdenticalAcrossTodayLimitsAndCLI),
+    ("testLimitsEstimateBar_BudgetAffordancePredicateUnchanged", reportedLimits.testLimitsEstimateBar_BudgetAffordancePredicateUnchanged),
 ])
 
 let crashDuring = CrashDuringAttemptContractTests()

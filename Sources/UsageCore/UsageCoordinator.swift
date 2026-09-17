@@ -22,6 +22,8 @@ public struct DashboardState: Sendable {
     public var generatedAt: Date
     public var snapshots: [UsageSnapshot]
     public var limitStates: [ProviderLimitState]
+    /// provider-reported limits 的四態載體(與 `limitStates` 平行、同 providerId 鍵;usage ≠ limits split)。
+    public var reportedLimits: [ProviderReportedLimits]
     public var todayTotals: TokenBreakdown
     public var todayCost: CostResult
     public var todayByProvider: [ProviderDaySummary]
@@ -40,12 +42,13 @@ public struct DashboardState: Sendable {
     }
 
     public static let empty = DashboardState(
-        generatedAt: .distantPast, snapshots: [], limitStates: [], todayTotals: .zero,
+        generatedAt: .distantPast, snapshots: [], limitStates: [], reportedLimits: [], todayTotals: .zero,
         todayCost: .zero, todayByProvider: [], burnRateTokensPerHour: 0, burnCostPerHour: 0,
         hourly: [], topProjects: [], models: [], dataQuality: [], lastRefreshAt: nil
     )
 
     public init(generatedAt: Date, snapshots: [UsageSnapshot], limitStates: [ProviderLimitState],
+                reportedLimits: [ProviderReportedLimits] = [],
                 todayTotals: TokenBreakdown, todayCost: CostResult, todayByProvider: [ProviderDaySummary],
                 burnRateTokensPerHour: Double, burnCostPerHour: Double, hourly: [HourBucket],
                 topProjects: [ProjectSummary], models: [ModelUsageSummary],
@@ -53,6 +56,7 @@ public struct DashboardState: Sendable {
         self.generatedAt = generatedAt
         self.snapshots = snapshots
         self.limitStates = limitStates
+        self.reportedLimits = reportedLimits
         self.todayTotals = todayTotals
         self.todayCost = todayCost
         self.todayByProvider = todayByProvider
@@ -554,6 +558,12 @@ public actor UsageCoordinator {
                   limitsDurabilityOps: .production)
     }
 
+    /// production wiring 的 adapter 列表(internal:tests 走訪它驗 capability 宣告集合,不另抄一份)。
+    /// adapter init 皆無 I/O(只組 URL)。
+    static let defaultProductionAdapters: [any ProviderAdapter] = [
+        CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter(), OpenCodeAdapter(),
+    ]
+
     /// internal(tests-only via `@testable`,mirror #64 DP-3):注入 LimitEngine barrier 失敗排程;
     /// production 一律經 public init(針 .production,無注入面)。
     init(dataDir: URL? = nil, settings: CoreSettings = CoreSettings(),
@@ -566,7 +576,7 @@ public actor UsageCoordinator {
         self.settings = settings
         // opencode 預設**停用**(enabledProviders 預設集不含它;R1 雙審裁決:db 與 OAuth
         // 憑證同檔,保守側勝出)——註冊於此使 Settings → Providers 顯示啟用開關。
-        self.adapters = adapters ?? [CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter(), OpenCodeAdapter()]
+        self.adapters = adapters ?? Self.defaultProductionAdapters
         self.refreshLockTimeout = refreshLockTimeout
         if !readOnly { try? AppPaths.ensureDirectory(dir) }
         self.refreshLock = FileLock(url: dir.appendingPathComponent("refresh.lock"))
@@ -1247,14 +1257,28 @@ public actor UsageCoordinator {
         }
 
         var limitStates: [ProviderLimitState] = []
+        var reportedLimits: [ProviderReportedLimits] = []
         var snapshots: [UsageSnapshot] = []
         var byProvider: [ProviderDaySummary] = []
+
+        // M1 §2.2 輸入接線:F17 health 以**同一個 now** 取一次(每 provider 今日只有 .localLogs
+        // 一列;遲滯記憶在同一 now 下冪等 —— exit 1.8 < enter 2.2,第二次評估不改旗標)。
+        let sourceHealthById = Dictionary(
+            dataSourceStatuses(now: now).filter { $0.kind == .localLogs }.map { ($0.providerId, $0.health) },
+            uniquingKeysWith: { first, _ in first })
 
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
             let pid = adapter.providerId
             let availability = adapter.detectAvailability()
             let limit = limits.limitState(providerId: pid, ledger: ledger, settings: settings, now: now)
             limitStates.append(limit)
+            // provider-reported 投影:capability 來自 adapter、official 來自 engine 新欄位、
+            // statuslinePresent 只有 claude-code 非 nil(其他 provider 永遠跳過 rule 4)。
+            reportedLimits.append(ProviderReportedLimits(
+                capability: adapter.reportedLimitCapability,
+                limit: limit,
+                statuslinePresent: (adapter as? ClaudeCodeAdapter)?.statuslineFilePresent,
+                sourceHealth: sourceHealthById[pid]))
 
             let acc = todayByProviderAcc[pid] ?? ProviderAcc()
             let tokens = acc.tokens
@@ -1344,6 +1368,7 @@ public actor UsageCoordinator {
             generatedAt: now,
             snapshots: snapshots,
             limitStates: limitStates,
+            reportedLimits: reportedLimits,
             todayTotals: todayTotals,
             todayCost: todayCost,
             todayByProvider: byProvider,

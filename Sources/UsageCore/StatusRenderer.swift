@@ -37,25 +37,43 @@ public enum StatusRenderer {
         return df.string(from: d)
     }
 
-    static func fmtWindow(_ w: LimitWindowState) -> String {
-        if w.idle { return "   idle    (idle — no active 5h window)" }
-        var out = ""
-        if let p = w.usedPercent { out += String(format: "%5.1f%%", p) } else { out += "   — " }
-        if let t = w.usedTokens {
-            out += " [\(ReportGenerator.fmtTokens(t))"
-            if let b = w.budgetTokens { out += "/\(ReportGenerator.fmtTokens(b))" }
-            out += "]"
-        }
-        out += "  resets: \(fmtDate(w.resetAt))  (\(w.confidence.rawValue)\(w.corrected ? ", corrected" : ""))"
-        return out
+    /// `reported limits:` / `estimated (your budget):` 行的 `5h:` 欄對齊欄位(左段補齊到此寬度)。
+    private static let windowColumn = 51
+    private static func padTo(_ s: String, _ width: Int) -> String {
+        s.count >= width ? s : s + String(repeating: " ", count: width - s.count)
     }
 
-    public static func statusText(dashboard dash: DashboardState, headline: String, full: Bool) -> String {
+    /// provider-reported 窗的 CLI cell(封閉文案,`lowercased()`;§2.5 D28)。
+    /// provided → `NN.N% (片段…[· corrected])`;非 provided → `主文`,次行非空才接 ` — 次行`;`corrected` 恆為括號內最後片段(chrome)。
+    static func cliReportedCell(_ field: ReportedLimitField, cue: ReportedLimitCue, now: Date) -> String {
+        let r = ReportedLimitText.render(field: field, cue: cue, now: now)
+        let cell: String
+        if r.gaugePercent != nil {
+            var secondary = r.secondary
+            if case .provided(_, _, _, true) = field {
+                secondary = secondary.isEmpty ? "corrected" : secondary + " · corrected"
+            }
+            cell = secondary.isEmpty ? r.main : "\(r.main) (\(secondary))"
+        } else {
+            cell = r.secondary.isEmpty ? r.main : "\(r.main) — \(r.secondary)"
+        }
+        return cell.lowercased()
+    }
+
+    /// estimate 窗的 CLI cell(**不** `lowercased()`:token 單位後綴 M/B/T 與專有名詞須保留;inactive 窗顯 `—`)。
+    static func cliEstimateCell(active: Bool, window: LimitWindowState, kind: LimitWindowKind, now: Date) -> String {
+        guard active else { return "—" }
+        let r = EstimateRowText.render(window: window, kind: kind, now: now)
+        return r.secondary.isEmpty ? r.main : "\(r.main) (\(r.secondary))"
+    }
+
+    public static func statusText(dashboard dash: DashboardState, headline: String, full: Bool, now: Date) -> String {
         var lines: [String] = []
         lines.append("AI Pet Usage — status (\(stripTerminalControls(headline)))")
         lines.append(String(repeating: "─", count: 72))
         for snap in dash.snapshots {
             let limit = dash.limitStates.first { $0.providerId == snap.providerId }
+            let reported = dash.reportedLimits.first { $0.providerId == snap.providerId }
             let error: String
             if let raw = snap.errorMessage {
                 // 錯誤原文可含完整路徑/任意 provider 文字 → 預設固定句;原文僅 --full(仍剝控制字元)。
@@ -65,15 +83,30 @@ public enum StatusRenderer {
                 error = ""
             }
             lines.append("\(stripTerminalControls(snap.displayName))  [\(snap.status.rawValue)]\(error)")
+            // 本機觀測用量(原 today 行;與 provider-reported limits 分離,D14)
+            lines.append("  " + padTo("local usage:", 19)
+                         + "\(ReportGenerator.fmtTokens(snap.tokenInput ?? 0)) in / \(ReportGenerator.fmtTokens(snap.tokenOutput ?? 0)) out / \(ReportGenerator.fmtTokens(snap.tokenCache ?? 0)) cache"
+                         + "   last data: \(fmtDate(snap.updatedAt))")
+            // provider 回報的官方限額(四態投影;與本機用量是兩個資料域)
+            if let reported {
+                let left = "  " + padTo("reported limits:", 19)
+                    + ReportedLimitText.cliSourceLabel(providerId: reported.providerId)
+                let windows = "5h: " + cliReportedCell(reported.fiveHour, cue: reported.cue, now: now)
+                    + "   weekly: " + cliReportedCell(reported.weekly, cue: reported.cue, now: now)
+                lines.append(padTo(left, windowColumn) + windows)
+                // 本機估算列(既有 Claude budget 估算):只 claude-code、至少一窗 active 時才輸出
+                if reported.providerId == "claude-code",
+                   reported.fiveHourEstimateActive || reported.weeklyEstimateActive, let limit {
+                    let ewindows = "5h: " + cliEstimateCell(active: reported.fiveHourEstimateActive, window: limit.fiveHour, kind: .fiveHour, now: now)
+                        + "   weekly: " + cliEstimateCell(active: reported.weeklyEstimateActive, window: limit.weekly, kind: .weekly, now: now)
+                    lines.append(padTo("  estimated (your budget):", windowColumn) + ewindows)
+                }
+            }
             if let limit {
-                lines.append("  5h:     \(fmtWindow(limit.fiveHour))")
-                lines.append("  weekly: \(fmtWindow(limit.weekly))")
                 lines.append("  burn: \(ReportGenerator.fmtTokens(Int(limit.burnRateTokensPerHour)))/h" +
                              (limit.projectedExhaustionAt.map { "  → limit at \(fmtDate($0))" } ?? "") +
                              (limit.planType.map { "  plan: \(safePlanLabel($0))" } ?? ""))
             }
-            lines.append("  today: \(ReportGenerator.fmtTokens(snap.tokenInput ?? 0)) in / \(ReportGenerator.fmtTokens(snap.tokenOutput ?? 0)) out / \(ReportGenerator.fmtTokens(snap.tokenCache ?? 0)) cache" +
-                         "   last data: \(fmtDate(snap.updatedAt))")
         }
         lines.append(String(repeating: "─", count: 72))
         lines.append("today: \(ReportGenerator.fmtTokens(dash.todayTotals.total)) tokens, ~\(ReportGenerator.fmtUSD(dash.todayCost.knownUSD))" +

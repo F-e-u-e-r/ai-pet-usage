@@ -476,7 +476,7 @@ final class StatusRendererTests: XCTestCase {
 
     // 預設輸出:路徑/錯誤原文/控制字元一律不得出現;--full 出原文但仍無控制字元。
     func testStatusDefaultSuppressesPathsErrorsAndControls() throws {
-        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "cached", full: false)
+        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "cached", full: false, now: Date(timeIntervalSince1970: 1_768_000_000))
         XCTAssertFalse(out.contains("/Users/"), out)
         XCTAssertFalse(out.contains("SecretClient"), out)
         XCTAssertFalse(out.contains("SENTINEL_ERR"), "錯誤原文不得出現在預設輸出")
@@ -490,7 +490,7 @@ final class StatusRendererTests: XCTestCase {
     }
 
     func testStatusFullPassesRawButStripsControls() throws {
-        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "cached", full: true)
+        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "cached", full: true, now: Date(timeIntervalSince1970: 1_768_000_000))
         XCTAssertTrue(out.contains("SENTINEL_ERR"), "--full 應印錯誤原文")
         XCTAssertTrue(out.contains("SENTINEL_DQ"), "--full 應印 dataQuality 原文")
         XCTAssertTrue(out.contains("/Users/alice/SecretClient"), "--full 應印原始路徑")
@@ -506,7 +506,7 @@ final class StatusRendererTests: XCTestCase {
                                            tokens: TokenBreakdown(input: 100), cost: .zero,
                                            providers: ["codex"], topModel: nil, lastActive: nil,
                                            shareOfPeriod: 1)]
-        let out = StatusRenderer.statusText(dashboard: dash, headline: "h", full: false)
+        let out = StatusRenderer.statusText(dashboard: dash, headline: "h", full: false, now: Date(timeIntervalSince1970: 1_768_000_000))
         XCTAssertFalse(out.contains("\nINJECTED_ID_LINE"),
                        "fallback 的 projectId basename 不得帶入換行偽造輸出行:\(out)")
         XCTAssertTrue(out.contains("xINJECTED_ID_LINE"),
@@ -515,11 +515,11 @@ final class StatusRendererTests: XCTestCase {
 
     // planType 是 provider 可控自由字串:路徑形收斂 + 上限;正常方案名原樣。
     func testStatusPlanLabelPolicy() throws {
-        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "h", full: false)
+        let out = StatusRenderer.statusText(dashboard: poisonedDashboard(), headline: "h", full: false, now: Date(timeIntervalSince1970: 1_768_000_000))
         XCTAssertTrue(out.contains("plan: custom (path redacted)"), out)
         var dash = poisonedDashboard()
         dash.limitStates[0].planType = "Max 20x"
-        let ok = StatusRenderer.statusText(dashboard: dash, headline: "h", full: false)
+        let ok = StatusRenderer.statusText(dashboard: dash, headline: "h", full: false, now: Date(timeIntervalSince1970: 1_768_000_000))
         XCTAssertTrue(ok.contains("plan: Max 20x"), ok)
     }
 
