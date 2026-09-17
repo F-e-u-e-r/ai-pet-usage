@@ -603,6 +603,16 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         let (empty, _) = try none.refreshUsage(state: ScanState())
         XCTAssertTrue(empty.rateLimits.isEmpty)
     }
+
+    /// M1(D5/D20):capability 是 adapter 契約的一部分(protocol requirement,非 extension 預設),
+    /// 與 statusline 檔是否存在、reading 是否曾出現無關 —— 空 roots / 空 statuslineFiles 仍宣告兩窗。
+    func testReportedLimitCapabilityDeclaration() {
+        let adapter = ClaudeCodeAdapter(roots: [], statuslineFiles: [], planConfigFiles: [])
+        XCTAssertEqual(adapter.reportedLimitCapability, .provides(windows: [.fiveHour, .weekly]))
+        XCTAssertEqual(CodexAdapter(roots: []).reportedLimitCapability, .provides(windows: [.fiveHour, .weekly]))
+        XCTAssertEqual(GrokCodeAdapter(roots: [], billingLogFiles: []).reportedLimitCapability, .notProvided)
+        XCTAssertEqual(OpenCodeAdapter(dbURL: makeTempDir().appendingPathComponent("none.db")).reportedLimitCapability, .notProvided)
+    }
 }
 
 // MARK: - Codex adapter
@@ -1642,6 +1652,251 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertEqual(state.fiveHour.usedPercent, 0, "容差內的競態不應觸發估算後備")
         XCTAssertEqual(state.fiveHour.confidence, .estimated)
         XCTAssertNil(state.fiveHour.budgetTokens)
+    }
+
+    /// M1(D6/D47):`fiveHourOfficial` / `weeklyOfficial` 逐窗口鏡射既有仲裁(persisted && useOfficial → usable、
+    /// persisted && !useOfficial → expiredUnusable、!persisted → absent),且與最終回傳的是 `claudeState`
+    /// 還是 official/mixed state 無關 —— 每條 early-return 路徑都必須帶章。四態由載體 derive 得出,
+    /// 不改任何既有仲裁斷言。
+    func testOfficialWindowStatusExposureMatchesArbitration() throws {
+        let both: ReportedLimitCapability = .provides(windows: [.fiveHour, .weekly])
+        func carrier(_ state: ProviderLimitState, hook: Bool? = true, health: SourceHealth? = .ok) -> ProviderReportedLimits {
+            ProviderReportedLimits(capability: both, limit: state, statuslinePresent: hook, sourceHealth: health)
+        }
+        func claudeEvent(_ ts: String) -> UsageEvent {
+            UsageEvent(id: "e1", providerId: "claude-code", timestamp: date(ts),
+                       tokens: TokenBreakdown(input: 800), sourceKind: "test")
+        }
+        var budgeted = settings
+        budgeted.claudeFiveHourTokenBudget = 1000
+
+        // (a) testClaudeOfficialReadingsBeatBudgetEstimation 的形狀:兩窗 live → usable/usable,兩窗 provided。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-15T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300, resetsAt: date("2026-01-15T13:00:00Z")),
+                secondary: RateLimitWindowReading(usedPercent: 24, windowMinutes: 10080, resetsAt: date("2026-01-17T10:00:00Z")))],
+                settings: settings)
+            let state = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
+                                          settings: settings, now: date("2026-01-15T10:05:00Z"))
+            XCTAssertEqual(state.fiveHourOfficial, .usable, "(a) 5h")
+            XCTAssertEqual(state.weeklyOfficial, .usable, "(a) weekly")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .provided(percent: 44, resetsAt: date("2026-01-15T13:00:00Z"), confidence: .high, corrected: false))
+            XCTAssertEqual(r.weekly, .provided(percent: 24, resetsAt: date("2026-01-17T10:00:00Z"), confidence: .high, corrected: false))
+            XCTAssertFalse(r.fiveHourEstimateActive)
+            XCTAssertFalse(r.weeklyEstimateActive)
+        }
+
+        // (b) row (i) = testClaudeStaleReadingsFallBackToBudget 的形狀:兩窗 persisted 但皆不可用(reset 後有活動反證)
+        //     → 走 `:819` early return(claudeState)→ 仍須 expiredUnusable/expiredUnusable;兩窗 awaitingFreshReading;估算列 active。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-10T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300, resetsAt: date("2026-01-10T13:00:00Z")),
+                secondary: RateLimitWindowReading(usedPercent: 24, windowMinutes: 10080, resetsAt: date("2026-01-12T10:00:00Z")))],
+                settings: budgeted)
+            let ledger = UsageLedger(fileURL: nil)
+            ledger.append([claudeEvent("2026-01-15T10:07:00Z")])
+            let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-15T11:00:00Z"))
+            XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "(b) 既有仲裁不變:估算 80%")
+            XCTAssertEqual(state.fiveHourOfficial, .expiredUnusable, "(b) 5h persisted 但不可用")
+            XCTAssertEqual(state.weeklyOfficial, .expiredUnusable, "(b) weekly persisted 但不可用")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading))
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.awaitingFreshReading))
+            XCTAssertTrue(r.fiveHourEstimateActive)
+            XCTAssertTrue(r.weeklyEstimateActive)
+            // 估算 80% 只在 estimate 列出現,provider-reported 欄無 %(I7)
+            XCTAssertNil(ReportedLimitText.render(field: r.fiveHour, cue: r.cue, now: date("2026-01-15T11:00:00Z")).gaugePercent)
+        }
+
+        // (c) row (iv) expired-hold 形狀 = testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback:
+        //     5h persisted-usable(過期但 24h 內、無活動反證)+ weekly nil → usable/absent;weeklyOfficial 直接釘 .absent(D47)。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-15T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300, resetsAt: date("2026-01-15T10:30:00Z")),
+                secondary: nil)], settings: budgeted)
+            let ledger = UsageLedger(fileURL: nil)
+            ledger.append([claudeEvent("2026-01-15T10:07:00Z")])
+            let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-15T11:00:00Z"))
+            XCTAssertEqual(state.fiveHour.usedPercent, 0, "(c) 既有仲裁不變:hold 0%")
+            XCTAssertEqual(state.fiveHourOfficial, .usable, "(c) 5h hold 仍是 usable")
+            XCTAssertEqual(state.weeklyOfficial, .absent, "(c) D47:weekly slot nil → absent(不從 mixed return 反推)")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading), "(c) 規則 6(usable ∧ estimated)")
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet), "(c) 規則 7")
+            XCTAssertFalse(r.fiveHourEstimateActive, "(c) hold 中 5h 估算列 inactive")
+            XCTAssertTrue(r.weeklyEstimateActive, "(c) weekly absent → 估算列 active")
+        }
+
+        // (d) row (iv) scan-race 形狀 = testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-15T10:29:50Z"),
+                primary: RateLimitWindowReading(usedPercent: 96, windowMinutes: 300, resetsAt: date("2026-01-15T10:30:00Z")),
+                secondary: nil)], settings: budgeted)
+            let ledger = UsageLedger(fileURL: nil)
+            ledger.append([claudeEvent("2026-01-15T10:30:20Z")])
+            let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-15T10:31:00Z"))
+            XCTAssertEqual(state.fiveHour.usedPercent, 0, "(d) 既有仲裁不變")
+            XCTAssertEqual(state.fiveHourOfficial, .usable, "(d)")
+            XCTAssertEqual(state.weeklyOfficial, .absent, "(d) D47")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading))
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertFalse(r.fiveHourEstimateActive)
+            XCTAssertTrue(r.weeklyEstimateActive)
+        }
+
+        // (e) row (iv) live 形狀:5h live reading + weekly nil → usable/absent;5h provided(規則 3)。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-15T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300, resetsAt: date("2026-01-15T13:00:00Z")),
+                secondary: nil)], settings: settings)
+            let state = engine.limitState(providerId: "claude-code", ledger: UsageLedger(fileURL: nil),
+                                          settings: settings, now: date("2026-01-15T10:05:00Z"))
+            XCTAssertEqual(state.fiveHourOfficial, .usable, "(e)")
+            XCTAssertEqual(state.weeklyOfficial, .absent, "(e) D47")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .provided(percent: 44, resetsAt: date("2026-01-15T13:00:00Z"), confidence: .high, corrected: false))
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertFalse(r.fiveHourEstimateActive)
+            XCTAssertTrue(r.weeklyEstimateActive)
+        }
+
+        // (f) row (ii) = testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity:
+        //     5h persisted-unusable + weekly nil → `:819` early return(claudeState)→ expiredUnusable/absent。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-15T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300, resetsAt: date("2026-01-15T10:30:00Z")),
+                secondary: nil)], settings: budgeted)
+            let ledger = UsageLedger(fileURL: nil)
+            ledger.append([claudeEvent("2026-01-15T11:07:00Z")])
+            let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-15T12:00:00Z"))
+            XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "(f) 既有仲裁不變:立即退回估算")
+            XCTAssertEqual(state.fiveHourOfficial, .expiredUnusable, "(f) early return 仍帶章")
+            XCTAssertEqual(state.weeklyOfficial, .absent, "(f) early return 仍帶章")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading))
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertTrue(r.fiveHourEstimateActive)
+            XCTAssertTrue(r.weeklyEstimateActive)
+        }
+
+        // (g) row (iii) = 無任何 reading(idle 帳本)→ absent/absent;兩窗 noReadingYet。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            let ledger = UsageLedger(fileURL: nil)
+            ledger.append([UsageEvent(id: "idle", providerId: "claude-code", timestamp: date("2026-01-15T14:00:00Z"),
+                                      tokens: TokenBreakdown(input: 5_000), sourceKind: "test")])
+            let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: settings, now: date("2026-01-15T20:00:00Z"))
+            XCTAssertTrue(state.fiveHour.idle, "(g) 既有仲裁不變")
+            XCTAssertEqual(state.fiveHourOfficial, .absent, "(g)")
+            XCTAssertEqual(state.weeklyOfficial, .absent, "(g)")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertTrue(r.fiveHourEstimateActive)
+            XCTAssertTrue(r.weeklyEstimateActive)
+            // hook 缺 → 規則 4 先於 7
+            XCTAssertEqual(carrier(state, hook: false).fiveHour, .temporarilyUnavailable(.hookNotInstalled))
+        }
+
+        // (h) codex weekly-only(tombstone)= testCodexWeeklyOnlySnapshotTombstonesFiveHour 的形狀 → absent/usable。
+        do {
+            let root = makeTempDir()
+            let dayDir = root.appendingPathComponent("2026/07/12")
+            try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+            let lines = [
+                #"{"timestamp":"2026-07-12T17:50:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":54.0,"window_minutes":300,"resets_at":1783881382},"secondary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1784354760},"plan_type":"plus"}}}"#,
+                #"{"timestamp":"2026-07-12T18:40:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":43.0,"window_minutes":10080,"resets_at":1784354760},"plan_type":"plus"}}}"#,
+            ].joined(separator: "\n") + "\n"
+            try lines.write(to: dayDir.appendingPathComponent("rollout-2026-07-12T17-50-00-official.jsonl"),
+                            atomically: true, encoding: .utf8)
+            let (result, _) = try CodexAdapter(roots: [root]).refreshUsage(state: ScanState())
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: result.rateLimits, settings: settings)
+            let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                          settings: settings, now: date("2026-07-12T18:45:00Z"))
+            XCTAssertNil(state.fiveHour.usedPercent, "(h) 既有仲裁不變:5h tombstone")
+            XCTAssertEqual(state.fiveHourOfficial, .absent, "(h) tombstone 後 5h slot nil")
+            XCTAssertEqual(state.weeklyOfficial, .usable, "(h)")
+            let r = carrier(state, hook: nil)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertEqual(r.weekly, .provided(percent: 43, resetsAt: Date(timeIntervalSince1970: 1_784_354_760), confidence: .high, corrected: false))
+            XCTAssertFalse(r.fiveHourEstimateActive, "(h) codex 永無估算列")
+            XCTAssertFalse(r.weeklyEstimateActive)
+        }
+
+        // (i) codex 過期 5h(合成 0%)+ live weekly = testExpiredWindowShowsRecoveredAndSweepEmitsReset → usable/usable;
+        //     5h awaitingFreshReading(不是 provided 0%,amendment A)、weekly provided。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [reading(90, at: "2026-01-15T10:00:00Z", resetsAt: "2026-01-15T14:00:00Z")], settings: settings)
+            let state = engine.limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil), settings: settings, now: date("2026-01-15T14:10:00Z"))
+            XCTAssertEqual(state.fiveHour.usedPercent, 0, "(i) 既有仲裁不變")
+            XCTAssertEqual(state.fiveHour.confidence, .estimated)
+            XCTAssertEqual(state.fiveHourOfficial, .usable, "(i) reading-backed:slot 在 → usable(即使已過期)")
+            XCTAssertEqual(state.weeklyOfficial, .usable, "(i)")
+            let r = carrier(state, hook: nil)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading))
+            XCTAssertEqual(r.weekly, .provided(percent: 50, resetsAt: date("2026-01-20T00:00:00Z"), confidence: .high, corrected: false))
+            XCTAssertFalse(r.fiveHourEstimateActive)
+            XCTAssertFalse(r.weeklyEstimateActive)
+        }
+
+        // (j) testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated 的形狀:
+        //     5h persisted-unusable + weekly live(>6h → stale)→ expiredUnusable/usable;weekly provided(.stale)。
+        do {
+            let engine = LimitEngine(stateURL: nil)
+            _ = engine.ingestTransitions(readings: [RateLimitReading(
+                providerId: "claude-code", observedAt: date("2026-01-15T10:00:00Z"),
+                primary: RateLimitWindowReading(usedPercent: 44, windowMinutes: 300, resetsAt: date("2026-01-15T13:00:00Z")),
+                secondary: RateLimitWindowReading(usedPercent: 24, windowMinutes: 10080, resetsAt: date("2026-01-18T10:00:00Z")))],
+                settings: budgeted)
+            let ledger = UsageLedger(fileURL: nil)
+            ledger.append([claudeEvent("2026-01-16T11:07:00Z")])
+            let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-16T12:00:00Z"))
+            XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "(j) 既有仲裁不變")
+            XCTAssertEqual(state.weekly.confidence, .stale, "(j) 既有仲裁不變")
+            XCTAssertEqual(state.fiveHourOfficial, .expiredUnusable, "(j)")
+            XCTAssertEqual(state.weeklyOfficial, .usable, "(j)")
+            let r = carrier(state)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading))
+            XCTAssertEqual(r.weekly, .provided(percent: 24, resetsAt: date("2026-01-18T10:00:00Z"), confidence: .stale, corrected: false))
+            XCTAssertTrue(r.fiveHourEstimateActive)
+            XCTAssertFalse(r.weeklyEstimateActive)
+            XCTAssertEqual(ReportedLimitText.render(field: r.weekly, cue: r.cue, now: date("2026-01-16T12:00:00Z")).secondary,
+                           "resets in 46h 0m · reading is stale")   // ResetLabel:h ≤ 48 → "Nh Mm"
+        }
+
+        // codex 從未有 reading → absent/absent(reading-backed 路徑的 nil slot)。
+        do {
+            let state = LimitEngine(stateURL: nil).limitState(providerId: "codex", ledger: UsageLedger(fileURL: nil),
+                                                              settings: settings, now: date("2026-01-15T10:05:00Z"))
+            XCTAssertEqual(state.fiveHourOfficial, .absent)
+            XCTAssertEqual(state.weeklyOfficial, .absent)
+            let r = carrier(state, hook: nil, health: nil)
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.noReadingYet))
+            XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet))
+        }
+
+        // 預設值:memberwise init 不給章 → absent(Codable 舊檔亦然;無 decode 路徑到 ProviderLimitState,僅為完整性)。
+        let bare = ProviderLimitState(providerId: "codex",
+                                      fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
+                                      weekly: LimitWindowState(windowMinutes: 10080, confidence: .unknown))
+        XCTAssertEqual(bare.fiveHourOfficial, .absent)
+        XCTAssertEqual(bare.weeklyOfficial, .absent)
     }
 
     func testClaudeBudgetPercentAndEstimatedReset() {

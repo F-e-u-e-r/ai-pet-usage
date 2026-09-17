@@ -261,13 +261,18 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
     public var warning: WarningState
     public var planType: String?
     public var lastSourceDescription: String?
+    /// 逐窗口的官方 reading 狀態(`LimitEngine` 蓋章;provider-reported 四態的輸入之一)。
+    /// 與 `fiveHour` / `weekly` 最終是官方值還是估算值無關 —— 直接由 persisted slot + 仲裁旗標決定。
+    public var fiveHourOfficial: OfficialWindowStatus
+    public var weeklyOfficial: OfficialWindowStatus
 
     public var id: String { providerId }
 
     public init(providerId: String, fiveHour: LimitWindowState, weekly: LimitWindowState,
                 burnRateTokensPerHour: Double = 0, projectedExhaustionAt: Date? = nil,
                 lastEventAt: Date? = nil, lastReadingAt: Date? = nil,
-                warning: WarningState = .ok, planType: String? = nil, lastSourceDescription: String? = nil) {
+                warning: WarningState = .ok, planType: String? = nil, lastSourceDescription: String? = nil,
+                fiveHourOfficial: OfficialWindowStatus = .absent, weeklyOfficial: OfficialWindowStatus = .absent) {
         self.providerId = providerId
         self.fiveHour = fiveHour
         self.weekly = weekly
@@ -278,6 +283,8 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
         self.warning = warning
         self.planType = planType
         self.lastSourceDescription = lastSourceDescription
+        self.fiveHourOfficial = fiveHourOfficial
+        self.weeklyOfficial = weeklyOfficial
     }
 }
 
@@ -561,6 +568,9 @@ public protocol ProviderAdapter: Sendable {
     /// 存在/可讀/mtime——只回報固定 id + 狀態,絕不外洩實際 URL/路徑。預設空。
     /// **必須**列為 protocol 要求(而非僅 extension),否則對 existential 會靜態派發到預設空實作。
     func diagnosticSources() -> [DiagnosticSourceDescriptor]
+    /// 本 provider 是否有官方 limit 來源(usage ≠ limits split):靜態契約宣告,無 extension 預設 ——
+    /// 每個 adapter 都必須明說,`.notProvidedBySource` 只能來自這裡(不得由「沒讀到值」推論)。
+    var reportedLimitCapability: ReportedLimitCapability { get }
 }
 
 public extension ProviderAdapter {

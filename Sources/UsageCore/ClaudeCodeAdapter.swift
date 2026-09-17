@@ -5,6 +5,8 @@ import Foundation
 /// 不讀取、不保存任何提示詞或訊息內容。
 public struct ClaudeCodeAdapter: ProviderAdapter {
     public let providerId = "claude-code"
+    /// statusline hook 落地檔提供 five_hour / seven_day 兩窗官方讀值(account-level)。
+    public var reportedLimitCapability: ReportedLimitCapability { .provides(windows: [.fiveHour, .weekly]) }
     public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Claude Code"
 
@@ -19,6 +21,11 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     /// resets_at)餵給 statusline 指令;只要有任何 hook 把它存檔,就能在此讀到
     /// 官方限額,不需使用者手動設預算。
     public let statuslineFiles: [URL]
+    /// M1 §2.2 `statuslinePresent`:任一 statusline 落地檔**存在**(presence,不是「內容可用」);
+    /// 驅動 rule 4 hookNotInstalled / cue hookNotDetected / Limits 頁 install-hook 提示。
+    public var statuslineFilePresent: Bool {
+        statuslineFiles.contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
     /// 訂閱方案標籤來源(`~/.claude.json` 窄解碼;可注入供測試/停用)。
     public let planConfigFiles: [URL]
 

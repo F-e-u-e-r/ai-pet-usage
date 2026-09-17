@@ -814,8 +814,14 @@ public final class LimitEngine {
         let provider = store["claude-code"]
         let useOfficialFiveHour = hasUsableWindow(provider?.primary, now: now, lastEventAt: lastEvent?.timestamp)
         let useOfficialWeekly = hasUsableWindow(provider?.secondary, now: now, lastEventAt: lastEvent?.timestamp)
-        let estimated = claudeState(ledger: ledger, settings: settings, now: now,
+        // 官方 reading 狀態章(usage ≠ limits split):只看 persisted slot + 上面兩個仲裁旗標,
+        // 在任何 early-return / mixed return 之前決定,兩條回傳路徑都帶同一組章。
+        let fiveHourOfficial = Self.officialStatus(persisted: provider?.primary != nil, usable: useOfficialFiveHour)
+        let weeklyOfficial = Self.officialStatus(persisted: provider?.secondary != nil, usable: useOfficialWeekly)
+        var estimated = claudeState(ledger: ledger, settings: settings, now: now,
                                     lastEvent: lastEvent, burn: burn)
+        estimated.fiveHourOfficial = fiveHourOfficial
+        estimated.weeklyOfficial = weeklyOfficial
         guard useOfficialFiveHour || useOfficialWeekly else { return estimated }
 
         let official = readingBackedState(providerId: "claude-code", settings: settings, now: now,
@@ -840,8 +846,16 @@ public final class LimitEngine {
             lastReadingAt: lastOfficialReading ?? estimated.lastReadingAt,
             warning: warning,
             planType: official.planType,
-            lastSourceDescription: official.lastSourceDescription ?? estimated.lastSourceDescription
+            lastSourceDescription: official.lastSourceDescription ?? estimated.lastSourceDescription,
+            fiveHourOfficial: fiveHourOfficial,
+            weeklyOfficial: weeklyOfficial
         )
+    }
+
+    /// persisted && usable → usable;persisted && !usable → expiredUnusable;!persisted → absent。
+    private static func officialStatus(persisted: Bool, usable: Bool) -> OfficialWindowStatus {
+        guard persisted else { return .absent }
+        return usable ? .usable : .expiredUnusable
     }
 
     private func readingBackedState(providerId: String, settings: CoreSettings, now: Date,
@@ -892,7 +906,11 @@ public final class LimitEngine {
             lastReadingAt: provider?.primary?.observedAt ?? provider?.secondary?.observedAt,
             warning: warning,
             planType: provider?.planType,
-            lastSourceDescription: lastEvent.map { "\($0.sourceKind) event at \(LocalTime.format($0.timestamp))" }
+            lastSourceDescription: lastEvent.map { "\($0.sourceKind) event at \(LocalTime.format($0.timestamp))" },
+            // reading-backed 路徑沒有 useOfficial 概念:slot 在 → usable(過期的合成 0% 亦然;四態由 confidence 區分),
+            // slot 空(從未有 / 已 tombstone)→ absent。
+            fiveHourOfficial: provider?.primary == nil ? .absent : .usable,
+            weeklyOfficial: provider?.secondary == nil ? .absent : .usable
         )
     }
 

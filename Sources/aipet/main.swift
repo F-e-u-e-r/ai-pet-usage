@@ -148,7 +148,9 @@ Task {
         }
 
         // 渲染邏輯(含 sink 隱私政策)集中在 StatusRenderer(純函式、可測試)。
-        print(StatusRenderer.statusText(dashboard: dash, headline: headline, full: wantsFull))
+        // D46:相對時間片段(`resets in …`)全用同一個 `now`;dashboard 組裝時的 now 即
+        // `generatedAt`,直接沿用 → 渲染與資料同一時間基準,不另讀系統時鐘。
+        print(StatusRenderer.statusText(dashboard: dash, headline: headline, full: wantsFull, now: dash.generatedAt))
 
         // #48 §7:reindex 因 monotonic gate 阻擋而 preserve 任一 requested provider 時,
         // 回傳**文件化、可區分**的非零狀態(exit 3;1=export 失敗、2=install-hook 用法)。
