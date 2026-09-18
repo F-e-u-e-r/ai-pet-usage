@@ -113,6 +113,16 @@ public struct ProjectPageData: Sendable {
     public var models: [ModelUsageSummary]
     public var totals: TokenBreakdown
     public var cost: CostResult
+    /// Usage-M2b:per-project 的模型明細,鍵同 `projectSummaries`(`projectId ?? "(unknown project)"`),
+    /// 與 `projects` 1:1 對齊。於 page-build 一次建好(`projectSummariesWithModels`,同一趟 walk),
+    /// 隨 page 的快取/reload 生命週期。popover/hover 只讀此切片,絕不重掃或呼叫 coordinator(§10)。
+    public var projectModels: [String: [ModelUsageSummary]]
+}
+
+public extension ProjectPageData {
+    /// Usage-M2b popover/hover 的**唯一**讀取路徑(§9.3 n7 / §10:互動時零 coordinator/page lookup):
+    /// 讀已建好的切片,**miss → 空陣列**,絕不 fetch/scan。這是「interaction 只消費既建投影」的契約據點。
+    func projectModelRows(forKey key: String) -> [ModelUsageSummary] { projectModels[key] ?? [] }
 }
 
 /// Trends 分頁 / 熱圖所需的聚合(純本機、跨 actor 傳遞的不可變值)。
@@ -205,6 +215,15 @@ public actor UsageCoordinator {
     /// 次數。快取命中與否對回傳值不可觀測(等價即正確),測試需以此判別「該 miss 有 miss、
     /// 該 hit 仍 hit」;production 無讀者。
     var trendsRecomputeCount = 0
+    /// internal(tests-only via `@testable`,同 `trendsRecomputeCount` 慣例):`projectPage` 的**呼叫**
+    /// 次數(**含快取命中** —— §10/r3-D 契約禁「互動時連 cached lookup」,故計 lookup 本身而非重算)。
+    /// M2b popover/hover 只讀 `page.projectModels` 值、不經 coordinator,故單次 build 後此計數不得再動;
+    /// `M-HOVERSCAN`(popover 改呼叫 `projectPage`)使之增長 → `testM2b_ProjectionBuiltOncePerPage…` RED。
+    /// production 無讀者。
+    var projectPageLookupCount = 0
+    /// internal(tests-only via `@testable`):把 ledger 的全掃描計數透出,供測試證明 **一次 `projectPage`
+    /// build 端到端剛好 3 walks**(totals + `projectSummariesWithModels` + `modelSummaries`);M2b 折入不增第 4 趟。
+    var ledgerForEachWalkCount: Int { ledger.forEachEventWalkCount }
     /// 價目世代:使用者覆寫寫入時 +1(價目影響所有成本聚合)。
     private var pricingStamp: UInt64 = 0
     /// F17 信任層(契約 v5 §1/§3):per-provider local 源的觀測記錄與遲滯 stale 旗標。
@@ -1383,6 +1402,7 @@ public actor UsageCoordinator {
     }
 
     public func projectPage(range: DateInterval) -> ProjectPageData {
+        projectPageLookupCount += 1   // §10 seam:計「lookup 本身」(含快取命中);互動時讀 page 值不經此(M-HOVERSCAN)
         // v3.3 §1:product 查詢區間 clamp 進 retained window(「All-time」= all retained
         // history;起點早於 cutoff 的請求收斂到 cutoff,end 不動)。
         let range = UsageLedger.clampToRetained(range, retentionDays: settings.retentionDays)
@@ -1407,12 +1427,16 @@ public actor UsageCoordinator {
             totals = totals + e.tokens
             cost = cost + self.pricing.cost(of: e)
         }
+        // M2b:projects 與 projectModels 由**同一趟** walk 產出(§3/§10 M1);page-build 仍是 3 walks
+        // (此處 totals + projectSummariesWithModels + modelSummaries),不增。
+        let (projects, projectModels) = ledger.projectSummariesWithModels(in: range, pricing: pricing)
         let data = ProjectPageData(
             range: range,
-            projects: ledger.projectSummaries(in: range, pricing: pricing),
+            projects: projects,
             models: ledger.modelSummaries(in: range, pricing: pricing),
             totals: totals,
-            cost: cost
+            cost: cost,
+            projectModels: projectModels
         )
         cachedProjectPage = (rev, pricingStamp, range.start, range.end, data)
         return data

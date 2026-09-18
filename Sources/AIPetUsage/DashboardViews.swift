@@ -964,7 +964,7 @@ struct ProjectsView: View {
                     StatTile(title: "Models", value: "\(page.models.count)")
                 }
 
-                ProjectTable(projects: page.projects)
+                ProjectTable(projects: page.projects, projectModels: page.projectModels)
 
                 // Usage-M2a — global provider-scoped "By model" breakdown(消費既有 page.models,
                 // 身分已硬化;純顯示、零重掃、無 provider-limit %、無 sessions)。
@@ -985,6 +985,13 @@ struct ProjectsView: View {
 
 struct ProjectTable: View {
     let projects: [ProjectSummary]
+    // Usage-M2b:per-project 模型明細(page-build 已建好、已依 §9.3 全序排好)。drill-down 互動**只讀此切片**
+    // ——view 直接讀 `projectModels[key] ?? []`(與 `ProjectPageData.projectModelRows(forKey:)` seam 同 miss→空
+    // 語意;該 seam 供 §10 no-lookup 測試),絕不重掃或呼叫 coordinator。**必填**(無預設):
+    // 漏傳會編成空 drill-down 而 UsageCore 測試偵測不到(impl-xcheck grok/sol footgun),故強制在 call site 供給。
+    let projectModels: [String: [ModelUsageSummary]]
+    // 釘選(pinned)的專案 key —— nil = 無 popover。點擊 disclosure / 鍵盤 Return/Space 切換;Esc 關閉。
+    @State private var pinnedKey: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1024,11 +1031,26 @@ struct ProjectTable: View {
             Text("Top model").frame(width: 150, alignment: .leading)
             Text("Last active").frame(width: 78, alignment: .trailing)
             Text("Share").frame(width: 52, alignment: .trailing)
+            Color.clear.frame(width: 22, height: 1)   // disclosure 欄對齊(M2b drill-down affordance)
         }
         .font(Theme.FontScale.tableHeader)
         .foregroundStyle(Theme.textSecondary)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
+    }
+
+    // hover 預覽(§9.3:輕量預覽,同 Agents 欄 .help 慣例):純讀既建切片,top-3 封閉字串,零重掃。
+    private func hoverPreview(_ key: String) -> String {
+        let rows = projectModels[key] ?? []
+        guard !rows.isEmpty else { return "No model usage" }
+        let top = rows.prefix(3).map {
+            "\(ProviderBrands.brand(for: $0.providerId).shortName) \(PrivacyRedaction.modelLabel(attribution: $0.attribution)) \(tk($0.tokens.total))"
+        }
+        return "Models — " + top.joined(separator: " · ") + (rows.count > 3 ? " +\(rows.count - 3) more" : "")
+    }
+
+    private func pinnedBinding(_ key: String) -> Binding<Bool> {
+        Binding(get: { pinnedKey == key }, set: { pinnedKey = $0 ? key : nil })
     }
 
     private func row(_ p: ProjectSummary, shareMille: Int) -> some View {
@@ -1057,10 +1079,130 @@ struct ProjectTable: View {
             Text(ReportGenerator.milleLabel(shareMille, nonZero: p.tokens.total > 0)).monospacedDigit()
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 52, alignment: .trailing)
+            // M2b drill-down affordance:disclosure(chevron)—— 點擊 / Return / Space 開釘選 popover,
+            // hover 顯示輕量預覽(.help),Esc 關閉。互動只讀 projectModels[key](既建切片),零重掃/零 coordinator。
+            Button {
+                pinnedKey = (pinnedKey == p.projectId) ? nil : p.projectId
+            } label: {
+                Image(systemName: pinnedKey == p.projectId ? "chevron.down" : "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(width: 22, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(hoverPreview(p.projectId))
+            .accessibilityLabel("Show model breakdown for \(p.projectName)")
+            .popover(isPresented: pinnedBinding(p.projectId), arrowEdge: .trailing) {
+                ModelDrilldownPopover(projectName: p.projectName,
+                                      rows: projectModels[p.projectId] ?? [],   // §9.3 n7:miss → 空;純讀既建切片
+                                      onDismiss: { pinnedKey = nil })
+            }
         }
         .font(.callout)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Usage-M2b:project → provider → model drill-down popover(§9.3)
+// 平面清單(跨 provider),**可見 Provider 欄**;欄 = Provider | Model | In | Out | Cache | Total | Cost | Share;
+// share 為**組內(專案內)**配額(D2);top 12 於自身 bounded 捲動區可見、其餘捲動揭露(「+K more」);
+// 鍵盤可達、Esc 關閉;模型名走封閉 modelLabel(路徑形 → basename;不外洩原始 id / 專案路徑)。
+struct ModelDrilldownPopover: View {
+    let projectName: String
+    let rows: [ModelUsageSummary]      // 已依 §9.3 全序 (−total, providerId, unattributedLast, exactModelId) 排好
+    let onDismiss: () -> Void
+
+    private let visibleCap = 12        // top 12 可見(n10);其餘於 bounded 捲動區揭露
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text(projectName).font(Theme.FontScale.cardTitle).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Done", action: onDismiss).keyboardShortcut(.cancelAction)   // Esc / 鍵盤關閉
+            }
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+            Divider()
+            header
+            Divider()
+            if rows.isEmpty {
+                Text("No model usage in this project.")
+                    .font(Theme.FontScale.secondaryInfo)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity).padding(.vertical, 20)
+            } else {
+                // share = 組內(專案內)配額(和恆 ≤100%);全集列 → 分母即列和(§4/D2)。
+                let mille = ReportGenerator.rowShares(
+                    rows: rows.map { $0.tokens.total },
+                    periodTotal: rows.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, m in
+                            row(m, shareMille: mille[index])
+                                .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
+                        }
+                        // 「+K more」footer 於 bounded 捲動區**內**、清單尾端(§9.3:scroll-to-reveal inside the
+                        // scroll area;impl-xcheck luna/sol —— 不再固定於捲動區外)。
+                        if rows.count > visibleCap {
+                            Text("+\(rows.count - visibleCap) more — scroll")
+                                .font(Theme.FontScale.secondaryInfo)
+                                .foregroundStyle(Theme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 5)
+                        }
+                    }
+                }
+                .frame(maxHeight: CGFloat(visibleCap) * 26)   // ~top-12 可見;其餘(含 footer)於捲動區內揭露
+            }
+        }
+        .frame(width: 760)             // bounded 寬度(絕不覆蓋整窗);Model 欄得 ~212pt 可讀(impl-xcheck sol)
+        .padding(.bottom, 6)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Provider").frame(width: 78, alignment: .leading)
+            Text("Model").frame(maxWidth: .infinity, alignment: .leading)
+            Text("In").frame(width: 62, alignment: .trailing)
+            Text("Out").frame(width: 62, alignment: .trailing)
+            Text("Cache").frame(width: 62, alignment: .trailing)
+            Text("Total").frame(width: 70, alignment: .trailing)
+            Text("Cost").frame(width: 86, alignment: .trailing)
+            Text("Share").frame(width: 48, alignment: .trailing)
+        }
+        .font(Theme.FontScale.tableHeader)
+        .foregroundStyle(Theme.textSecondary)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+
+    private func row(_ m: ModelUsageSummary, shareMille: Int) -> some View {
+        // 模型名走封閉 modelLabel(路徑形 → basename;.unattributed → "unattributed";"" → "empty model id")。
+        let label = PrivacyRedaction.modelLabel(attribution: m.attribution)
+        let brand = ProviderBrands.brand(for: m.providerId)
+        let cost = costDisplay(m.cost)
+        return HStack(spacing: 8) {
+            // 可見 Provider 欄(r4-B):跨 provider 平面清單中,同模型/未歸屬列以此區辨,非只在排序鍵/VoiceOver。
+            Text(brand.shortName).lineLimit(1).foregroundStyle(Theme.textSecondary)
+                .frame(width: 78, alignment: .leading).help(brand.displayName)
+            Text(label).lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading).help(label)
+            Text(tk(m.tokens.input)).monospacedDigit().frame(width: 62, alignment: .trailing)
+            Text(tk(m.tokens.output)).monospacedDigit().frame(width: 62, alignment: .trailing)
+            Text(tk(m.tokens.cacheRead + m.tokens.cacheWrite)).monospacedDigit().frame(width: 62, alignment: .trailing)
+            Text(tk(m.tokens.total)).monospacedDigit().frame(width: 70, alignment: .trailing)
+            // §7:cost 缺失絕不像 $0(costDisplay.value 已保證);caption(未計價量 / opencode-reported 出處)於 .help。
+            Text(cost.value).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                .frame(width: 86, alignment: .trailing).help(cost.caption ?? "")
+            Text(ReportGenerator.milleLabel(shareMille, nonZero: m.tokens.total > 0)).monospacedDigit()
+                .foregroundStyle(Theme.textSecondary).frame(width: 48, alignment: .trailing)
+        }
+        .font(.callout)
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .accessibilityElement(children: .combine)
+        // VoiceOver(§9.3):「<provider> <model>: <total> tokens, <cost>」
+        .accessibilityLabel("\(brand.displayName) \(label): \(m.tokens.total) tokens, \(cost.value)")
     }
 }
 
