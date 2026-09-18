@@ -1104,4 +1104,39 @@ runSuite("CrashDuringAttemptContractTests", [
     ("testCrashDuringAttemptContractCase", crashDuring.testCrashDuringAttemptContractCase),
 ])
 
+// Usage-M2a / M0-3 — provider-scoped unattributed contract + per-model breakdown.
+let unattributed = UnattributedModelTests()
+runSuite("UnattributedModelTests", [
+    // Layer A — pin-current (green on main; rewritten on landing to show the flip)
+    ("testPinCurrent_NilModelRowsAreAggregatedUnderMagicUnknownKey", unattributed.testPinCurrent_NilModelRowsAreAggregatedUnderMagicUnknownKey),
+    ("testPinCurrent_NilModelCostIsUnpricedNotZeroTokens", unattributed.testPinCurrent_NilModelCostIsUnpricedNotZeroTokens),
+    ("testPinCurrent_TopModelReportsMagicStringWhenUnattributedDominates", unattributed.testPinCurrent_TopModelReportsMagicStringWhenUnattributedDominates),
+    // Layer B — target contract (5 M0-3 clauses)
+    ("testUnattributed_NoSilentDrop_PerModelSumEqualsProviderTotal", unattributed.testUnattributed_NoSilentDrop_PerModelSumEqualsProviderTotal),
+    ("testUnattributed_NoGuessing_SameFileNeighbourDoesNotAbsorbNilRows", unattributed.testUnattributed_NoGuessing_SameFileNeighbourDoesNotAbsorbNilRows),
+    ("testUnattributed_ProviderScopedBuckets_NeverMergeAcrossProviders", unattributed.testUnattributed_ProviderScopedBuckets_NeverMergeAcrossProviders),
+    ("testUnattributed_ExplicitAttributionReplacesMagicString", unattributed.testUnattributed_ExplicitAttributionReplacesMagicString),
+    ("testUnattributed_TokensCountedCostUnavailable", unattributed.testUnattributed_TokensCountedCostUnavailable),
+])
+
+let modelBreakdownM2a = ModelBreakdownM2aTests()
+runSuite("ModelBreakdownM2aTests", [
+    ("testM2a_ExactModelIds_Fable5NotMergedWithFable51", modelBreakdownM2a.testM2a_ExactModelIds_Fable5NotMergedWithFable51),
+    ("testM2a_ExactModelIds_SlashModelIdDoesNotCollide", modelBreakdownM2a.testM2a_ExactModelIds_SlashModelIdDoesNotCollide),
+    ("testM2a_UnattributedNotListedAsPseudoModelInPricingSettings", modelBreakdownM2a.testM2a_UnattributedNotListedAsPseudoModelInPricingSettings),
+    ("testM2a_GlobalModelTokenSumEqualsProviderTotal", modelBreakdownM2a.testM2a_GlobalModelTokenSumEqualsProviderTotal),
+    ("testM2a_DeterministicOrdering_TotalOrderStableAcrossRuns", modelBreakdownM2a.testM2a_DeterministicOrdering_TotalOrderStableAcrossRuns),
+    ("testM2a_InOutCacheTotalConservation", modelBreakdownM2a.testM2a_InOutCacheTotalConservation),
+    ("testM2a_CostPartialAndUnavailable", modelBreakdownM2a.testM2a_CostPartialAndUnavailable),
+    ("testM2a_UnattributedWithProviderCostIsPriced", modelBreakdownM2a.testM2a_UnattributedWithProviderCostIsPriced),
+    ("testM2a_ProjectionCarriesNoProviderLimitPercent", modelBreakdownM2a.testM2a_ProjectionCarriesNoProviderLimitPercent),
+    ("testM2a_GrokRowsAreSessionLevel_InputExcludesCache", modelBreakdownM2a.testM2a_GrokRowsAreSessionLevel_InputExcludesCache),
+    ("testM2a_ProjectTableTopModelIsRedacted", modelBreakdownM2a.testM2a_ProjectTableTopModelIsRedacted),
+    // impl-xcheck r1 clearing additions (tie-breaks, aggregation collision, canonical id, report topModel)
+    ("testM2a_DeterministicOrdering_TieBreaks", modelBreakdownM2a.testM2a_DeterministicOrdering_TieBreaks),
+    ("testM2a_SlashAndEmptyIdAggregationCollisionFree", modelBreakdownM2a.testM2a_SlashAndEmptyIdAggregationCollisionFree),
+    ("testM2a_RowIdIsCanonicalEqualityConsistent", modelBreakdownM2a.testM2a_RowIdIsCanonicalEqualityConsistent),
+    ("testM2a_ReportTopModelEmptyIdRendersClosedLabel", modelBreakdownM2a.testM2a_ReportTopModelEmptyIdRendersClosedLabel),
+])
+
 finishTestRun()

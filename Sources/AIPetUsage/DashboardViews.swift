@@ -7,27 +7,9 @@ import PetCore
 func tk(_ n: Int) -> String { ReportGenerator.fmtTokens(n) }
 
 /// 成本顯示規則(review #7):定價缺失時不得看起來像「花費 $0」。
-/// - 全部/幾乎全部未計價 → 「Pricing unavailable」+ 未計價量
-/// - 部分未計價 → 「$X.XX+」,caption 說明 + 的含義
-func costDisplay(_ c: CostResult) -> (value: String, caption: String?) {
-    if c.unknownModelTokens > 0 && c.knownUSD < 0.005 {
-        return ("Pricing unavailable", "\(tk(c.unknownModelTokens)) tokens unpriced")
-    }
-    if c.unknownModelTokens > 0 {
-        // 混合情境(部分 unpriced + 部分 opencode-reported)也不得吞掉出處(R2 codex F4)。
-        let provenance = c.providerReportedUSD > 0 ? "; incl. opencode-reported (est.)" : ""
-        return (ReportGenerator.fmtUSD(c.knownUSD) + "+",
-                "+ means \(tk(c.unknownModelTokens)) tokens are unpriced\(provenance)")
-    }
-    // provider 回報的成本要標示出處(R1 codex C4):不得籠統寫成「cache rates estimated」。
-    if c.providerReportedUSD > 0 {
-        let all = abs(c.providerReportedUSD - c.knownUSD) < 0.005
-        return (ReportGenerator.fmtUSD(c.knownUSD),
-                all ? "opencode-reported (models.dev rates, est.)"
-                    : "incl. \(ReportGenerator.fmtUSD(c.providerReportedUSD)) opencode-reported (est.)")
-    }
-    return (ReportGenerator.fmtUSD(c.knownUSD), c.isEstimated ? "cache rates estimated" : nil)
-}
+/// **單一 sink 已移入 UsageCore.ReportGenerator.costDisplay**(§7;M2a 測試可斷言、GUI 與報告共用一份)。
+/// 此處保留薄委派,GUI 呼叫點不變。
+func costDisplay(_ c: CostResult) -> (value: String, caption: String?) { ReportGenerator.costDisplay(c) }
 
 func costText(_ c: CostResult) -> String { costDisplay(c).value }
 
@@ -983,6 +965,13 @@ struct ProjectsView: View {
                 }
 
                 ProjectTable(projects: page.projects)
+
+                // Usage-M2a — global provider-scoped "By model" breakdown(消費既有 page.models,
+                // 身分已硬化;純顯示、零重掃、無 provider-limit %、無 sessions)。
+                Text("By model")
+                    .font(Theme.FontScale.cardTitle)
+                    .padding(.top, 4)
+                ByModelTable(models: page.models)
             } else {
                 Spacer()
                 ProgressView("Loading…").frame(maxWidth: .infinity)
@@ -1057,13 +1046,121 @@ struct ProjectTable: View {
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 130, alignment: .leading)
                 .help(p.providers.map { ProviderBrands.brand(for: $0).displayName }.joined(separator: ", "))
-            Text(p.topModel ?? "—").lineLimit(1)
+            // P-B co-fix(§16):topModel 走封閉 attributedModelLabel(路徑形 → basename;nil → "—";
+            // "" → "empty model id"),與 HTML 報告的 redact 姿態一致;絕不外洩原始路徑形 modelId。
+            Text(PrivacyRedaction.attributedModelLabel(modelId: p.topModel)).lineLimit(1)
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 150, alignment: .leading)
             Text(timeAgo(p.lastActive))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 78, alignment: .trailing)
             Text(ReportGenerator.milleLabel(shareMille, nonZero: p.tokens.total > 0)).monospacedDigit()
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 52, alignment: .trailing)
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Usage-M2a：global provider-scoped「By model」表格(§9.2)
+// 消費已依 §2 全序建好的 page.models(providers 連續、組內排序皆決定性);純顯示、零重掃、
+// 於自身容器內捲動(n12);無 provider-limit %、無 sessions。
+struct ByModelTable: View {
+    let models: [ModelUsageSummary]
+
+    // provider-連續分組(保留建構器的決定性順序)。
+    private var groups: [(provider: String, rows: [ModelUsageSummary])] {
+        var out: [(provider: String, rows: [ModelUsageSummary])] = []
+        for m in models {
+            if !out.isEmpty, out[out.count - 1].provider == m.providerId {
+                out[out.count - 1].rows.append(m)
+            } else {
+                out.append((provider: m.providerId, rows: [m]))
+            }
+        }
+        return out
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            if models.isEmpty {
+                Text("No model usage in this range.")
+                    .font(Theme.FontScale.secondaryInfo)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(groups, id: \.provider) { group in
+                            groupSection(group)
+                        }
+                    }
+                }
+                .frame(maxHeight: 360)
+            }
+        }
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Model").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Input").frame(width: 72, alignment: .trailing)
+            Text("Output").frame(width: 72, alignment: .trailing)
+            Text("Cache").frame(width: 72, alignment: .trailing)
+            Text("Total").frame(width: 78, alignment: .trailing)
+            Text("Est. cost").frame(width: 86, alignment: .trailing)
+            Text("Share").frame(width: 52, alignment: .trailing)
+        }
+        .font(Theme.FontScale.tableHeader)
+        .foregroundStyle(Theme.textSecondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+    }
+
+    // 每個 provider 一段:表頭下的 provider 小標 + 該組列;share 為**組內**配額(§2/D2:within-provider)。
+    private func groupSection(_ group: (provider: String, rows: [ModelUsageSummary])) -> some View {
+        let mille = ReportGenerator.rowShares(
+            rows: group.rows.map { $0.tokens.total },
+            periodTotal: group.rows.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(ProviderBrands.brand(for: group.provider).displayName)
+                .font(Theme.FontScale.tableHeader)
+                .foregroundStyle(Theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.top, 9)
+                .padding(.bottom, 2)
+            ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, m in
+                row(m, shareMille: mille[index])
+                    .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
+            }
+        }
+    }
+
+    private func row(_ m: ModelUsageSummary, shareMille: Int) -> some View {
+        // 模型名走封閉 modelLabel(路徑形 → basename;.unattributed → "unattributed";"" → "empty model id")。
+        let label = PrivacyRedaction.modelLabel(attribution: m.attribution)
+        let cost = costDisplay(m.cost)   // value + caption(未計價量 / opencode-reported 出處)
+        return HStack(spacing: 8) {
+            Text(label).lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(label)
+            Text(tk(m.tokens.input)).monospacedDigit().frame(width: 72, alignment: .trailing)
+            Text(tk(m.tokens.output)).monospacedDigit().frame(width: 72, alignment: .trailing)
+            Text(tk(m.tokens.cacheRead + m.tokens.cacheWrite)).monospacedDigit().frame(width: 72, alignment: .trailing)
+            Text(tk(m.tokens.total)).monospacedDigit().frame(width: 78, alignment: .trailing)
+            // §7:cost 缺失絕不像 $0(costDisplay.value 已保證);caption(未計價量 + opencode-reported 出處)
+            // 在 dense 表格以 .help 呈現,不遺失 provenance(impl-xcheck r2 luna+sol)。
+            Text(cost.value).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                .frame(width: 86, alignment: .trailing)
+                .help(cost.caption ?? "")
+            Text(ReportGenerator.milleLabel(shareMille, nonZero: m.tokens.total > 0)).monospacedDigit()
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 52, alignment: .trailing)
         }

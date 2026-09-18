@@ -930,7 +930,9 @@ public final class UsageLedger {
             acc.tokens += e.tokens.total
             acc.byProvider[e.providerId, default: 0] += e.tokens.total
             acc.byProject[e.projectName ?? "(unknown)", default: 0] += e.tokens.total
-            acc.byModel[e.modelId ?? "unknown", default: 0] += e.tokens.total
+            // topModel 只自**歸屬**模型選出(§5):nil-model 事件不參與、也不再合成 "unknown" 字串;
+            // 字面 "unknown" 是真實模型仍計入。無歸屬模型時 topModel = nil(絕不合成)。
+            if let mid = e.modelId { acc.byModel[mid, default: 0] += e.tokens.total }
             if let pricing { acc.cost = acc.cost + pricing.cost(of: e) }   // 逐筆累加 ≡ cost(of: [events])
             buckets[day] = acc
         }
@@ -1013,7 +1015,8 @@ public final class UsageLedger {
             var acc = groups[e.projectId ?? "(unknown project)"] ?? Acc()
             acc.tokens = acc.tokens + e.tokens
             acc.cost = acc.cost + pricing.cost(of: e)
-            acc.modelTokens[e.modelId ?? "unknown", default: 0] += e.tokens.total
+            // topModel 只自**歸屬**模型選出(§5):nil-model 不參與、不合成 "unknown";nil when none。
+            if let mid = e.modelId { acc.modelTokens[mid, default: 0] += e.tokens.total }
             acc.providers.insert(e.providerId)
             acc.lastActive = max(acc.lastActive ?? .distantPast, e.timestamp)
             acc.lastProjectName = .some(e.projectName)
@@ -1038,24 +1041,39 @@ public final class UsageLedger {
     }
 
     public func modelSummaries(in interval: DateInterval, pricing: PricingRegistry) -> [ModelUsageSummary] {
-        struct Acc {
-            var providerId: String
-            var modelId: String
-            var tokens = TokenBreakdown.zero
-            var cost = CostResult.zero
-        }
-        var groups: [String: Acc] = [:]
+        var groups: [ModelAttributionKey: (tokens: TokenBreakdown, cost: CostResult)] = [:]
         forEachEvent(in: interval) { e in
-            let key = e.providerId + "/" + (e.modelId ?? "unknown")
-            var acc = groups[key] ?? Acc(providerId: e.providerId, modelId: e.modelId ?? "unknown")
+            // nil modelId → .unattributed;字面 "unknown"/"" 保留為精確 .model(id:)(§5,不合併)。
+            let key = ModelAttributionKey(providerId: e.providerId,
+                                          attribution: e.modelId.map { ModelAttribution.model(id: $0) } ?? .unattributed)
+            var acc = groups[key] ?? (.zero, .zero)
             acc.tokens = acc.tokens + e.tokens
             acc.cost = acc.cost + pricing.cost(of: e)
             groups[key] = acc
         }
-        return groups.values.map {
-            ModelUsageSummary(providerId: $0.providerId, modelId: $0.modelId, tokens: $0.tokens, cost: $0.cost)
+        return Self.modelRows(from: groups)
+    }
+
+    /// 共用列建構器(§4):M2a 與 M2b 共**一份** token/cost 語意 + 決定性全序 —— 不得各自實作。
+    /// M2a 餵 per-provider-global accumulator;M2b(後續)餵 per-project accumulator。
+    static func modelRows(from groups: [ModelAttributionKey: (tokens: TokenBreakdown, cost: CostResult)]) -> [ModelUsageSummary] {
+        let rows = groups.map {
+            ModelUsageSummary(providerId: $0.key.providerId, attribution: $0.key.attribution,
+                              tokens: $0.value.tokens, cost: $0.value.cost)
         }
-        .sorted { $0.tokens.total > $1.tokens.total }
+        var providerTotals: [String: Int] = [:]
+        for r in rows { providerTotals[r.providerId, default: 0] += r.tokens.total }
+        // 全序(§2):provider 總量降序 → providerId 升序 → 組內 total 降序 → unattributed 殿後 →
+        // exact modelId 升序。不依賴 dict 迭代序或不穩定排序(相同 key 已去重,故此序為全序)。
+        return rows.sorted { a, b in
+            let pa = providerTotals[a.providerId] ?? 0, pb = providerTotals[b.providerId] ?? 0
+            if pa != pb { return pa > pb }
+            if a.providerId != b.providerId { return a.providerId < b.providerId }
+            if a.tokens.total != b.tokens.total { return a.tokens.total > b.tokens.total }
+            let au = (a.modelId == nil), bu = (b.modelId == nil)   // 同 total 時 unattributed 殿後
+            if au != bu { return !au }
+            return (a.modelId ?? "") < (b.modelId ?? "")
+        }
     }
 }
 

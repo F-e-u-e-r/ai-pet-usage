@@ -490,7 +490,7 @@ struct LimitsPricingSettings: View {
                 ForEach(seenModels, id: \.model.id) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text("\(entry.model.providerId)/\(entry.model.modelId)").font(.callout)
+                            Text("\(entry.model.providerId)/\(PrivacyRedaction.modelLabel(attribution: entry.model.attribution))").font(.callout)
                             Spacer()
                             if entry.model.cost.providerReportedUSD > 0 {
                                 // provider 回報成本**先判**(R3 codex F1):override 存在也不得誤標
@@ -533,9 +533,11 @@ struct LimitsPricingSettings: View {
     }
 
     private func saveOverride(_ m: ModelUsageSummary) {
+        // .unattributed(nil modelId)無模型可定價 —— D1 已將其自清單過濾,此 guard 為防禦性兜底。
+        guard let modelId = m.modelId else { return }
         guard let input = Double(inputPrice), let output = Double(outputPrice) else { return }
         let price = ModelPrice(
-            providerId: m.providerId, modelId: m.modelId, displayName: m.modelId,
+            providerId: m.providerId, modelId: modelId, displayName: modelId,
             inputPerMillion: input, outputPerMillion: output,
             cacheReadPerMillion: Double(cachePrice),
             effectiveFrom: PetStateData.dayKey(for: Date()),

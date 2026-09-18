@@ -1525,7 +1525,8 @@ public actor UsageCoordinator {
             } else if m.cost.unknownModelTokens > 0 {
                 // provider 自行回報成本的模型(如 opencode/kimi:unknownModelTokens == 0、
                 // providerReportedUSD > 0)不是「未定價」——不得列入 unknown 誤導讀者。
-                unknown.append((m.providerId + "/" + m.modelId, m.tokens.total))
+                // 標籤走封閉 modelLabel(unattributed → "unattributed";modelId 現為 String?)。
+                unknown.append((m.providerId + "/" + PrivacyRedaction.modelLabel(attribution: m.attribution), m.tokens.total))
             }
         }
 
@@ -1571,9 +1572,11 @@ public actor UsageCoordinator {
     public func pricingEntries() -> [ModelPrice] { pricing.entries }
 
     public func modelsSeenWithPricing(days: Int = 30, now: Date = Date()) -> [(model: ModelUsageSummary, price: ModelPrice?)] {
-        ledger.modelSummaries(in: .trailing(days: days, now: now), pricing: pricing).map {
-            ($0, pricing.price(providerId: $0.providerId, modelId: $0.modelId))
-        }
+        // §5/D1:pricing-override 面板列出「可定價的模型」。`.unattributed` 是無模型可定價的桶
+        // (override 無法為 nil-model 定價),故排除 —— 亦確保絕不出現舊 `?? "unknown"` 偽模型列。
+        ledger.modelSummaries(in: .trailing(days: days, now: now), pricing: pricing)
+            .filter { $0.attribution != .unattributed }
+            .map { ($0, pricing.price(providerId: $0.providerId, modelId: $0.modelId)) }
     }
 
     // MARK: F17 信任層

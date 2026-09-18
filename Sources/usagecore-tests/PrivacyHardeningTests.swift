@@ -205,9 +205,9 @@ final class ReportRedactionTests: XCTestCase {
     func testReportScrubsPathShapedModelIdAndPricingSource() throws {
         var proj = project(id: "/tmp/p", name: "demo")
         proj.topModel = "/Users/alice/SecretClient/model.bin"
-        let models = [ModelUsageSummary(providerId: "codex", modelId: "/Users/alice/SecretClient/model.bin",
+        let models = [ModelUsageSummary(providerId: "codex", attribution: .model(id: "/Users/alice/SecretClient/model.bin"),
                                         tokens: TokenBreakdown(input: 100), cost: .zero),
-                      ModelUsageSummary(providerId: "codex", modelId: "anthropic/claude-x",
+                      ModelUsageSummary(providerId: "codex", attribution: .model(id: "anthropic/claude-x"),
                                         tokens: TokenBreakdown(input: 50), cost: .zero)]
         let prices = [ModelPrice(providerId: "codex", modelId: "/Users/alice/SecretClient/model.bin",
                                  displayName: "x", inputPerMillion: 1, outputPerMillion: 2,
