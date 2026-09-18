@@ -822,8 +822,14 @@ public final class UsageLedger {
     /// 走訪的是「進入時的快照」:`snapshot` 是 COW 借用(無 mutation 時零複製),
     /// 若 body 重入而變異 ledger(append/reset/…),self.events 換新緩衝、快照仍完整
     /// 有效 —— 不會越界 trap,也不會走訪到混合狀態(xcheck r1)。
+    /// internal(tests-only via `@testable`,同 `UsageCoordinator.trendsRecomputeCount` 慣例):`forEachEvent`
+    /// 的**呼叫**次數 = 全帳本掃描次數。M2b perf gate(§10):`projectSummariesWithModels` 折入 `projectSummaries`
+    /// 的**同一趟**walk,故其掃描數必 == 舊 `projectSummaries`(=1);互動(讀已建切片)必 == 0。production 無讀者。
+    var forEachEventWalkCount = 0
+
     public func forEachEvent(in interval: DateInterval, providerId: String? = nil,
                              _ body: (UsageEvent) -> Void) {
+        forEachEventWalkCount += 1
         let snapshot = events
         for i in indexRange(of: interval) {
             let e = snapshot[i]
@@ -998,6 +1004,26 @@ public final class UsageLedger {
     }
 
     public func projectSummaries(in interval: DateInterval, pricing: PricingRegistry) -> [ProjectSummary] {
+        projectAggregation(in: interval, pricing: pricing, collectModels: false).projects
+    }
+
+    /// Usage-M2b(§3/§10):與 `projectSummaries` **同一趟 walk** 同時產出 per-project 的模型明細
+    /// `projectModels`,鍵與 `projectSummaries` 逐字相同(`projectId ?? "(unknown project)"`),
+    /// 故與 `projects` 1:1 對齊(INV-2/INV-6)。**不新增任何 page-build walk、不保留 `UsageEvent`**。
+    /// token/cost 語意沿用 M2a 的共用 `modelRows` 建構器;明細列以 §9.3 的**跨 provider 全序**
+    /// `projectDrilldownOrder` 排好後交付,popover 純顯示、零重掃、零 coordinator lookup。
+    public func projectSummariesWithModels(in interval: DateInterval, pricing: PricingRegistry)
+        -> (projects: [ProjectSummary], projectModels: [String: [ModelUsageSummary]]) {
+        projectAggregation(in: interval, pricing: pricing, collectModels: true)
+    }
+
+    /// 共用單趟聚合核心。`collectModels == false`(report / dashboard-topProjects / M0-3 tests):
+    /// 不做**新增的 M2b** per-model 累加(`Acc.models` 與回傳 `projectModels` 保持空 dict —— Swift 空字典在
+    /// 首次插入前不配置堆積,成本可略);legacy `acc.modelTokens`(供 topModel,非 M2b)照舊累加 —— 整體行為
+    /// 與舊 `projectSummaries` 逐字等價。
+    /// `true`(僅 `projectPage`):額外把 M2b 明細折入**同一趟** `forEachEvent`(§3/§10 M1)。
+    private func projectAggregation(in interval: DateInterval, pricing: PricingRegistry, collectModels: Bool)
+        -> (projects: [ProjectSummary], projectModels: [String: [ModelUsageSummary]]) {
         // 單趟累加(取代「分組保留整組事件再各自 reduce」):All time 下不再把 9 萬+ 筆
         // 複製進 per-project 陣列;成本逐筆累加 ≡ cost(of: [events])(定義即 reduce)。
         struct Acc {
@@ -1007,24 +1033,44 @@ public final class UsageLedger {
             var providers: Set<String> = []
             var lastActive: Date?
             var lastProjectName: String??   // 語意同舊 group.last?.projectName(最後一筆,可為 nil)
+            // M2b:per (provider, attribution) 的完整 breakdown + cost。僅 collectModels 時累加,
+            // 且**不保留事件**(compact accumulator,守 RAM P0 的 no-copy 性質)。
+            var models: [ModelAttributionKey: (tokens: TokenBreakdown, cost: CostResult)] = [:]
         }
         var periodTotal = 0
         var groups: [String: Acc] = [:]
         forEachEvent(in: interval) { e in
             periodTotal += e.tokens.total
-            var acc = groups[e.projectId ?? "(unknown project)"] ?? Acc()
+            let ec = pricing.cost(of: e)                    // 每筆只算一次,供 project 與 per-model 共用(不重複計價)
+            let pkey = e.projectId ?? "(unknown project)"
+            var acc = groups[pkey] ?? Acc()
             acc.tokens = acc.tokens + e.tokens
-            acc.cost = acc.cost + pricing.cost(of: e)
+            acc.cost = acc.cost + ec
             // topModel 只自**歸屬**模型選出(§5):nil-model 不參與、不合成 "unknown";nil when none。
             if let mid = e.modelId { acc.modelTokens[mid, default: 0] += e.tokens.total }
+            if collectModels {
+                // nil modelId → .unattributed;字面 "unknown"/"" 保留為精確 .model(id:)(§5,不合併);
+                // 成對雜湊鍵不串接分隔符(同 modelSummaries)。
+                let mkey = ModelAttributionKey(providerId: e.providerId,
+                                               attribution: e.modelId.map { ModelAttribution.model(id: $0) } ?? .unattributed)
+                var m = acc.models[mkey] ?? (.zero, .zero)
+                m.tokens = m.tokens + e.tokens
+                m.cost = m.cost + ec
+                acc.models[mkey] = m
+            }
             acc.providers.insert(e.providerId)
             acc.lastActive = max(acc.lastActive ?? .distantPast, e.timestamp)
             acc.lastProjectName = .some(e.projectName)
-            groups[e.projectId ?? "(unknown project)"] = acc
+            groups[pkey] = acc
         }
         let denom = max(1, periodTotal)
-        return groups.map { projectId, acc in
-            ProjectSummary(
+        var projectModels: [String: [ModelUsageSummary]] = [:]
+        let projects = groups.map { projectId, acc -> ProjectSummary in
+            if collectModels {
+                // 共用 M2a 建構器保 token/cost 語意(§4/M-DIVERGE);再套 §9.3 跨 provider 全序供 popover 直接顯示。
+                projectModels[projectId] = Self.projectDrilldownOrder(Self.modelRows(from: acc.models))
+            }
+            return ProjectSummary(
                 projectId: projectId,
                 // 隱私:顯示名一律 basename 化(缺名或被塞入路徑時絕不外洩完整 cwd);
                 // projectId 仍保留完整值供穩定分組。UI 與 HTML 皆消費此已淨化的 projectName。
@@ -1038,6 +1084,7 @@ public final class UsageLedger {
             )
         }
         .sorted { $0.tokens.total > $1.tokens.total }
+        return (projects, projectModels)
     }
 
     public func modelSummaries(in interval: DateInterval, pricing: PricingRegistry) -> [ModelUsageSummary] {
@@ -1073,6 +1120,22 @@ public final class UsageLedger {
             let au = (a.modelId == nil), bu = (b.modelId == nil)   // 同 total 時 unattributed 殿後
             if au != bu { return !au }
             return (a.modelId ?? "") < (b.modelId ?? "")
+        }
+    }
+
+    /// Usage-M2b 明細列的**跨 provider 全序**(§9.3,r2-corrected total order):M2b popover 是
+    /// **跨 provider 的平面清單**,排序鍵必含 `providerId`,否則兩個不同 provider 的列(尤其兩個
+    /// `.unattributed`)在同一 total 互撞、top-N 截斷不穩定。序 = `(−total, providerId,
+    /// unattributedLast, exactModelIdOrEmpty)` —— **全序**(dict 迭代序不可靠,故必排;Swift 5 穩定排序
+    /// 讓等鍵保持輸入序,但此鍵在同一 project 內對相異列即為嚴格全序,無等鍵)。與 M2a 的**組內**序
+    /// (`modelRows`,已依 provider-total 分組)不同,故獨立一份 —— 不改動、不共用 M2a 的排序。
+    public static func projectDrilldownOrder(_ rows: [ModelUsageSummary]) -> [ModelUsageSummary] {
+        rows.sorted { a, b in
+            if a.tokens.total != b.tokens.total { return a.tokens.total > b.tokens.total }   // −total
+            if a.providerId != b.providerId { return a.providerId < b.providerId }           // providerId 升序(跨 provider tie-break)
+            let au = (a.modelId == nil), bu = (b.modelId == nil)                              // 同 total/provider 時 unattributed 殿後
+            if au != bu { return !au }
+            return (a.modelId ?? "") < (b.modelId ?? "")                                      // exact modelId / "" 升序
         }
     }
 }

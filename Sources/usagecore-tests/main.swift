@@ -1139,4 +1139,16 @@ runSuite("ModelBreakdownM2aTests", [
     ("testM2a_ReportTopModelEmptyIdRendersClosedLabel", modelBreakdownM2a.testM2a_ReportTopModelEmptyIdRendersClosedLabel),
 ])
 
+// Usage-M2b — project → provider → model drill-down (design §3/§9.3/§10/§11/§12, frozen v0.7).
+let projectModelBreakdownM2b = ProjectModelBreakdownM2bTests()
+runSuite("ProjectModelBreakdownM2bTests", [
+    ("testM2b_ProjectModelTokenSumEqualsProjectTotal", projectModelBreakdownM2b.testM2b_ProjectModelTokenSumEqualsProjectTotal),
+    ("testM2b_ProjectModelUsesSameRowSemanticsAsGlobal", projectModelBreakdownM2b.testM2b_ProjectModelUsesSameRowSemanticsAsGlobal),
+    ("testM2b_UnattributedPerProjectProviderScoped", projectModelBreakdownM2b.testM2b_UnattributedPerProjectProviderScoped),
+    ("testM2b_ProjectionBuiltOncePerPage_NotPerHover", projectModelBreakdownM2b.testM2b_ProjectionBuiltOncePerPage_NotPerHover),
+    ("testM2b_DeterministicCrossProviderOrderingAndTop12Selection", projectModelBreakdownM2b.testM2b_DeterministicCrossProviderOrderingAndTop12Selection),
+    ("testM2b_VisibleProviderIdentitySurvivesSameModelCrossProvider", projectModelBreakdownM2b.testM2b_VisibleProviderIdentitySurvivesSameModelCrossProvider),
+    ("testM2b_PerformanceFoldsInNoExtraWalks", projectModelBreakdownM2b.testM2b_PerformanceFoldsInNoExtraWalks),
+])
+
 finishTestRun()
