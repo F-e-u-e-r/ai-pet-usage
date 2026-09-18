@@ -117,8 +117,9 @@ public enum ReportGenerator {
         for (i, p) in data.projects.enumerated() {
             let last = p.lastActive.map { df.string(from: $0) } ?? "—"
             let projName = PrivacyRedaction.displayProjectName(projectName: p.projectName, projectId: p.projectId)
-            // topModel 同樣過 sink 防護:絕對路徑形狀的模型 ID(損壞日誌/覆寫檔)不外洩(codex SEV1)。
-            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(p.topModel.map(PrivacyRedaction.displayModelId) ?? "—"))</td><td>\(last)</td><td>\(milleLabel(projectMille[i], nonZero: p.tokens.total > 0))</td></tr>"
+            // topModel 走封閉 attributedModelLabel(§4:所有 legacy ProjectSummary.topModel 皆走此 helper —
+            // 路徑形→basename、nil→"—"、""→"empty model id";與 GUI P-B cell 一致,empty-id 不再顯示空白)。
+            html += "<tr><td>\(esc(projName))</td><td>\(fmtTokens(p.tokens.total))</td><td>\(fmtCost(p.cost))</td><td>\(esc(p.providers.joined(separator: ", ")))</td><td>\(esc(PrivacyRedaction.attributedModelLabel(modelId: p.topModel)))</td><td>\(last)</td><td>\(milleLabel(projectMille[i], nonZero: p.tokens.total > 0))</td></tr>"
         }
         if data.projects.isEmpty { html += "<tr><td colspan=\"7\">No usage in this period.</td></tr>" }
         html += "</tbody></table><p class=\"note\">Project names shown; full local paths are redacted by default.</p></section>"
@@ -143,22 +144,27 @@ public enum ReportGenerator {
         // 模型與計價假設
         html += "<section><h2>Model pricing assumptions</h2><table><thead><tr><th>Model</th><th>Tokens</th><th>Est. cost</th><th>Input $/M</th><th>Output $/M</th><th>Cache read $/M</th><th>Source</th><th>Effective</th></tr></thead><tbody>"
         for m in data.models {
-            let price = data.pricingRows.first {
-                $0.providerId == m.providerId && ($0.modelId == m.modelId || ($0.modelId.hasSuffix("*") && m.modelId.hasPrefix(String($0.modelId.dropLast()))))
-            }
-            // sink 防護(codex SEV1):模型 ID 走 displayModelId(絕對路徑形 → basename;合法
-            // `vendor/model` 相對形不受影響);source / effectiveFrom 是使用者覆寫檔可攜任意字串
-            // 的描述性標籤 → safeLabel(任一 token 是絕對路徑形 → 整串收斂為固定字樣)。
-            let modelCell = "\(esc(m.providerId))/\(esc(PrivacyRedaction.displayModelId(m.modelId)))"
+            // modelId 現為 String?(unattributed → nil):價目查找僅對歸屬模型進行。
+            let price = m.modelId.flatMap { mid in data.pricingRows.first {
+                $0.providerId == m.providerId && ($0.modelId == mid || ($0.modelId.hasSuffix("*") && mid.hasPrefix(String($0.modelId.dropLast()))))
+            }}
+            // sink 防護(codex SEV1):模型名走封閉 modelLabel(絕對路徑形 → basename;`.unattributed`
+            // → "unattributed";`""` → "empty model id";合法 `vendor/model` 相對形不受影響)。
+            // source / effectiveFrom 是使用者覆寫檔可攜任意字串的描述性標籤 → safeLabel。
+            let modelCell = "\(esc(m.providerId))/\(esc(PrivacyRedaction.modelLabel(attribution: m.attribution)))"
             if m.cost.providerReportedUSD > 0 {
-                // provider 回報成本**先判**(R3 codex F1):計價引擎給 providerCostUSD 優先權,
-                // 即使 registry/user override 存在,事件實際計入的是 provider 值 —— 標籤不得
-                // 誤稱 registry。既有價目同時存在時以括號註明實際優先序。
+                // provider 回報成本**先判**(R3 codex F1 / r4-A):即使 registry/override 存在,事件實際
+                // 計入的是 provider 值。此臂同時涵蓋「帶 providerCostUSD 的 .unattributed 列」——
+                // 其 known cost 照樣可見並標出處,**不**落到「cost unavailable」。
                 let overridden = price != nil ? " (a registry/override price exists but provider-reported cost takes precedence)" : ""
                 html += "<tr><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>\(fmtCost(m.cost))</td><td colspan=\"3\">—</td><td>opencode-reported (models.dev rates, est.)\(overridden)</td><td>—</td></tr>"
             } else if let price {
                 let override = price.userOverride ? " (user override)" : ""
                 html += "<tr><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>\(fmtCost(m.cost))</td><td>\(money(price.inputPerMillion))</td><td>\(money(price.outputPerMillion))</td><td>\(price.cacheReadPerMillion.map(money) ?? "—")</td><td>\(esc(PrivacyRedaction.safeLabel(price.source)))\(override)</td><td>\(esc(PrivacyRedaction.safeLabel(price.effectiveFrom)))</td></tr>"
+            } else if m.attribution == .unattributed {
+                // §5/r4-A:registry 無法為 nil-model 計價,且 model override 也不行 → 封閉語彙,
+                // **絕不**印「Add a user override…」提示(它會誤導使用者去設一個無效覆寫)。
+                html += "<tr class=\"unknown\"><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>unattributed — cost unavailable</td><td colspan=\"5\">Usage with no model attribution; not priceable by a model override.</td></tr>"
             } else {
                 html += "<tr class=\"unknown\"><td>\(modelCell)</td><td>\(fmtTokens(m.tokens.total))</td><td>unknown model — excluded from cost</td><td colspan=\"5\">No pricing entry. Add a user override to include this model in cost totals.</td></tr>"
             }
@@ -286,6 +292,29 @@ public enum ReportGenerator {
         if c.unknownModelTokens > 0 { s += "+ (partial)" }
         else if c.isEstimated { s += " (est.)" }
         return s
+    }
+
+    /// 成本顯示的**單一 sink**(§7):定價缺失時絕不看起來像「花費 $0」。
+    /// - 全/幾乎全未計價(`unknownModelTokens>0 ∧ knownUSD<$0.005`)→ "Pricing unavailable" + 未計價量
+    /// - 部分未計價 → "$X.XX+",caption 說明 +(含 opencode-reported 出處)
+    /// - provider 回報成本 → 標示出處(不得籠統寫「cache rates estimated」)
+    /// GUI 的 `costDisplay` 委派至此;M2a 測試直接斷言此處字串(`M-ZERO-PRICE` 的目標)。
+    public static func costDisplay(_ c: CostResult) -> (value: String, caption: String?) {
+        if c.unknownModelTokens > 0 && c.knownUSD < 0.005 {
+            return ("Pricing unavailable", "\(fmtTokens(c.unknownModelTokens)) tokens unpriced")
+        }
+        if c.unknownModelTokens > 0 {
+            let provenance = c.providerReportedUSD > 0 ? "; incl. opencode-reported (est.)" : ""
+            return (fmtUSD(c.knownUSD) + "+",
+                    "+ means \(fmtTokens(c.unknownModelTokens)) tokens are unpriced\(provenance)")
+        }
+        if c.providerReportedUSD > 0 {
+            let all = abs(c.providerReportedUSD - c.knownUSD) < 0.005
+            return (fmtUSD(c.knownUSD),
+                    all ? "opencode-reported (models.dev rates, est.)"
+                        : "incl. \(fmtUSD(c.providerReportedUSD)) opencode-reported (est.)")
+        }
+        return (fmtUSD(c.knownUSD), c.isEstimated ? "cache rates estimated" : nil)
     }
 
     static func money(_ v: Double) -> String { fmtUSD(v, decimals: 3) }

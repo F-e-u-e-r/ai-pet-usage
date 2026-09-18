@@ -2427,7 +2427,7 @@ final class ReportTests: XCTestCase {
                                              fiveHour: LimitWindowState(usedPercent: 12, windowMinutes: 300, confidence: .high),
                                              weekly: LimitWindowState(usedPercent: 73, windowMinutes: 10080, confidence: .high))],
             projects: [project],
-            models: [ModelUsageSummary(providerId: "codex", modelId: "gpt-5.5",
+            models: [ModelUsageSummary(providerId: "codex", attribution: .model(id: "gpt-5.5"),
                                        tokens: TokenBreakdown(input: 200), cost: .zero)],
             buckets: [("01-15 10:00", 1000)],
             pricingRows: [],

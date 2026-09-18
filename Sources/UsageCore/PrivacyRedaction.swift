@@ -148,6 +148,24 @@ public enum PrivacyRedaction {
         return base.isEmpty ? "(redacted path)" : base
     }
 
+    /// 模型列(M2a/M2b「By model」)的顯示名 —— **封閉語彙,永不回傳空白**。
+    /// `.unattributed` → `"unattributed"`;`.model(id: "")` → `"empty model id"`
+    /// (`displayModelId("")` 會回空字串);否則走 `displayModelId`(絕對路徑形 → basename)。
+    public static func modelLabel(attribution: ModelAttribution) -> String {
+        switch attribution {
+        case .unattributed: return "unattributed"
+        case .model(let id): return id.isEmpty ? "empty model id" : displayModelId(id)
+        }
+    }
+
+    /// legacy `ProjectSummary.topModel` / P-B「Top model」cell 的顯示名:
+    /// `nil` → `"—"`;`""` → `"empty model id"`;否則走 `displayModelId`(路徑形 → basename)。
+    /// **不得**直接用 `displayModelId`(它會把真實的 `""`-id 模型顯示成空白)。
+    public static func attributedModelLabel(modelId: String?) -> String {
+        guard let id = modelId else { return "—" }
+        return id.isEmpty ? "empty model id" : displayModelId(id)
+    }
+
     /// 描述性標籤(定價來源、effectiveFrom 等,含使用者覆寫檔的任意字串)的 sink 端防護:
     /// 內嵌絕對路徑(含 `file://` 形)→ 整串收斂為固定字樣(fail-closed;標籤只具參考性,
     /// 不值得為了保留部分字面而冒路徑外洩險)。合法內建標籤(`anthropic.com/pricing …`)不受影響。

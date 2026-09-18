@@ -324,17 +324,62 @@ public struct ProjectSummary: Codable, Sendable, Identifiable {
     }
 }
 
+/// 模型歸屬:精確的 ledger modelId,或「未歸屬」(nil modelId)。取代 magic `"unknown"` 字串。
+/// §5:`nil` modelId = `.unattributed`;字面 `"unknown"` 是真實模型 → `.model(id: "unknown")`
+/// (絕不與未歸屬合併);空字串是精確 `.model(id: "")`(顯示層轉「empty model id」,不正規化成未歸屬)。
+public enum ModelAttribution: Codable, Hashable, Sendable {
+    case model(id: String)
+    case unattributed
+
+    /// `.model(id:)` → 該 id;`.unattributed` → nil(不再殘留 `"unknown"` sentinel)。
+    public var modelId: String? {
+        if case .model(let id) = self { return id }
+        return nil
+    }
+}
+
+/// 每列聚合的字典鍵:provider 與 attribution **成對雜湊**,不得串接分隔符(同 PricingRegistry.PriceKey
+/// 的理由 —— `("opencode","a/b")` 與 `("opencode/a","b")` 在串接鍵下互撞)。只需 `Hashable + Sendable`
+/// (accumulator 鍵,不被任何 Codable 型別持有,故**不需** Codable)。
+public struct ModelAttributionKey: Hashable, Sendable {
+    public let providerId: String
+    public let attribution: ModelAttribution
+    public init(providerId: String, attribution: ModelAttribution) {
+        self.providerId = providerId
+        self.attribution = attribution
+    }
+}
+
 public struct ModelUsageSummary: Codable, Sendable, Identifiable {
     public var providerId: String
-    public var modelId: String
+    public var attribution: ModelAttribution
     public var tokens: TokenBreakdown
     public var cost: CostResult
 
-    public var id: String { providerId + "/" + modelId }
+    /// 派生:`.model(id:)` → 該 id;`.unattributed` → nil(取代舊 `?? "unknown"` sentinel)。
+    public var modelId: String? { attribution.modelId }
 
-    public init(providerId: String, modelId: String, tokens: TokenBreakdown, cost: CostResult) {
+    /// 穩定身分:由 (providerId, attribution) **長度前綴編碼**,非分隔符串接 —— 對任意兩列,
+    /// 相等 id ⟺ 相等 (providerId, attribution)(§2/§4)。provider 位元組數前綴使 provider↔model
+    /// 邊界唯一可解,`/`-含 modelId、`.unattributed`、空-id 皆不互撞(`m:` vs `u:` 前綴區隔未歸屬)。
+    /// **provider 先 NFC 正規化**(sol impl-r1;範圍經 impl-r2 falsification 收斂):`ModelAttributionKey`
+    /// 相等用 Swift `String ==`(canonical 等價,例 `"é"` 與 `"e"+U+0301` 相等)。provider 的 `utf8.count`
+    /// **長度前綴**對 canonical-相等但位元組不同的 provider 會給出不同數字(2 vs 3)→ 相等 key 得不同
+    /// id(違反不變量 ⟸ 向)。故 provider 先 NFC 使 utf8.count 一致。model id 是**尾段、無長度前綴**:
+    /// 其 canonical 差異被整串 id 的 Swift `==`(canonical)吸收,故**無需** NFC(impl-r2 falsification
+    /// 證實 model-id NFC 對不變量冗餘 —— 只留必要的 provider NFC)。Swift-相異字串(大小寫/空白)仍相異,
+    /// §2「不正規化(不合併相異模型)」不受影響。ASCII 不變。
+    public var id: String {
+        let p = providerId.precomposedStringWithCanonicalMapping
+        switch attribution {
+        case .model(let m): return "m:\(p.utf8.count):\(p):\(m)"
+        case .unattributed: return "u:\(p.utf8.count):\(p)"
+        }
+    }
+
+    public init(providerId: String, attribution: ModelAttribution, tokens: TokenBreakdown, cost: CostResult) {
         self.providerId = providerId
-        self.modelId = modelId
+        self.attribution = attribution
         self.tokens = tokens
         self.cost = cost
     }
