@@ -6,11 +6,9 @@
 name: swift-tests
 
 on:
+  # 每個 PR 都跑(不設 paths):本 job 是 main 的 required status check,
+  # path filter 會讓純文件 PR 的 required check 永遠 pending 而無法 merge。
   pull_request:
-    paths:
-      - 'Sources/**'
-      - 'Package.swift'
-      - '.github/workflows/swift-tests.yml'
   push:
     branches: [main]
     paths:
