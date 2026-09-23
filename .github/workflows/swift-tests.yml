@@ -18,6 +18,8 @@ on:
 
 jobs:
   tests:
+    # 顯示名稱即 main ruleset 的 required status check context;請勿隨意更名。
+    name: swift-tests
     runs-on: macos-15
     timeout-minutes: 20
     steps:
