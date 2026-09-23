@@ -3,6 +3,8 @@
 Run this for each release candidate. Beta-blocker criteria are at the bottom — a release with any open
 blocker does not ship.
 
+> CI gate: `swift-tests` (Swift build + `usagecore-tests`) runs on every pull request and is the required status check on `main` — a PR merges only when it is green; no human approval or owner bypass is required.
+
 ## 1. Pricing
 
 Before each release:
