@@ -9,6 +9,7 @@
 ![SwiftUI + AppKit](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-6E4AFF)
 ![Local-first](https://img.shields.io/badge/privacy-local--first-2EA043)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+![status](https://img.shields.io/badge/status-ACTIVE-7aa2ff)
 
 你的 AI 使用量化身為一隻活生生的夥伴 —— 不必開儀表板,也不必下指令。
 
