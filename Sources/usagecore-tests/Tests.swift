@@ -2935,6 +2935,37 @@ final class AggregationCacheTests: XCTestCase {
         XCTAssertEqual(p4.totals.total, 150)
     }
 
+    // owner spike#3 fix #2 regression seam:preview 絕不可展示 stale 資料。頁面現帶內容身分 `revision`,
+    // 當 payload(tokens/cost)改變時它必須進位 —— 即使 project ids 與 per-project model 數皆不變 —— 這是
+    // ProjectTable→controller.setData(以 page stamp 為鍵)重取切片的依據。驗:same ids + same model count +
+    // changed token payload ⇒ revision 變 ⇒ 新 payload。(不靠 count fingerprint、不給 ModelUsageSummary 加 Hashable。)
+    func testProjectPageRevisionAdvancesOnPayloadChangeSameShape() {
+        let dir = makeTempDir()
+        let box = EventBox()
+        box.events = [mkEvent("e1", date("2026-02-01T10:00:00Z"), tokens: 100)]   // project "/p/a", model "m"
+        let mock = MockAdapter("mock") { state in
+            (AdapterRefreshResult(events: box.events, completeness: .complete), state)
+        }
+        var settings = CoreSettings()
+        settings.enabledProviders = ["mock"]
+        settings.retentionDays = 3650
+        let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [mock])
+        runRefresh(coord)
+
+        let range = DateInterval(start: date("2026-02-01T00:00:00Z"), end: date("2026-02-01T23:00:00Z"))
+        let p1 = projectPage(coord, range)
+
+        // 同 project "/p/a"、同 model "m" → ids 與 per-project model 數不變;只有 tokens 增長。
+        box.events.append(mkEvent("e2", date("2026-02-01T11:00:00Z"), tokens: 200))
+        runRefresh(coord)
+        let p2 = projectPage(coord, range)
+
+        XCTAssertEqual(p1.projects.map { $0.projectId }, p2.projects.map { $0.projectId })   // same ids
+        XCTAssertEqual(p1.projectModels["/p/a"]?.count, p2.projectModels["/p/a"]?.count)      // same model count
+        XCTAssertTrue(p1.revision != p2.revision, "payload 變了 → 內容身分必須進位(否則 preview 展示舊數字)")
+        XCTAssertTrue(p2.totals.total > p1.totals.total, "新 payload:300 > 100")
+    }
+
     func testTrendsInvalidatesOnNewEvents() {
         let dir = makeTempDir()
         let box = EventBox()

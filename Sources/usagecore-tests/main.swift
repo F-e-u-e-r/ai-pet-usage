@@ -185,6 +185,7 @@ runSuite("PercentSharesTests", [
 let aggCache = AggregationCacheTests()
 runSuite("AggregationCacheTests", [
     ("testProjectPageCacheHitAndInvalidation", aggCache.testProjectPageCacheHitAndInvalidation),
+    ("testProjectPageRevisionAdvancesOnPayloadChangeSameShape", aggCache.testProjectPageRevisionAdvancesOnPayloadChangeSameShape),
     ("testTrendsInvalidatesOnNewEvents", aggCache.testTrendsInvalidatesOnNewEvents),
     ("testTrendsSeesFutureTimestampedEventAsNowAdvances", aggCache.testTrendsSeesFutureTimestampedEventAsNowAdvances),
     ("testTrendsCacheMissesWhenRetentionCutoffPassesOldestEvent", aggCache.testTrendsCacheMissesWhenRetentionCutoffPassesOldestEvent),
@@ -1149,6 +1150,50 @@ runSuite("ProjectModelBreakdownM2bTests", [
     ("testM2b_DeterministicCrossProviderOrderingAndTop12Selection", projectModelBreakdownM2b.testM2b_DeterministicCrossProviderOrderingAndTop12Selection),
     ("testM2b_VisibleProviderIdentitySurvivesSameModelCrossProvider", projectModelBreakdownM2b.testM2b_VisibleProviderIdentitySurvivesSameModelCrossProvider),
     ("testM2b_PerformanceFoldsInNoExtraWalks", projectModelBreakdownM2b.testM2b_PerformanceFoldsInNoExtraWalks),
+])
+
+// Usage-M3 A1 — anchored hover/focus breakdown-card state machine (pure FSM; owner-ratified 11-item contract).
+let anchoredHoverModel = AnchoredHoverModelTests()
+runSuite("AnchoredHoverModelTests", [
+    ("testHoverShowsRow", anchoredHoverModel.testHoverShowsRow),
+    ("testRowToRowSwitchImmediate", anchoredHoverModel.testRowToRowSwitchImmediate),
+    ("testPointerNoneDoesNotDismissImmediately", anchoredHoverModel.testPointerNoneDoesNotDismissImmediately),
+    ("testPointerNoneThenGraceDismisses", anchoredHoverModel.testPointerNoneThenGraceDismisses),
+    ("testFocusShowsRow", anchoredHoverModel.testFocusShowsRow),
+    ("testFocusHoldsPreviewWhenPointerLeaves", anchoredHoverModel.testFocusHoldsPreviewWhenPointerLeaves),
+    ("testBlurThenGraceDismisses", anchoredHoverModel.testBlurThenGraceDismisses),
+    ("testFocusRevertsAfterPointerElsewhereLeaves", anchoredHoverModel.testFocusRevertsAfterPointerElsewhereLeaves),
+    ("testPointerWinsOverFocusWhenDiverged", anchoredHoverModel.testPointerWinsOverFocusWhenDiverged),
+    ("testEscapeDismisses", anchoredHoverModel.testEscapeDismisses),
+    ("testEscapeSuppressesWhilePointerStaysInZone", anchoredHoverModel.testEscapeSuppressesWhilePointerStaysInZone),
+    ("testEscapeRetiresWhenPointerLeavesToNone", anchoredHoverModel.testEscapeRetiresWhenPointerLeavesToNone),
+    ("testEscapeRetiresWhenPointerMovesToOtherRow", anchoredHoverModel.testEscapeRetiresWhenPointerMovesToOtherRow),
+    ("testEscapeUnderFocusClearsOnBlur", anchoredHoverModel.testEscapeUnderFocusClearsOnBlur),
+    ("testOverlappingEscapeHonored", anchoredHoverModel.testOverlappingEscapeHonored),
+    ("testEscapeWhileUnoccupiedInGraceDoesNotStrand", anchoredHoverModel.testEscapeWhileUnoccupiedInGraceDoesNotStrand),
+    ("testUnrelatedRowDisappearedPreservesGrace", anchoredHoverModel.testUnrelatedRowDisappearedPreservesGrace),
+    ("testFocusFallbackReconcilesAfterSuppressedPointerRetires", anchoredHoverModel.testFocusFallbackReconcilesAfterSuppressedPointerRetires),
+    ("testForceDismissClearsAll", anchoredHoverModel.testForceDismissClearsAll),
+    ("testRowDisappearedClearsShown", anchoredHoverModel.testRowDisappearedClearsShown),
+    ("testRowDisappearedOtherRowNoEffect", anchoredHoverModel.testRowDisappearedOtherRowNoEffect),
+    ("testResolverPointInRow", anchoredHoverModel.testResolverPointInRow),
+    ("testResolverPointInNeither", anchoredHoverModel.testResolverPointInNeither),
+    ("testResolverPointInGapIsNone", anchoredHoverModel.testResolverPointInGapIsNone),
+    ("testPanelPlacementLowerRightOfCursor", anchoredHoverModel.testPanelPlacementLowerRightOfCursor),
+    ("testPanelPlacementFlipsLeftNearRightEdge", anchoredHoverModel.testPanelPlacementFlipsLeftNearRightEdge),
+    ("testPanelPlacementFlipsAboveNearBottom", anchoredHoverModel.testPanelPlacementFlipsAboveNearBottom),
+    ("testPanelPlacementFlipsLeftAndAboveNearCorner", anchoredHoverModel.testPanelPlacementFlipsLeftAndAboveNearCorner),
+    ("testPanelPlacementAlwaysInsideScreen", anchoredHoverModel.testPanelPlacementAlwaysInsideScreen),
+    ("testPanelPlacementMayExceedDashboardWindowButNotScreen", anchoredHoverModel.testPanelPlacementMayExceedDashboardWindowButNotScreen),
+    ("testPanelPlacementLargerThanScreenClamps", anchoredHoverModel.testPanelPlacementLargerThanScreenClamps),
+    ("testPanelPlacementSecondaryScreenNegativeOriginStaysInside", anchoredHoverModel.testPanelPlacementSecondaryScreenNegativeOriginStaysInside),
+    ("testReframeCapsOversizedToScreenAndStaysInside", anchoredHoverModel.testReframeCapsOversizedToScreenAndStaysInside),
+    ("testReframePreservesOriginWhenItFits", anchoredHoverModel.testReframePreservesOriginWhenItFits),
+    ("testReframeClampsOriginToStayInside", anchoredHoverModel.testReframeClampsOriginToStayInside),
+    ("testGateHiddenSyncOnlyNeverOpens", anchoredHoverModel.testGateHiddenSyncOnlyNeverOpens),
+    ("testGateHiddenUserOpenOpens", anchoredHoverModel.testGateHiddenUserOpenOpens),
+    ("testGateVisibleSwitchesToNewKeyEvenSyncOnly", anchoredHoverModel.testGateVisibleSwitchesToNewKeyEvenSyncOnly),
+    ("testGateVisibleSameKeyRepositionsOnlyWhenFollowing", anchoredHoverModel.testGateVisibleSameKeyRepositionsOnlyWhenFollowing),
 ])
 
 finishTestRun()

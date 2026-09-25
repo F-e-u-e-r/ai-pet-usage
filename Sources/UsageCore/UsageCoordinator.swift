@@ -117,6 +117,12 @@ public struct ProjectPageData: Sendable {
     /// 與 `projects` 1:1 對齊。於 page-build 一次建好(`projectSummariesWithModels`,同一趟 walk),
     /// 隨 page 的快取/reload 生命週期。popover/hover 只讀此切片,絕不重掃或呼叫 coordinator(§10)。
     public var projectModels: [String: [ModelUsageSummary]]
+    /// 內容身分(= projectPage 快取鍵在頁面上的投影):`(revision, pricingStamp, range)` 唯一決定本頁內容
+    /// (頁面 = f(revision, range, pricingStamp))。UI 以此當「資料是否變了」的**忠實**訊號(非弱 count
+    /// fingerprint):任何 tokens/cost/order 變動 → revision 進位;價變 → pricingStamp 進位;換 range → range 變。
+    /// 供 Usage-M3 A1 hover controller 在頁面重載時重取 preview 切片,避免 same-shape 換料時展示舊數字。
+    public var revision: UInt64
+    public var pricingStamp: UInt64
 }
 
 public extension ProjectPageData {
@@ -1436,7 +1442,9 @@ public actor UsageCoordinator {
             models: ledger.modelSummaries(in: range, pricing: pricing),
             totals: totals,
             cost: cost,
-            projectModels: projectModels
+            projectModels: projectModels,
+            revision: rev,
+            pricingStamp: pricingStamp
         )
         cachedProjectPage = (rev, pricingStamp, range.start, range.end, data)
         return data
