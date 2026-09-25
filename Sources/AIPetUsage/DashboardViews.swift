@@ -41,7 +41,11 @@ struct DashboardRoot: View {
         TabView(selection: $tab) {
             TodayView().tabItem { Label("Today", systemImage: "sun.max") }.tag(DashboardTab.today)
             LimitsView().tabItem { Label("Limits", systemImage: "gauge.with.needle") }.tag(DashboardTab.limits)
-            ProjectsView().tabItem { Label("Projects", systemImage: "folder") }.tag(DashboardTab.projects)
+            // isActive:Projects 是否為當前分頁。切離→硬關 hover;切回→重建 hover viewport + 重發列幾何
+            // (owner spike-repair B:切 tab 回來 hover 不得依賴 range refresh 才復活)。`tab` 是本地 @State,
+            // 於 body 讀取不違反 RAM-P0 的 Observation 隔離(只追蹤 $tab,不回讀 model 可觀測屬性)。
+            ProjectsView(isActive: tab == .projects)
+                .tabItem { Label("Projects", systemImage: "folder") }.tag(DashboardTab.projects)
             TrendsView().tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }.tag(DashboardTab.trends)
         }
         .frame(minWidth: 860, minHeight: 600)
@@ -539,7 +543,12 @@ struct TodayView: View {
                 }
 
                 Text("Coding agents").font(Theme.FontScale.cardTitle)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
+                // owner spike-repair Phase 2:domain 說明從每張卡移到這條共用 caption(卡片因而 compact),
+                // 但保留 Usage ≠ Limits 語意(本機用量 vs provider-reported 限額)。
+                Text("Local usage on this Mac · provider-reported limits where available")
+                    .font(.caption2).foregroundStyle(Theme.textMuted)
+                // adaptive minimum 260→320:視窗較寬時偏好 ~3 張可讀卡,而非擠四張密卡(minWidth 860 → 2 欄)。
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 10)], spacing: 10) {
                     ForEach(model.orderedSnapshots) { snap in
                         AgentCard(snapshot: snap,
                                   limit: dash.limitStates.first { $0.providerId == snap.providerId },
@@ -692,9 +701,11 @@ struct AgentCard: View {
 
     var body: some View {
         let brand = ProviderBrands.brand(for: snapshot.providerId, displayName: snapshot.displayName)
-        // 固定行序;第 1–7 行恆渲染(三張卡行數恆等,A3);第 8–9 行條件渲染(與今日相同)。
-        VStack(alignment: .leading, spacing: 8) {
-            // 1. header
+        // owner spike-repair Phase 2(compact 卡):domain 說明移到「Coding agents」下的共用 caption;每卡不再重複
+        // 「Local observed usage…」與 per-provider 的 provider-reported 標題。行數不再強制恆等(A3 的恆-7-行由 owner
+        // 明示放棄:不留恆置 `—` 佔位)。底層 UsageSnapshot / limits 語意完全不變 —— 純呈現。
+        VStack(alignment: .leading, spacing: 6) {
+            // 1. header(dot + 名稱 + 方案 chip + 狀態)
             HStack(spacing: 6) {
                 ProviderDot(brand: brand)
                 Text(snapshot.displayName).font(Theme.FontScale.cardTitle)
@@ -706,28 +717,23 @@ struct AgentCard: View {
             }
             .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
 
-            // 2. 本機觀測用量標題
-            sectionLabel("Local observed usage · This Mac · based on local logs")
-            // 3. today metric + 既有 in / out / cache 行
+            // 2. 本機用量:today 大數字 + in/out/cache(domain 由共用 caption 標示)
             metric("today", tk((snapshot.tokenInput ?? 0) + (snapshot.tokenOutput ?? 0) + (snapshot.tokenCache ?? 0)))
             Text("in \(tk(snapshot.tokenInput ?? 0)) · out \(tk(snapshot.tokenOutput ?? 0)) · cache \(tk(snapshot.tokenCache ?? 0))")
                 .font(Theme.FontScale.secondaryInfo)
                 .foregroundStyle(Theme.textSecondary)
 
-            // 4. provider-reported 標題(封閉字串)
-            sectionLabel(ReportedLimitText.header(providerId: snapshot.providerId))
-            // 5. 5h(四態投影;now 顯式注入,corrected 不進 Today 卡)
-            Text("5h: \(reportedInline(\.fiveHour))")
-                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
-            // 6. weekly
-            Text("weekly: \(reportedInline(\.weekly))")
-                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
-            // 7. estimate 行(恆渲染;非 claude → `—`)
-            Text(estimateLine)
-                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
-                .help(snapshot.providerId == "claude-code" ? "" : "Budget estimates are available for Claude Code only")
+            // 3. provider-reported 限額:5h/weekly 併一行;整組不提供 → 單行(不重複兩次 Not provided)。四態投影不變。
+            limitsLine
 
-            // 8. Set estimated budget 按鈕(predicate 與今日 byte-identical;estimate 域控制,D13)
+            // 4. estimate:僅在有 active estimate 窗時 render(非 claude / 缺載體 / official 治理中 → 不渲染,
+            // 不留恆置 `—`)。行只在 claude 有內容時出現,故不再需要舊那條「available for Claude Code only」help。
+            if let est = meaningfulEstimateLine {
+                Text(est)
+                    .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
+            }
+
+            // 5. Set estimated budget 按鈕(predicate 與今日 byte-identical;estimate 域控制,D13)
             if BudgetAffordance.todayButtonVisible(snapshot: snapshot, limit: limit) {
                 Button("Set estimated budget…") {
                     NSApp.activate(ignoringOtherApps: true)
@@ -736,14 +742,54 @@ struct AgentCard: View {
                 .buttonStyle(.link)
                 .font(.caption2)
             }
-            // 9. 既有 shareSafeError 行(條件行,不改)
+            // 6. 既有 shareSafeError 行(條件行,不改;error 保持可見)
             if let err = snapshot.shareSafeError {
                 Text(err).font(.caption2).foregroundStyle(.red).lineLimit(2)
             }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // owner spike#3 §3:卡片填滿 LazyVGrid 列高 → 同一列的 Claude/Codex/Grok 灰卡等高(不靠假 `—` 佔位)。
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// provider-reported 限額(compact):兩窗皆 `.notProvidedBySource`(adapter capability 明示不提供)→ 單行;
+    /// 否則 5h / weekly 各自**一列**(owner spike #2 refinement:不再併一行——併一行太密、會換行;改固定寬度標籤欄
+    /// 讓兩列數值對齊)。provided / temporarilyUnavailable / 混合皆帶真實資訊。缺載體 → 單行中性佔位。
+    @ViewBuilder
+    private var limitsLine: some View {
+        if let reported {
+            if isNotProvided(reported.fiveHour) && isNotProvided(reported.weekly) {
+                // owner spike#3 §3:整組不提供 → 兩列(語意同「單行 Not provided」,純呈現)。
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Limits")
+                    Text("Not provided by this source")
+                }
+                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    limitRow("5h", reportedInline(\.fiveHour))
+                    limitRow("weekly", reportedInline(\.weekly))
+                }
+                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
+            }
+        } else {
+            Text("Limits · —")
+                .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
+        }
+    }
+
+    /// 一列限額:固定寬度標籤欄(5h / weekly 對齊)+ 值。
+    private func limitRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label).frame(width: 46, alignment: .leading).foregroundStyle(Theme.textMuted)
+            Text(value)
+        }
+    }
+
+    private func isNotProvided(_ field: ReportedLimitField) -> Bool {
+        if case .notProvidedBySource = field { return true }
+        return false
     }
 
     /// 四態單行文字(主文,次行非空時接 ` · 次行`);載體缺席時 `—`(A3 佔位,不縮行)。
@@ -758,8 +804,13 @@ struct AgentCard: View {
         return EstimateRowText.todayLine(reported: reported, limit: limit, now: now)
     }
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text).font(.caption2).foregroundStyle(Theme.textMuted)
+    /// estimate 列文字,僅在有 active estimate 窗時回傳(claude-code ∧ official ∈ {expiredUnusable, absent},
+    /// 即 `EstimateRowText.todayLine` :248 產生實質內容的同一訊號);否則 nil → compact 卡不渲染該行
+    ///(隱藏非 claude 的 `—`,也隱藏「official 窗治理中」的 `… · —` 尾巴,對齊 owner mockup)。
+    private var meaningfulEstimateLine: String? {
+        guard let reported, reported.fiveHourEstimateActive || reported.weeklyEstimateActive else { return nil }
+        let line = estimateLine
+        return (line == "—" || line.isEmpty) ? nil : line
     }
 
     private func metric(_ title: String, _ value: String) -> some View {
@@ -922,6 +973,7 @@ struct ReportedLimitBar: View {
 
 struct ProjectsView: View {
     @Environment(AppModel.self) private var model
+    let isActive: Bool   // 由 DashboardRoot 傳入:Projects 是否為當前分頁(驅動 ProjectTable 的 hover re-arm)
 
     var body: some View {
         @Bindable var model = model
@@ -964,7 +1016,9 @@ struct ProjectsView: View {
                     StatTile(title: "Models", value: "\(page.models.count)")
                 }
 
-                ProjectTable(projects: page.projects, projectModels: page.projectModels)
+                ProjectTable(projects: page.projects, projectModels: page.projectModels, isActive: isActive,
+                             pageStamp: ProjectPageStamp(revision: page.revision, pricingStamp: page.pricingStamp,
+                                                         range: page.range))
 
                 // Usage-M2a — global provider-scoped "By model" breakdown(消費既有 page.models,
                 // 身分已硬化;純顯示、零重掃、無 provider-limit %、無 sessions)。
@@ -983,6 +1037,37 @@ struct ProjectsView: View {
     }
 }
 
+/// Usage-M3 A1(ROW-ONLY preview,owner 裁定 2026-09-24):各列回報自身 `frame(in: .named("projectTable"))`,
+/// table 層收成 `rowFrames` 交給 `ProjectHoverController`;單一 `NSTrackingArea`(`HoverTrackingRepresentable`)的
+/// pointer location 於同一座標空間 → `HoverZoneResolver` 只判**哪一列**含指標 → FSM。preview 純視覺、不參與 hover
+/// 解析(故無 CardFrameKey / card zone / lastPointer)。取代先前 per-view `.onHover` 與 SwiftUI `.onContinuousHover`。
+private struct RowFramesKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] { [:] }
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// 頁面內容身分(= `ProjectPageData` 的 projectPage 快取鍵投影):`(revision, pricingStamp, range)` 唯一決定頁面
+/// 內容,故任何 tokens/cost/order/range 變動都改變它。ProjectTable 以此當 `.onChange` 鍵驅動 controller 重取
+/// preview 切片(owner spike#3 fix #2:忠實身分,非弱 count fingerprint;不需給 ModelUsageSummary 加 Hashable)。
+struct ProjectPageStamp: Equatable {
+    let revision: UInt64
+    let pricingStamp: UInt64
+    let range: DateInterval
+}
+
+/// owner D3 — validity identity for RETAINED row geometry. `rowFrames` (viewport-space rects) is re-handed to the
+/// controller on tab/appear re-activation to avoid a "dead until scroll" gap; but stale rects must never resolve a
+/// pointer to the WRONG project. The retained geometry is valid ONLY while the page content identity (`pageStamp`)
+/// AND the ordered project ids are unchanged. Viewport/layout identity (pure resize while inactive) is deliberately
+/// NOT tracked here (would need viewport-size plumbing) — that residual is an accepted RECORD, self-corrected by the
+/// first fresh `RowFramesKey` flush after re-activation. Principle: temporary no-hover > wrong-project hover.
+private struct RowGeometryIdentity: Equatable {
+    let pageStamp: ProjectPageStamp
+    let orderedIDs: [String]
+}
+
 struct ProjectTable: View {
     let projects: [ProjectSummary]
     // Usage-M2b:per-project 模型明細(page-build 已建好、已依 §9.3 全序排好)。drill-down 互動**只讀此切片**
@@ -990,8 +1075,33 @@ struct ProjectTable: View {
     // 語意;該 seam 供 §10 no-lookup 測試),絕不重掃或呼叫 coordinator。**必填**(無預設):
     // 漏傳會編成空 drill-down 而 UsageCore 測試偵測不到(impl-xcheck grok/sol footgun),故強制在 call site 供給。
     let projectModels: [String: [ModelUsageSummary]]
-    // 釘選(pinned)的專案 key —— nil = 無 popover。點擊 disclosure / 鍵盤 Return/Space 切換;Esc 關閉。
-    @State private var pinnedKey: String?
+    // Projects 是否為當前分頁。切離→controller 硬關;切回→controller 開新 session(NSTrackingArea 自然重接,
+    // 無需 `.id`/epoch —— spike#2 的舊法)。修「切 tab 回來 hover 死、需切 range 才復活」。
+    let isActive: Bool
+    // owner spike#3 fix #2:頁面內容身分(revision/pricingStamp/range 投影)。任何 payload 變動(含 same
+    // ids/counts 換料)都改變它 → 驅動 controller 重取 preview 切片,免展示舊數字。非弱 fingerprint、不需 Hashable。
+    let pageStamp: ProjectPageStamp
+    // Usage-M3 A1(owner re-architecture 2026-09-24,spike #2 FAILED):互動全部移到 `ProjectHoverController`
+    // ——單一 owner 持有 row-only FSM + 唯一 output-only NSPanel + 列幾何;單一 `NSTrackingArea`
+    // (`HoverTrackingRepresentable`)為唯一指標源(取代 SwiftUI `.onContinuousHover` 與失敗的 `.id(hoverEpoch)`
+    // 重接)。preview 改由 screen 座標的 NSPanel 呈現(可超出 dashboard 視窗、只夾在 `NSScreen.visibleFrame`)。
+    // 純件(HoverZoneResolver / AnchoredHoverModel / PanelPlacement)在 UsageCore 已單元測試;詳見 ProjectHoverPanel.swift。
+    @StateObject private var controller = ProjectHoverController()
+    @FocusState private var focusedRow: String?
+    // spike#3 case B:保留最後已知的**非空**列幾何(viewport 空間)。切回 Projects 時顯式交回 controller,免得
+    // 等 RowFramesKey 因 scroll/range 才重發(切離時列消失使 RowFramesKey 短暫收成空,是「切回 hover 死到 scroll
+    // 才復活」的成因)。live 更新仍走 onPreferenceChange;此 @State 只快取最後非空值供 re-arm。
+    @State private var rowFrames: [String: CGRect] = [:]
+    // owner D3 — the page/order identity the retained `rowFrames` belong to; re-handed geometry is honored only
+    // while this still matches the live `geometryIdentity` (else stale → wait for a fresh RowFramesKey flush).
+    @State private var rowFramesIdentity: RowGeometryIdentity?
+    @Environment(\.controlActiveState) private var controlActiveState
+    private static let spaceName = "projectTable"
+
+    /// owner D3 — current geometry validity identity (page content + ordered ids). See `RowGeometryIdentity`.
+    private var geometryIdentity: RowGeometryIdentity {
+        RowGeometryIdentity(pageStamp: pageStamp, orderedIDs: projects.map { $0.projectId })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1017,9 +1127,73 @@ struct ProjectTable: View {
                         }
                     }
                 }
+                // 單一 NSTrackingArea 指標源覆蓋此 viewport(取代 `.onContinuousHover` 與失敗的 `.id(hoverEpoch)`
+                // 重接)。座標空間放在 ScrollView(viewport)上 → 列以 viewport 空間回報 frame(RowFramesKey),與
+                // tracker 的 flipped local 座標對齊;tracker hitTest→nil 不吃 click(列仍可 click-focus)。
+                .coordinateSpace(name: Self.spaceName)
+                // owner spike#3 hardening:tracker 明確填滿 viewport(避免 overlay 實際 bounds < viewport)。
+                .overlay { HoverTrackingRepresentable(controller: controller).frame(maxWidth: .infinity, maxHeight: .infinity) }
             }
         }
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
+        // 列幾何(viewport 空間)→ controller(唯一持有 FSM / panel / rowRects)。捲動/版面變動時 controller 內部
+        // 作廢 pointer 擁有權(grace 關閉,focus 持有則留),不做 lastPointer 幾何重解(守 STOP 契約)。
+        // spike#3 case B:忽略**空**的 flush(切離 Projects 時列消失會使 RowFramesKey 短暫收成空;若讓它清掉
+        // retained 幾何,切回時 controller 拿到空 → hover 死)。非空才快取 + 轉交。可見列永遠非空(空專案走另一分支)。
+        .onPreferenceChange(RowFramesKey.self) { newFrames in
+            guard !newFrames.isEmpty else { return }
+            rowFrames = newFrames
+            rowFramesIdentity = geometryIdentity          // owner D3: stamp the identity these frames belong to
+            controller.setRows(newFrames)
+        }
+        // 視窗級 Esc catcher(僅在 preview 顯示時存在):inert(key equivalent 仍觸發);action 走 controller.escape()。
+        .background(alignment: .topLeading) {
+            if controller.isShowing {
+                Button("") { controller.escape() }
+                    .keyboardShortcut(.cancelAction)
+                    .focusable(false).allowsHitTesting(false).opacity(0).accessibilityHidden(true)
+            }
+        }
+        // 整列 focus 變動 → controller(show 僅在 key window;non-key 不得 show)。
+        .onChange(of: focusedRow) { oldValue, newValue in controller.setFocus(old: oldValue, new: newValue) }
+        // key window 變動 → controller(失去 key → 硬關)。RECORD:`controlActiveState` 自 macOS 15 deprecated,本輪不換 API。
+        .onChange(of: controlActiveState) { _, state in
+            controller.setWindowActive(state == .key)
+            // grok review r2:失去 key 由 hardClear 清 FSM focus;重獲 key 時 @FocusState 可能仍在某列(值未變 →
+            // 無 onChange(focusedRow))→ 顯式重新灌回 controller,否則鍵盤 focus 的 preview 於 Cmd-Tab 來回後會死。
+            if state == .key, let f = focusedRow { controller.setFocus(old: nil, new: f) }
+        }
+        // Projects 分頁 activate/deactivate 的**顯式**生命週期。切回時開新 session、**不重載資料**;NSTrackingArea 自然
+        // 重接(不需 `.id`/epoch —— 那正是 spike #2 失敗的舊法)。先更新 panel 內容切片,再 activate。
+        .onChange(of: isActive) { _, active in
+            controller.setData(projectModels: projectModels, names: nameMap)
+            controller.setActive(active)
+            // spike#3 case B:切回時**顯式**把最後已知列幾何交回 controller(不等 RowFramesKey 因 scroll/range 才重發)。
+            // grok review r2:切回時 @FocusState 若仍在某列,也重新灌回 FSM(setActive 已清 FSM focus)。
+            if active {
+                // owner D3: honor retained geometry only if its identity still matches (else wait for fresh flush)
+                if rowFramesIdentity == geometryIdentity { controller.setRows(rowFrames) }
+                if let f = focusedRow { controller.setFocus(old: nil, new: f) }
+            }
+        }
+        // 資料變動(頁重載 / 換 range / refresh 同形換料)→ 以頁面內容身分為鍵更新 controller 供 panel 呈現的切片
+        // (owner spike#3 fix #2:取代原本靠 project ids + model count 猜的弱 fingerprint)。
+        .onChange(of: pageStamp) { _, _ in controller.setData(projectModels: projectModels, names: nameMap) }
+        .onAppear {
+            controller.setData(projectModels: projectModels, names: nameMap)
+            controller.setWindowActive(controlActiveState == .key)
+            controller.setActive(isActive)
+            if isActive {
+                if rowFramesIdentity == geometryIdentity { controller.setRows(rowFrames) }   // owner D3: identity-gated re-hand (spike#3 case B: appear-while-active)
+                if let f = focusedRow { controller.setFocus(old: nil, new: f) }   // grok r2:重灌 @FocusState
+            }
+        }
+        .onDisappear { controller.teardown() }
+    }
+
+    /// projectId → 已淨化顯示名(隱私:不外洩原始路徑),供 NSPanel 標題與 controller.setData 用。
+    private var nameMap: [String: String] {
+        Dictionary(projects.map { ($0.projectId, $0.projectName) }, uniquingKeysWith: { first, _ in first })
     }
 
     private var header: some View {
@@ -1031,26 +1205,11 @@ struct ProjectTable: View {
             Text("Top model").frame(width: 150, alignment: .leading)
             Text("Last active").frame(width: 78, alignment: .trailing)
             Text("Share").frame(width: 52, alignment: .trailing)
-            Color.clear.frame(width: 22, height: 1)   // disclosure 欄對齊(M2b drill-down affordance)
         }
         .font(Theme.FontScale.tableHeader)
         .foregroundStyle(Theme.textSecondary)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-    }
-
-    // hover 預覽(§9.3:輕量預覽,同 Agents 欄 .help 慣例):純讀既建切片,top-3 封閉字串,零重掃。
-    private func hoverPreview(_ key: String) -> String {
-        let rows = projectModels[key] ?? []
-        guard !rows.isEmpty else { return "No model usage" }
-        let top = rows.prefix(3).map {
-            "\(ProviderBrands.brand(for: $0.providerId).shortName) \(PrivacyRedaction.modelLabel(attribution: $0.attribution)) \(tk($0.tokens.total))"
-        }
-        return "Models — " + top.joined(separator: " · ") + (rows.count > 3 ? " +\(rows.count - 3) more" : "")
-    }
-
-    private func pinnedBinding(_ key: String) -> Binding<Bool> {
-        Binding(get: { pinnedKey == key }, set: { pinnedKey = $0 ? key : nil })
     }
 
     private func row(_ p: ProjectSummary, shareMille: Int) -> some View {
@@ -1079,29 +1238,26 @@ struct ProjectTable: View {
             Text(ReportGenerator.milleLabel(shareMille, nonZero: p.tokens.total > 0)).monospacedDigit()
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 52, alignment: .trailing)
-            // M2b drill-down affordance:disclosure(chevron)—— 點擊 / Return / Space 開釘選 popover,
-            // hover 顯示輕量預覽(.help),Esc 關閉。互動只讀 projectModels[key](既建切片),零重掃/零 coordinator。
-            Button {
-                pinnedKey = (pinnedKey == p.projectId) ? nil : p.projectId
-            } label: {
-                Image(systemName: pinnedKey == p.projectId ? "chevron.down" : "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 22, height: 20)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(hoverPreview(p.projectId))
-            .accessibilityLabel("Show model breakdown for \(p.projectName)")
-            .popover(isPresented: pinnedBinding(p.projectId), arrowEdge: .trailing) {
-                ModelDrilldownPopover(projectName: p.projectName,
-                                      rows: projectModels[p.projectId] ?? [],   // §9.3 n7:miss → 空;純讀既建切片
-                                      onDismiss: { pinnedKey = nil })
-            }
         }
         .font(.callout)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .contentShape(Rectangle())                       // 全列命中(click-focus / focus ring 覆整列)
+        .focusable()                                     // 鍵盤可達(整列 = focus anchor;非 pointer-only)
+        .focused($focusedRow, equals: p.projectId)
+        .onDisappear {   // scroll-away / LazyVStack recycle:同步告知 controller(移除殘留 rect + FSM 和解),並清實際 @FocusState
+            controller.rowDisappeared(p.projectId)
+            if focusedRow == p.projectId { focusedRow = nil }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(p.projectName), \(tk(p.tokens.total)) tokens")
+        .accessibilityHint("Shows this project's model breakdown")   // 承接被移除 chevron 的 a11y
+        // 列回報自身 frame(同 "projectTable" 座標空間)→ rowFrames;NSTrackingArea 的 pointer location 據此判 zone。
+        // 不再用 per-row .onHover / anchorPreference —— 單一 `NSTrackingArea`(HoverTrackingRepresentable)為唯一指標源。
+        .background(GeometryReader { g in
+            Color.clear.preference(key: RowFramesKey.self,
+                                   value: [p.projectId: g.frame(in: .named(Self.spaceName))])
+        })
     }
 }
 
@@ -1112,16 +1268,16 @@ struct ProjectTable: View {
 struct ModelDrilldownPopover: View {
     let projectName: String
     let rows: [ModelUsageSummary]      // 已依 §9.3 全序 (−total, providerId, unattributedLast, exactModelId) 排好
-    let onDismiss: () -> Void
 
     private let visibleCap = 12        // top 12 可見(n10);其餘於 bounded 捲動區揭露
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Usage-M3 A1:標題列 —— 無 Done/Close 鈕(hover-first)。preview 本身**不**處理 dismiss:指標離開
+            // 所有列由 table 層單一 `NSTrackingArea` 指標源經 grace 關閉;Esc 由 table 層 window 級 catcher 處理。
             HStack(spacing: 8) {
                 Text(projectName).font(Theme.FontScale.cardTitle).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Done", action: onDismiss).keyboardShortcut(.cancelAction)   // Esc / 鍵盤關閉
             }
             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
             Divider()
@@ -1166,6 +1322,7 @@ struct ModelDrilldownPopover: View {
             Text("Provider").frame(width: 78, alignment: .leading)
             Text("Model").frame(maxWidth: .infinity, alignment: .leading)
             Text("In").frame(width: 62, alignment: .trailing)
+                .help("Input = fresh (non-cached) input tokens; cached context is shown under Cache.")   // A2 chrome-only
             Text("Out").frame(width: 62, alignment: .trailing)
             Text("Cache").frame(width: 62, alignment: .trailing)
             Text("Total").frame(width: 70, alignment: .trailing)
