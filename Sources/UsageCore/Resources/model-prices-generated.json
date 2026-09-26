@@ -66,19 +66,6 @@
   },
   {
     "providerId": "antigravity",
-    "modelId": "gemini-2.5-pro-preview-05-06",
-    "displayName": "Gemini 2.5 Pro Preview 05-06",
-    "inputPerMillion": 1.25,
-    "outputPerMillion": 10.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.125,
-    "cacheWrite5mPerMillion": 0.375
-  },
-  {
-    "providerId": "antigravity",
     "modelId": "gemini-3-flash-preview",
     "displayName": "Gemini 3 Flash Preview",
     "inputPerMillion": 0.5,
@@ -255,6 +242,19 @@
   },
   {
     "providerId": "antigravity",
+    "modelId": "gemini-3.8-flash",
+    "displayName": "Gemini 3.8 Flash",
+    "inputPerMillion": 0.75,
+    "outputPerMillion": 3.75,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-04",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-04)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.075,
+    "cacheWrite5mPerMillion": 0.041667
+  },
+  {
+    "providerId": "antigravity",
     "modelId": "gemma-2-27b-it",
     "displayName": "Gemma 2 27B",
     "inputPerMillion": 0.65,
@@ -302,12 +302,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.07,
-    "outputPerMillion": 0.34,
+    "inputPerMillion": 0.0675,
+    "outputPerMillion": 0.225,
     "currency": "USD",
-    "effectiveFrom": "2026-08-17",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-17)",
-    "userOverride": false
+    "effectiveFrom": "2026-09-26",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-26)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.0375
   },
   {
     "providerId": "antigravity",
@@ -320,20 +321,6 @@
     "source": "openrouter.ai/api/v1/models (generated 2026-08-27)",
     "userOverride": false,
     "cacheReadPerMillion": 0.05
-  },
-  {
-    "providerId": "claude-code",
-    "modelId": "claude-3-haiku*",
-    "displayName": "Claude 3 Haiku",
-    "inputPerMillion": 0.25,
-    "outputPerMillion": 1.25,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.03,
-    "cacheWrite5mPerMillion": 0.3,
-    "cacheWrite1hPerMillion": 0.5
   },
   {
     "providerId": "claude-code",
@@ -351,6 +338,20 @@
   },
   {
     "providerId": "claude-code",
+    "modelId": "claude-fable-5-1*",
+    "displayName": "Claude Fable 5.1",
+    "inputPerMillion": 10.0,
+    "outputPerMillion": 50.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-02",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-02)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.25,
+    "cacheWrite5mPerMillion": 12.5,
+    "cacheWrite1hPerMillion": 20.0
+  },
+  {
+    "providerId": "claude-code",
     "modelId": "claude-haiku-4-5*",
     "displayName": "Claude Haiku 4.5",
     "inputPerMillion": 1.0,
@@ -362,20 +363,6 @@
     "cacheReadPerMillion": 0.1,
     "cacheWrite5mPerMillion": 1.25,
     "cacheWrite1hPerMillion": 2.0
-  },
-  {
-    "providerId": "claude-code",
-    "modelId": "claude-opus-4*",
-    "displayName": "Claude Opus 4",
-    "inputPerMillion": 15.0,
-    "outputPerMillion": 75.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 1.5,
-    "cacheWrite5mPerMillion": 18.75,
-    "cacheWrite1hPerMillion": 30.0
   },
   {
     "providerId": "claude-code",
@@ -435,20 +422,6 @@
   },
   {
     "providerId": "claude-code",
-    "modelId": "claude-opus-4-7-fast*",
-    "displayName": "Claude Opus 4.7 (Fast)",
-    "inputPerMillion": 30.0,
-    "outputPerMillion": 150.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 3.0,
-    "cacheWrite5mPerMillion": 37.5,
-    "cacheWrite1hPerMillion": 60.0
-  },
-  {
-    "providerId": "claude-code",
     "modelId": "claude-opus-4-8*",
     "displayName": "Claude Opus 4.8",
     "inputPerMillion": 5.0,
@@ -460,20 +433,6 @@
     "cacheReadPerMillion": 0.5,
     "cacheWrite5mPerMillion": 6.25,
     "cacheWrite1hPerMillion": 10.0
-  },
-  {
-    "providerId": "claude-code",
-    "modelId": "claude-opus-4-8-fast*",
-    "displayName": "Claude Opus 4.8 (Fast)",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 50.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 1.0,
-    "cacheWrite5mPerMillion": 12.5,
-    "cacheWrite1hPerMillion": 20.0
   },
   {
     "providerId": "claude-code",
@@ -491,17 +450,17 @@
   },
   {
     "providerId": "claude-code",
-    "modelId": "claude-opus-5-fast*",
-    "displayName": "Claude Opus 5 (Fast)",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 50.0,
+    "modelId": "claude-opus-5-5*",
+    "displayName": "Claude Opus 5.5",
+    "inputPerMillion": 4.0,
+    "outputPerMillion": 20.0,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
+    "effectiveFrom": "2026-09-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-23)",
     "userOverride": false,
-    "cacheReadPerMillion": 1.0,
-    "cacheWrite5mPerMillion": 12.5,
-    "cacheWrite1hPerMillion": 20.0
+    "cacheReadPerMillion": 0.2,
+    "cacheWrite5mPerMillion": 5.0,
+    "cacheWrite1hPerMillion": 8.0
   },
   {
     "providerId": "claude-code",
@@ -618,17 +577,6 @@
     "providerId": "codex",
     "modelId": "gpt-4-turbo",
     "displayName": "GPT-4 Turbo",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 30.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
-    "modelId": "gpt-4-turbo-preview",
-    "displayName": "GPT-4 Turbo Preview",
     "inputPerMillion": 10.0,
     "outputPerMillion": 30.0,
     "currency": "USD",
@@ -1083,6 +1031,84 @@
   },
   {
     "providerId": "codex",
+    "modelId": "gpt-6-astra",
+    "displayName": "GPT-6 Astra",
+    "inputPerMillion": 10.0,
+    "outputPerMillion": 50.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-05)",
+    "userOverride": false,
+    "cacheReadPerMillion": 1.0,
+    "cacheWrite5mPerMillion": 12.5
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-astra-pro",
+    "displayName": "GPT-6 Astra Pro",
+    "inputPerMillion": 10.0,
+    "outputPerMillion": 50.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-05",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-05)",
+    "userOverride": false,
+    "cacheReadPerMillion": 1.0,
+    "cacheWrite5mPerMillion": 12.5
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-luna",
+    "displayName": "GPT-6 Luna",
+    "inputPerMillion": 0.1,
+    "outputPerMillion": 0.5,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-23)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.01,
+    "cacheWrite5mPerMillion": 0.125
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-luna-pro",
+    "displayName": "GPT-6 Luna Pro",
+    "inputPerMillion": 0.1,
+    "outputPerMillion": 0.5,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-23)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.01,
+    "cacheWrite5mPerMillion": 0.125
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-sol",
+    "displayName": "GPT-6 Sol",
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 10.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-23)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.2,
+    "cacheWrite5mPerMillion": 2.5
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6-sol-pro",
+    "displayName": "GPT-6 Sol Pro",
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 10.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-23)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.2,
+    "cacheWrite5mPerMillion": 2.5
+  },
+  {
+    "providerId": "codex",
     "modelId": "gpt-audio",
     "displayName": "GPT Audio",
     "inputPerMillion": 2.5,
@@ -1119,24 +1145,24 @@
     "providerId": "codex",
     "modelId": "gpt-oss-120b",
     "displayName": "gpt-oss-120b",
-    "inputPerMillion": 0.037,
-    "outputPerMillion": 0.17,
+    "inputPerMillion": 0.15,
+    "outputPerMillion": 0.6,
     "currency": "USD",
-    "effectiveFrom": "2026-08-23",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-23)",
-    "userOverride": false
+    "effectiveFrom": "2026-09-18",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-18)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.075
   },
   {
     "providerId": "codex",
     "modelId": "gpt-oss-20b",
     "displayName": "gpt-oss-20b",
-    "inputPerMillion": 0.03,
-    "outputPerMillion": 0.13,
+    "inputPerMillion": 0.018,
+    "outputPerMillion": 0.09,
     "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.03
+    "effectiveFrom": "2026-09-23",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-23)",
+    "userOverride": false
   },
   {
     "providerId": "codex",
@@ -1303,6 +1329,18 @@
     "source": "openrouter.ai/api/v1/models (generated 2026-08-13)",
     "userOverride": false,
     "cacheReadPerMillion": 0.5
+  },
+  {
+    "providerId": "grok-code",
+    "modelId": "grok-4.7",
+    "displayName": "Grok 4.7",
+    "inputPerMillion": 1.6,
+    "outputPerMillion": 4.8,
+    "currency": "USD",
+    "effectiveFrom": "2026-09-22",
+    "source": "openrouter.ai/api/v1/models (generated 2026-09-22)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.4
   },
   {
     "providerId": "grok-code",
