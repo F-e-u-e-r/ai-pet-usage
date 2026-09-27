@@ -29,8 +29,9 @@ func timeAgo(_ date: Date?, now: Date = Date()) -> String {
 
 // MARK: - 根視圖(工具列統一 Export,依分頁切換行為)
 
+/// 分頁順序 = Today | Limits | Projects | Models | Trends(Usage-M3 B 新增獨立 Models 分頁)。
 enum DashboardTab: Hashable {
-    case today, limits, projects, trends
+    case today, limits, projects, models, trends
 }
 
 struct DashboardRoot: View {
@@ -46,6 +47,9 @@ struct DashboardRoot: View {
             // 於 body 讀取不違反 RAM-P0 的 Observation 隔離(只追蹤 $tab,不回讀 model 可觀測屬性)。
             ProjectsView(isActive: tab == .projects)
                 .tabItem { Label("Projects", systemImage: "folder") }.tag(DashboardTab.projects)
+            // Usage-M3 B:獨立 Models 分頁(自有 range / 自有投影)。無參數、不在此讀任何 model 狀態 ——
+            // ModelsView 在自己的 view 邊界內消費 modelsRange/modelPage,DashboardRoot.body 仍只追蹤 $tab(RAM-P0)。
+            ModelsView().tabItem { Label("Models", systemImage: "cpu") }.tag(DashboardTab.models)
             TrendsView().tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }.tag(DashboardTab.trends)
         }
         .frame(minWidth: 860, minHeight: 600)
@@ -103,6 +107,7 @@ struct DashboardRoot: View {
             switch tab {
             case .today, .limits: model.exportToday()
             case .projects: model.exportCurrentRange()
+            case .models: model.exportModelsRange()   // Models 自己的 range(非 Projects 的)
             case .trends: model.exportTrends()
             }
         } label: {
@@ -115,7 +120,7 @@ struct DashboardRoot: View {
         switch tab {
         case .today: return "Export Today"
         case .limits: return "Export Snapshot"
-        case .projects: return "Export Range"
+        case .projects, .models: return "Export Range"
         case .trends: return "Export Trends"
         }
     }
@@ -969,6 +974,45 @@ struct ReportedLimitBar: View {
     }
 }
 
+// MARK: - 分頁範圍控制列(Projects / Models 共用;Usage-M3 B)
+
+/// segmented preset + custom From/To/Apply。以 `Binding<RangeSelection>` 接各分頁**自己**的選擇值 —— 兩分頁各綁各的
+/// AppModel 屬性(`projectsRange` / `modelsRange`),控制列本身不持狀態、不知道對方;`reload` 亦是各分頁自己的重載。
+private struct RangeControls: View {
+    @Binding var selection: RangeSelection
+    let reload: () async -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Picker("Range", selection: $selection.preset) {
+                ForEach(RangePreset.allCases) { preset in
+                    Text(preset.displayName).tag(preset)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: selection.preset) {
+                Task { await reload() }
+            }
+            Spacer()
+        }
+
+        if selection.preset == .custom {
+            HStack {
+                // R3(三方裁定 A):en_CA locale → yyyy-MM-dd 零補位,消除系統
+                // locale 的「 6/ 7/2026」空白補位與 D/M 歧義,並與 app 全域日期
+                // 格式一致。只套在這兩個 picker,不外擴(codex 條件)。
+                DatePicker("From", selection: $selection.customStart, displayedComponents: .date)
+                    .environment(\.locale, Locale(identifier: "en_CA"))
+                DatePicker("To", selection: $selection.customEnd, displayedComponents: .date)
+                    .environment(\.locale, Locale(identifier: "en_CA"))
+                Button("Apply") { Task { await reload() } }
+            }
+            .font(.caption)
+        }
+    }
+}
+
 // MARK: - Page 3: Projects(自繪表格:載入後不出現空白填充列,review #6)
 
 struct ProjectsView: View {
@@ -978,54 +1022,21 @@ struct ProjectsView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Picker("Range", selection: $model.rangePreset) {
-                    ForEach(RangePreset.allCases) { preset in
-                        Text(preset.displayName).tag(preset)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .onChange(of: model.rangePreset) {
-                    Task { await model.reloadProjectPage() }
-                }
-                Spacer()
-            }
-
-            if model.rangePreset == .custom {
-                HStack {
-                    // R3(三方裁定 A):en_CA locale → yyyy-MM-dd 零補位,消除系統
-                    // locale 的「 6/ 7/2026」空白補位與 D/M 歧義,並與 app 全域日期
-                    // 格式一致。只套在這兩個 picker,不外擴(codex 條件)。
-                    DatePicker("From", selection: $model.customStart, displayedComponents: .date)
-                        .environment(\.locale, Locale(identifier: "en_CA"))
-                    DatePicker("To", selection: $model.customEnd, displayedComponents: .date)
-                        .environment(\.locale, Locale(identifier: "en_CA"))
-                    Button("Apply") { Task { await model.reloadProjectPage() } }
-                }
-                .font(.caption)
-            }
+            RangeControls(selection: $model.projectsRange) { await model.reloadProjectPage() }
 
             if let page = model.projectPage {
                 let cost = costDisplay(page.cost)
                 // A3:與 Today/Trends 同一等高模式(移除硬編 height 80)。
+                // Usage-M3 B:「Models」tile 與 "By model" 表移到獨立 Models 分頁(page 不再含 global model aggregation)。
                 EqualHeightTileRow {
                     StatTile(title: "Period tokens", value: tk(page.totals.total))
                     StatTile(title: "Period cost", value: cost.value, caption: cost.caption)
                     StatTile(title: "Projects", value: "\(page.projects.count)")
-                    StatTile(title: "Models", value: "\(page.models.count)")
                 }
 
                 ProjectTable(projects: page.projects, projectModels: page.projectModels, isActive: isActive,
                              pageStamp: ProjectPageStamp(revision: page.revision, pricingStamp: page.pricingStamp,
                                                          range: page.range))
-
-                // Usage-M2a — global provider-scoped "By model" breakdown(消費既有 page.models,
-                // 身分已硬化;純顯示、零重掃、無 provider-limit %、無 sessions)。
-                Text("By model")
-                    .font(Theme.FontScale.cardTitle)
-                    .padding(.top, 4)
-                ByModelTable(models: page.models)
             } else {
                 Spacer()
                 ProgressView("Loading…").frame(maxWidth: .infinity)
@@ -1363,21 +1374,56 @@ struct ModelDrilldownPopover: View {
     }
 }
 
-// MARK: - Usage-M2a：global provider-scoped「By model」表格(§9.2)
-// 消費已依 §2 全序建好的 page.models(providers 連續、組內排序皆決定性);純顯示、零重掃、
-// 於自身容器內捲動(n12);無 provider-limit %、無 sessions。
-struct ByModelTable: View {
+// MARK: - Page 4: Models(Usage-M3 B:獨立分頁,取代 Projects 頁的「Models」tile + "By model" 表)
+// 自己的 range(`model.modelsRange`)、自己的 projection(`model.modelPage` = coordinator 一趟 walk)、自己的
+// reload(`reloadModelPage`,序號守門)—— 與 Projects 三層皆分離。RAM-P0:所有 AppModel 讀取都在本 view 邊界內,
+// DashboardRoot 對 Models 的資料一無所知(只持 `$tab`)。
+struct ModelsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        VStack(alignment: .leading, spacing: 10) {
+            RangeControls(selection: $model.modelsRange) { await model.reloadModelPage() }
+
+            if let page = model.modelPage {
+                let cost = costDisplay(page.cost)
+                EqualHeightTileRow {
+                    StatTile(title: "Period tokens", value: tk(page.totals.total))
+                    StatTile(title: "Period cost", value: cost.value, caption: cost.caption)
+                    StatTile(title: "Models", value: "\(page.models.count)")
+                }
+                ModelsTable(models: page.models)
+            } else {
+                Spacer()
+                ProgressView("Loading…").frame(maxWidth: .infinity)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .task { await model.reloadModelPage() }
+    }
+}
+
+// 平面表格:Provider | Model | Input | Output | Cache | Total | Est. cost | Provider share。
+// 消費已依 §2 全序建好的 page.models(providers 連續、組內排序皆決定性);純顯示、零重掃;
+// Provider share 分母 = **同 provider 組內**列和(within-provider,非全域);中性列底色;無 provider-limit %、無 sessions。
+struct ModelsTable: View {
     let models: [ModelUsageSummary]
 
-    // provider-連續分組(保留建構器的決定性順序)。
-    private var groups: [(provider: String, rows: [ModelUsageSummary])] {
-        var out: [(provider: String, rows: [ModelUsageSummary])] = []
-        for m in models {
-            if !out.isEmpty, out[out.count - 1].provider == m.providerId {
-                out[out.count - 1].rows.append(m)
-            } else {
-                out.append((provider: m.providerId, rows: [m]))
-            }
+    /// 每列的 within-provider share(‰),索引對齊 `models`。providers 由建構器保證連續 → 線性一次分組即可;
+    /// 每組以 `rowShares`(與 Projects hover / 報表同一分配器)配額,和恆 ≤ 1000。
+    private var providerShareMille: [Int] {
+        var out: [Int] = []
+        out.reserveCapacity(models.count)
+        var i = 0
+        while i < models.count {
+            var j = i
+            while j < models.count, models[j].providerId == models[i].providerId { j += 1 }
+            let group = models[i..<j]
+            out += ReportGenerator.rowShares(rows: group.map { $0.tokens.total },
+                                             periodTotal: group.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
+            i = j
         }
         return out
     }
@@ -1393,14 +1439,15 @@ struct ByModelTable: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
+                let mille = providerShareMille
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(groups, id: \.provider) { group in
-                            groupSection(group)
+                        ForEach(Array(models.enumerated()), id: \.element.id) { index, m in
+                            row(m, shareMille: mille[index])
+                                .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
                         }
                     }
                 }
-                .frame(maxHeight: 360)
             }
         }
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
@@ -1408,13 +1455,16 @@ struct ByModelTable: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            Text("Provider").frame(width: 96, alignment: .leading)
             Text("Model").frame(maxWidth: .infinity, alignment: .leading)
             Text("Input").frame(width: 72, alignment: .trailing)
+                .help("Input = fresh (non-cached) input tokens; cached context is shown under Cache.")   // A2 chrome-only
             Text("Output").frame(width: 72, alignment: .trailing)
             Text("Cache").frame(width: 72, alignment: .trailing)
             Text("Total").frame(width: 78, alignment: .trailing)
             Text("Est. cost").frame(width: 86, alignment: .trailing)
-            Text("Share").frame(width: 52, alignment: .trailing)
+            Text("Provider share").frame(width: 96, alignment: .trailing)
+                .help("Share of this provider's tokens in the range (denominator = same provider only).")
         }
         .font(Theme.FontScale.tableHeader)
         .foregroundStyle(Theme.textSecondary)
@@ -1422,31 +1472,19 @@ struct ByModelTable: View {
         .padding(.vertical, 7)
     }
 
-    // 每個 provider 一段:表頭下的 provider 小標 + 該組列;share 為**組內**配額(§2/D2:within-provider)。
-    private func groupSection(_ group: (provider: String, rows: [ModelUsageSummary])) -> some View {
-        let mille = ReportGenerator.rowShares(
-            rows: group.rows.map { $0.tokens.total },
-            periodTotal: group.rows.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
-        return VStack(alignment: .leading, spacing: 0) {
-            Text(ProviderBrands.brand(for: group.provider).displayName)
-                .font(Theme.FontScale.tableHeader)
-                .foregroundStyle(Theme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.top, 9)
-                .padding(.bottom, 2)
-            ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, m in
-                row(m, shareMille: mille[index])
-                    .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
-            }
-        }
-    }
-
     private func row(_ m: ModelUsageSummary, shareMille: Int) -> some View {
         // 模型名走封閉 modelLabel(路徑形 → basename;.unattributed → "unattributed";"" → "empty model id")。
         let label = PrivacyRedaction.modelLabel(attribution: m.attribution)
+        let brand = ProviderBrands.brand(for: m.providerId)
         let cost = costDisplay(m.cost)   // value + caption(未計價量 / opencode-reported 出處)
         return HStack(spacing: 8) {
+            // 可見 Provider 欄:dot + 短名(與 Today 卡 / hover preview 同一 brand 來源);全名在 .help。
+            HStack(spacing: 6) {
+                ProviderDot(brand: brand)
+                Text(brand.shortName).lineLimit(1).foregroundStyle(Theme.textSecondary)
+            }
+            .frame(width: 96, alignment: .leading)
+            .help(brand.displayName)
             Text(label).lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(label)
@@ -1461,10 +1499,14 @@ struct ByModelTable: View {
                 .help(cost.caption ?? "")
             Text(ReportGenerator.milleLabel(shareMille, nonZero: m.tokens.total > 0)).monospacedDigit()
                 .foregroundStyle(Theme.textSecondary)
-                .frame(width: 52, alignment: .trailing)
+                .frame(width: 96, alignment: .trailing)
         }
         .font(.callout)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        // VoiceOver:「<provider> <model>: <total> tokens, <cost>, <share> of provider」
+        .accessibilityLabel("\(brand.displayName) \(label): \(m.tokens.total) tokens, \(cost.value), "
+                            + "\(ReportGenerator.milleLabel(shareMille, nonZero: m.tokens.total > 0)) of provider")
     }
 }

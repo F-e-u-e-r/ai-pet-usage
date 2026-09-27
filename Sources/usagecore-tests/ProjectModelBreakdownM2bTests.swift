@@ -173,11 +173,12 @@ final class ProjectModelBreakdownM2bTests: XCTestCase {
         settings.retentionDays = 3650   // 固定歷史日期 fixture:不讓 retention clamp 掉 2026-07 事件(同既有 projectPage 測試)
         let coord = UsageCoordinator(dataDir: dir, settings: settings, adapters: [], readOnly: true)
         let range = DateInterval(start: date("2026-07-01T00:00:00Z"), end: date("2026-08-01T00:00:00Z"))
-        // build the page ONCE — and prove it performs EXACTLY 3 ledger walks END-TO-END (§10 perf gate:
-        // totals + projectSummariesWithModels + modelSummaries; M2b fold-in adds no 4th walk in projectPage itself).
+        // build the page ONCE — and prove it performs EXACTLY 2 ledger walks END-TO-END (§10 perf gate:
+        // totals + projectSummariesWithModels; M2b fold-in adds no extra walk in projectPage itself, and Usage-M3 B
+        // moved the global `modelSummaries` walk out to the standalone Models page — see ModelPageM3BTests).
         let walksBefore = m2bBridge { await coord.ledgerForEachWalkCount }
         let page = m2bBridge { await coord.projectPage(range: range) }
-        XCTAssertEqual(m2bBridge { await coord.ledgerForEachWalkCount } - walksBefore, 3)
+        XCTAssertEqual(m2bBridge { await coord.ledgerForEachWalkCount } - walksBefore, 2)
         let afterBuild = m2bBridge { await coord.projectPageLookupCount }
         XCTAssertEqual(afterBuild, 1)                                  // exactly one projectPage lookup so far
         XCTAssertFalse(page.projectModels.isEmpty)                     // slice pre-built → popover needs no further call
@@ -259,9 +260,9 @@ final class ProjectModelBreakdownM2bTests: XCTestCase {
         XCTAssertFalse(rows.contains { $0.providerId.isEmpty })
     }
 
-    // §10 perf gate — M2b folds into projectSummaries' walk: ZERO extra ledger walks; projectPage stays 3.
-    // Proven, not inferred: count forEachEvent invocations. (projectPage = totals-loop + projectSummariesWithModels
-    // + modelSummaries; this proves each ledger fn is exactly 1 walk, and M2b's fold-in keeps it at 1.)
+    // §10 perf gate — M2b folds into projectSummaries' walk: ZERO extra ledger walks. Proven, not inferred: count
+    // forEachEvent invocations. (Since Usage-M3 B, projectPage = totals-loop + projectSummariesWithModels = 2 walks and
+    // modelPage = modelSummaries = 1 walk; this proves each ledger fn is exactly 1 walk, and M2b's fold-in keeps it at 1.)
     func testM2b_PerformanceFoldsInNoExtraWalks() {
         let ledger = m2bLedger()
         let pricing = m0Pricing()
@@ -273,7 +274,7 @@ final class ProjectModelBreakdownM2bTests: XCTestCase {
         ledger.forEachEventWalkCount = 0
         let (_, projectModels) = ledger.projectSummariesWithModels(in: m2bInterval, pricing: pricing)
         XCTAssertEqual(ledger.forEachEventWalkCount, 1)
-        // (3) modelSummaries = exactly 1 walk. → projectPage's three components sum to 3 walks, unchanged by M2b.
+        // (3) modelSummaries = exactly 1 walk (= the whole Models page's projection cost since Usage-M3 B).
         ledger.forEachEventWalkCount = 0
         _ = ledger.modelSummaries(in: m2bInterval, pricing: pricing)
         XCTAssertEqual(ledger.forEachEventWalkCount, 1)
