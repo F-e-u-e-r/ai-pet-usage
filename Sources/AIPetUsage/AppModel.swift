@@ -4,22 +4,8 @@ import Observation
 import UsageCore
 import PetCore
 
-/// 專案頁的時間範圍選擇(可逆、可直接跳轉——規格明令禁止單向循環)。
-enum RangePreset: String, CaseIterable, Identifiable {
-    case today, yesterday, last7Days, thisWeek, lastWeek, allTime, custom
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .today: return "Today"
-        case .yesterday: return "Yesterday"
-        case .last7Days: return "Last 7 days"
-        case .thisWeek: return "This week"
-        case .lastWeek: return "Last week"
-        case .allTime: return "All time"
-        case .custom: return "Custom"
-        }
-    }
-}
+// `RangePreset` / `RangeSelection`(分頁時間範圍選擇)自 Usage-M3 B 起住在 UsageCore(DashboardRange.swift):
+// Projects 與 Models 各持一份 `RangeSelection`,區間構造只有 `RangeSelection.interval(now:)` 一份實作。
 
 @MainActor
 @Observable
@@ -35,11 +21,16 @@ final class AppModel {
     private(set) var refreshing = false
     private(set) var reindexing = false
 
-    // Projects 頁狀態
-    var rangePreset: RangePreset = .today
-    var customStart: Date = Calendar.current.startOfDay(for: Date().addingTimeInterval(-6 * 86400))
-    var customEnd: Date = Date()
+    // Projects 頁狀態(Usage-M3 B:區間選擇為值型別 `RangeSelection`;Projects 與 Models **各持一份**,互不共享)
+    var projectsRange = RangeSelection()
     private(set) var projectPage: ProjectPageData?
+
+    // Models 頁狀態(Usage-M3 B):自有 range + 自有 page 槽(序號守門在 `SequencedSlot` 內),與 Projects 的
+    // `projectsRange` / `projectPage` / `projectPageLoadSeq` 三層完全分離 —— Models 換 range 不動 Projects,
+    // 較舊的 Models 重載完成也不可能蓋掉較新者。
+    var modelsRange = RangeSelection()
+    private var modelPageSlot = SequencedSlot<ModelPageData>()
+    var modelPage: ModelPageData? { modelPageSlot.value }
 
     // Trends 頁狀態(7 / 30 / 90 天)
     var trendsRangeDays: Int = 30
@@ -193,6 +184,7 @@ final class AppModel {
             // 視窗關閉時跳過(重開時 dashboardOpened() + 各分頁 .task 會補載)。
             if dashboardWindowOpen {
                 await reloadProjectPage()
+                await reloadModelPage()   // Usage-M3 B:Models 分頁自有投影(1 walk;無新事件時 O(1) 快取命中)
                 await reloadTrends()
             }
         } while refreshPending
@@ -212,6 +204,7 @@ final class AppModel {
         dashboardWindowOpen = true
         Task { [weak self] in
             await self?.reloadProjectPage()
+            await self?.reloadModelPage()
             await self?.reloadTrends()
         }
     }
@@ -252,6 +245,7 @@ final class AppModel {
         syncPetAfterDashboard()
         if dashboardWindowOpen {
             await reloadProjectPage()
+            await reloadModelPage()
             await reloadTrends()
         }
     }
@@ -459,38 +453,27 @@ final class AppModel {
         }
     }
 
-    // MARK: - Projects 頁範圍
+    // MARK: - Projects / Models 頁範圍(Usage-M3 B:各自一份 RangeSelection,同一份 interval 實作)
 
-    func currentRange(now: Date = Date()) -> DateInterval {
-        let cal = Calendar.current
-        switch rangePreset {
-        case .today:
-            return .today(now: now)
-        case .yesterday:
-            return .day(containing: cal.date(byAdding: .day, value: -1, to: now)!)
-        case .last7Days:
-            return DateInterval(start: cal.startOfDay(for: cal.date(byAdding: .day, value: -6, to: now)!), end: now)
-        case .thisWeek:
-            let start = cal.dateInterval(of: .weekOfYear, for: now)!.start
-            return DateInterval(start: start, end: now)
-        case .lastWeek:
-            let thisWeek = cal.dateInterval(of: .weekOfYear, for: now)!
-            return DateInterval(start: cal.date(byAdding: .day, value: -7, to: thisWeek.start)!, end: thisWeek.start)
-        case .allTime:
-            // 涵蓋整個本機歷史(帳本有保留期上限,起點取足夠早即可)
-            return DateInterval(start: Date(timeIntervalSince1970: 0), end: now)
-        case .custom:
-            let start = cal.startOfDay(for: customStart)
-            let end = min(cal.startOfDay(for: customEnd).addingTimeInterval(86400), Date())
-            return DateInterval(start: start, end: max(end, start.addingTimeInterval(60)))
-        }
-    }
+    /// Projects 分頁的查詢區間(= `projectsRange.interval`;唯一實作在 UsageCore `RangeSelection`)。
+    func currentRange(now: Date = Date()) -> DateInterval { projectsRange.interval(now: now) }
+
+    /// Models 分頁的查詢區間(= `modelsRange.interval`;與 Projects 的選擇值無關)。
+    func currentModelsRange(now: Date = Date()) -> DateInterval { modelsRange.interval(now: now) }
 
     func reloadProjectPage() async {
         projectPageLoadSeq &+= 1
         let seq = projectPageLoadSeq
         let data = await coordinator.projectPage(range: currentRange())
         if seq == projectPageLoadSeq { projectPage = data }   // 只有最新發起者可寫(見 seq 註解)
+    }
+
+    /// Usage-M3 B:Models 分頁重載(鏡射 reloadProjectPage;自有序號 —— 守門在 `SequencedSlot.publish` 內,
+    /// 較舊發起者的完成無論何時 resume 都被丟棄,不可能蓋掉較新結果)。
+    func reloadModelPage() async {
+        let ticket = modelPageSlot.begin()
+        let data = await coordinator.modelPage(range: currentModelsRange())
+        modelPageSlot.publish(ticket, data)
     }
 
     func reloadTrends() async {
@@ -535,12 +518,18 @@ final class AppModel {
         exportReport(kind: .today, suggestedName: "AIPetUsage-Report-\(df.string(from: Date())).html")
     }
 
-    func exportCurrentRange() {
+    /// Projects 分頁的 Export(Projects 自己的 range)。
+    func exportCurrentRange() { exportRange(projectsRange) }
+
+    /// Models 分頁的 Export(Usage-M3 B:Models **自己的** range,與 Projects 的選擇無關)。
+    func exportModelsRange() { exportRange(modelsRange) }
+
+    private func exportRange(_ selection: RangeSelection) {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
-        let range = currentRange()
+        let range = selection.interval()
         let name = "AIPetUsage-Report-\(df.string(from: range.start))-to-\(df.string(from: range.end)).html"
-        exportReport(kind: .range(range, title: "Usage Report — \(rangePreset.displayName)"), suggestedName: name)
+        exportReport(kind: .range(range, title: "Usage Report — \(selection.preset.displayName)"), suggestedName: name)
     }
     func exportTrends() {
         let df = DateFormatter()

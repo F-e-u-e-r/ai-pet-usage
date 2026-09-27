@@ -1152,6 +1152,22 @@ runSuite("ProjectModelBreakdownM2bTests", [
     ("testM2b_PerformanceFoldsInNoExtraWalks", projectModelBreakdownM2b.testM2b_PerformanceFoldsInNoExtraWalks),
 ])
 
+// Usage-M3 B — standalone Models tab: dedicated 1-walk projection + own cache slot + own range + seq-guarded reload;
+// Projects drops to 2 walks and keeps projectModels (A1 hover source). Red-first A–J.
+let modelPageM3B = ModelPageM3BTests()
+runSuite("ModelPageM3BTests", [
+    ("testM3B_ModelPageExactlyOneWalkAndRowSumConservation", modelPageM3B.testM3B_ModelPageExactlyOneWalkAndRowSumConservation),
+    ("testM3B_ProjectPageExactlyTwoWalks", modelPageM3B.testM3B_ProjectPageExactlyTwoWalks),
+    ("testM3B_SameEffectiveKeyNoExtraWalk", modelPageM3B.testM3B_SameEffectiveKeyNoExtraWalk),
+    ("testM3B_RevisionChangeInvalidates", modelPageM3B.testM3B_RevisionChangeInvalidates),
+    ("testM3B_PricingStampChangeInvalidates", modelPageM3B.testM3B_PricingStampChangeInvalidates),
+    ("testM3B_DifferentEffectiveRangeInvalidates", modelPageM3B.testM3B_DifferentEffectiveRangeInvalidates),
+    ("testM3B_NormalizationBeforeCacheKeyIdentity", modelPageM3B.testM3B_NormalizationBeforeCacheKeyIdentity),
+    ("testM3B_StaleOlderReloadCompletionCannotReplaceNewer", modelPageM3B.testM3B_StaleOlderReloadCompletionCannotReplaceNewer),
+    ("testM3B_ModelsRangeIndependentFromProjectsRange", modelPageM3B.testM3B_ModelsRangeIndependentFromProjectsRange),
+    ("testM3B_ProjectPageStillProducesProjectModelsForA1Hover", modelPageM3B.testM3B_ProjectPageStillProducesProjectModelsForA1Hover),
+])
+
 // Usage-M3 A1 — anchored hover/focus breakdown-card state machine (pure FSM; owner-ratified 11-item contract).
 let anchoredHoverModel = AnchoredHoverModelTests()
 runSuite("AnchoredHoverModelTests", [

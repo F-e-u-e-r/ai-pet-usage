@@ -107,10 +107,11 @@ public enum ReportKind: Sendable {
     case range(DateInterval, title: String)
 }
 
+/// Projects 分頁的投影。Usage-M3 B 起**不再**含 global model aggregation(`models` 欄位連同其 walk 一併移除,
+/// 移到獨立的 `ModelPageData` / `modelPage`);page-build = 2 walks(totals + `projectSummariesWithModels`)。
 public struct ProjectPageData: Sendable {
     public var range: DateInterval
     public var projects: [ProjectSummary]
-    public var models: [ModelUsageSummary]
     public var totals: TokenBreakdown
     public var cost: CostResult
     /// Usage-M2b:per-project 的模型明細,鍵同 `projectSummaries`(`projectId ?? "(unknown project)"`),
@@ -129,6 +130,21 @@ public extension ProjectPageData {
     /// Usage-M2b popover/hover 的**唯一**讀取路徑(§9.3 n7 / §10:互動時零 coordinator/page lookup):
     /// 讀已建好的切片,**miss → 空陣列**,絕不 fetch/scan。這是「interaction 只消費既建投影」的契約據點。
     func projectModelRows(forKey key: String) -> [ModelUsageSummary] { projectModels[key] ?? [] }
+}
+
+/// Usage-M3 B:Models 分頁(獨立 tab、**自有** range)的投影。page-build = **恰一趟** event walk(`modelSummaries`);
+/// `totals` / `cost` 由列加總得出(每個事件恰歸一列 ⇒ 列和 = 事件和),不另掃。與 `ProjectPageData` 各持
+/// 自己的快取槽與鍵 `(revision, pricingStamp, start, end)`(`cachedModelPage`),兩分頁換 range 互不干擾。
+public struct ModelPageData: Sendable {
+    public var range: DateInterval
+    /// 已依 M2a §2 全序排好(provider 總量降序 → providerId → 組內 total 降序 → unattributed 殿後 → modelId);
+    /// provider 因此連續,UI 的 within-provider share 直接按連續段分母。
+    public var models: [ModelUsageSummary]
+    public var totals: TokenBreakdown
+    public var cost: CostResult
+    /// 內容身分(同 `ProjectPageData.revision/pricingStamp` 語意):`(revision, pricingStamp, range)` 唯一決定本頁內容。
+    public var revision: UInt64
+    public var pricingStamp: UInt64
 }
 
 /// Trends 分頁 / 熱圖所需的聚合(純本機、跨 actor 傳遞的不可變值)。
@@ -215,6 +231,10 @@ public actor UsageCoordinator {
     /// 高頻 refresh 會在事件集完全未變時重算 All-time 專案頁/趨勢(實測 92 天 12.4s),
     /// 快取讓「無新事件的刷新」變 O(1)。世代任一推進即失效,絕不回傳過期聚合。
     private var cachedProjectPage: (revision: UInt64, pricingStamp: UInt64, start: Date, end: Date, data: ProjectPageData)?
+    /// Usage-M3 B:Models 分頁**自己的**快取槽(鍵同 projectPage:世代 + 價目世代 + 有效區間)。與
+    /// `cachedProjectPage` 完全分離 —— Models 換 range 不得使 Projects 的投影失效,反之亦然(兩分頁各自
+    /// 穩態 O(1),不因對方的 range 切換互相踢出)。
+    private var cachedModelPage: (revision: UInt64, pricingStamp: UInt64, start: Date, end: Date, data: ModelPageData)?
     private var cachedTrends: (revision: UInt64, pricingStamp: UInt64, days: Int, day: Date,
                                computedAt: Date, timeZoneID: String, cutoff: Date, data: TrendsData)?
     /// internal(tests-only via `@testable`,同上方 DurabilityOps 注入 seam 的慣例):trends 重算
@@ -228,7 +248,8 @@ public actor UsageCoordinator {
     /// production 無讀者。
     var projectPageLookupCount = 0
     /// internal(tests-only via `@testable`):把 ledger 的全掃描計數透出,供測試證明 **一次 `projectPage`
-    /// build 端到端剛好 3 walks**(totals + `projectSummariesWithModels` + `modelSummaries`);M2b 折入不增第 4 趟。
+    /// build 端到端剛好 2 walks**(totals + `projectSummariesWithModels`;Usage-M3 B 把 `modelSummaries` 那趟
+    /// 搬到 `modelPage` = 恰 1 walk),M2b 折入不增額外趟。
     var ledgerForEachWalkCount: Int { ledger.forEachEventWalkCount }
     /// 價目世代:使用者覆寫寫入時 +1(價目影響所有成本聚合)。
     private var pricingStamp: UInt64 = 0
@@ -1433,13 +1454,13 @@ public actor UsageCoordinator {
             totals = totals + e.tokens
             cost = cost + self.pricing.cost(of: e)
         }
-        // M2b:projects 與 projectModels 由**同一趟** walk 產出(§3/§10 M1);page-build 仍是 3 walks
-        // (此處 totals + projectSummariesWithModels + modelSummaries),不增。
+        // M2b:projects 與 projectModels 由**同一趟** walk 產出(§3/§10 M1)。Usage-M3 B 後 page-build = 2 walks
+        // (此處 totals + projectSummariesWithModels);global model aggregation 已移到 `modelPage`(Models 分頁)。
+        // `projectModels` 是 A1 hover preview 的資料來源,**保留**。
         let (projects, projectModels) = ledger.projectSummariesWithModels(in: range, pricing: pricing)
         let data = ProjectPageData(
             range: range,
             projects: projects,
-            models: ledger.modelSummaries(in: range, pricing: pricing),
             totals: totals,
             cost: cost,
             projectModels: projectModels,
@@ -1447,6 +1468,38 @@ public actor UsageCoordinator {
             pricingStamp: pricingStamp
         )
         cachedProjectPage = (rev, pricingStamp, range.start, range.end, data)
+        return data
+    }
+
+    /// Usage-M3 B:Models 分頁投影 —— **恰一趟** walk(`modelSummaries`),自有快取槽(`cachedModelPage`)。
+    /// `now` 只供 retained-window clamp 的時刻注入(預設 = 現在;測試用以固定 cutoff),不改語意。
+    public func modelPage(range requested: DateInterval, now: Date = Date()) -> ModelPageData {
+        // 正規化**先於**快取鍵(owner B 契約 / xcheck a1b-r1 guard (a)):clamp 進 retained window 後的**有效**區間
+        // 才是鍵與儲存的身分 —— 兩個原始起點皆早於 cutoff 的請求是同一個查詢,必須落同一鍵、回同一份投影;
+        // 回傳的 `range` 亦為有效區間(UI/身分戳記看到的是實際聚合的區間)。
+        let range = UsageLedger.clampToRetained(requested, retentionDays: settings.retentionDays, now: now)
+        // 命中判定與 projectPage 逐字同義(起點等價 / 終點等價,見該處註解);只是槽不同。
+        let rev = ledger.revision
+        let newest = ledger.newestEvent()?.timestamp
+        let oldest = ledger.events.first?.timestamp
+        if let c = cachedModelPage, c.revision == rev, c.pricingStamp == pricingStamp,
+           c.start == range.start || (oldest.map { c.start <= $0 && range.start <= $0 } ?? true),
+           c.end == range.end || (newest.map { c.end > $0 && range.end > $0 } ?? true) {
+            var data = c.data
+            data.range = range
+            return data
+        }
+        let models = ledger.modelSummaries(in: range, pricing: pricing)   // 唯一的一趟 walk
+        // 每個事件恰歸一列(provider × attribution 分割全集)⇒ 列和 == 事件和;不另跑 totals walk。
+        var totals = TokenBreakdown.zero
+        var cost = CostResult.zero
+        for m in models {
+            totals = totals + m.tokens
+            cost = cost + m.cost
+        }
+        let data = ModelPageData(range: range, models: models, totals: totals, cost: cost,
+                                 revision: rev, pricingStamp: pricingStamp)
+        cachedModelPage = (rev, pricingStamp, range.start, range.end, data)
         return data
     }
 
