@@ -42,9 +42,9 @@ struct DashboardRoot: View {
         TabView(selection: $tab) {
             TodayView().tabItem { Label("Today", systemImage: "sun.max") }.tag(DashboardTab.today)
             LimitsView().tabItem { Label("Limits", systemImage: "gauge.with.needle") }.tag(DashboardTab.limits)
-            // isActive:Projects 是否為當前分頁。切離→硬關 hover;切回→重建 hover viewport + 重發列幾何
-            // (owner spike-repair B:切 tab 回來 hover 不得依賴 range refresh 才復活)。`tab` 是本地 @State,
-            // 於 body 讀取不違反 RAM-P0 的 Observation 隔離(只追蹤 $tab,不回讀 model 可觀測屬性)。
+            // isActive:Projects 是否為當前分頁。切離 → 清除 bottom inspector 的選取;切回 → inspector 一律從關閉開始
+            // (Usage-M3 A1 owner ruling 2026-09-29)。`tab` 是本地 @State,於 body 讀取不違反 RAM-P0 的 Observation
+            // 隔離(只追蹤 $tab,不回讀 model 可觀測屬性)。
             ProjectsView(isActive: tab == .projects)
                 .tabItem { Label("Projects", systemImage: "folder") }.tag(DashboardTab.projects)
             // Usage-M3 B:獨立 Models 分頁(自有 range / 自有投影)。無參數、不在此讀任何 model 狀態 ——
@@ -998,18 +998,44 @@ private struct RangeControls: View {
         }
 
         if selection.preset == .custom {
-            HStack {
-                // R3(三方裁定 A):en_CA locale → yyyy-MM-dd 零補位,消除系統
-                // locale 的「 6/ 7/2026」空白補位與 D/M 歧義,並與 app 全域日期
-                // 格式一致。只套在這兩個 picker,不外擴(codex 條件)。
-                DatePicker("From", selection: $selection.customStart, displayedComponents: .date)
-                    .environment(\.locale, Locale(identifier: "en_CA"))
-                DatePicker("To", selection: $selection.customEnd, displayedComponents: .date)
-                    .environment(\.locale, Locale(identifier: "en_CA"))
+            // Custom 區間(Usage-M3 A1 r3,owner 裁決):preset 列下方的**平鋪 inline 篩選列** —— 無標題、無卡片容器
+            // (r2 的巢狀圓角卡片被否決),像 toolbar / filter 控制列。原生 DatePicker / 日曆行為不變(不自製日曆);
+            // en_CA(yyyy-MM-dd)只套在兩個 picker;From / To 是欄位左側的小 muted 標籤;整列以文字基線對齊,只用 Theme
+            // 語意色。語意不變:只編日期不 reload(Projects 的選取保留),Apply 才 reload。Projects 與 Models 分頁共用。
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                customFieldLabel("From")
+                customDateField("From", selection: $selection.customStart)
+                Text(Image(systemName: "arrow.right"))
+                    .font(.caption)
+                    .foregroundStyle(Theme.textMuted)
+                    .padding(.horizontal, 4)
+                    .accessibilityHidden(true)
+                customFieldLabel("To")
+                customDateField("To", selection: $selection.customEnd)
                 Button("Apply") { Task { await reload() } }
+                    .padding(.leading, 6)
             }
-            .font(.caption)
+            .controlSize(.small)
         }
+    }
+
+    /// Custom 欄位左側的小 muted 標籤。純視覺:DatePicker 自身的 "From" / "To" 仍是 VoiceOver 標籤,故此處對
+    /// accessibility 隱藏,避免重複朗讀。
+    private func customFieldLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption)
+            .foregroundStyle(Theme.textSecondary)
+            .accessibilityHidden(true)
+    }
+
+    /// 原生 DatePicker(樣式與日曆行為不變);內建標籤隱藏,改用左側的自有標籤。
+    private func customDateField(_ title: String, selection date: Binding<Date>) -> some View {
+        // R3(三方裁定 A):en_CA locale → yyyy-MM-dd 零補位,消除系統
+        // locale 的「 6/ 7/2026」空白補位與 D/M 歧義,並與 app 全域日期
+        // 格式一致。只套在這兩個 picker,不外擴(codex 條件)。
+        DatePicker(title, selection: date, displayedComponents: .date)
+            .labelsHidden()
+            .environment(\.locale, Locale(identifier: "en_CA"))
     }
 }
 
@@ -1017,12 +1043,24 @@ private struct RangeControls: View {
 
 struct ProjectsView: View {
     @Environment(AppModel.self) private var model
-    let isActive: Bool   // 由 DashboardRoot 傳入:Projects 是否為當前分頁(驅動 ProjectTable 的 hover re-arm)
+    let isActive: Bool   // 由 DashboardRoot 傳入:Projects 是否為當前分頁(離開即清除 inspector 選取)
+    // Usage-M3 A1 bottom inspector(owner ruling 2026-09-29,Phase 1):**唯一**的選取狀態。ProjectsView 同時擁有
+    // RangeControls 與分頁生命週期,所以由它持有並執行全部清除規則;ProjectTable / inspector 只拿 binding。
+    //   • 換 preset、Custom Apply → reload 前先清;Custom 只編日期、未 Apply → 保留。
+    //   • 同 timeframe 背景 refresh → 選取的專案仍在新清單就保留(inspector 讀新切片),不在就清除。
+    //   • 離開 Projects → 清除;回到 Projects 時 inspector 一律從關閉開始。
+    // pageStamp / revision 是資料身分、不是使用者意圖:**不**用來推斷 timeframe 變更。被清除的選取永不復活。
+    @State private var selectedProjectID: String?
 
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
-            RangeControls(selection: $model.projectsRange) { await model.reloadProjectPage() }
+            // RangeControls 只在「換 preset」與「Custom Apply」時呼叫 reload(編日期不呼叫)—— 正是使用者換 timeframe
+            // 的兩個意圖點,故在此先清選取再 reload。RangeControls 本身不動(Models 分頁共用)。
+            RangeControls(selection: $model.projectsRange) {
+                selectedProjectID = nil
+                await model.reloadProjectPage()
+            }
 
             if let page = model.projectPage {
                 let cost = costDisplay(page.cost)
@@ -1035,8 +1073,14 @@ struct ProjectsView: View {
                 }
 
                 ProjectTable(projects: page.projects, projectModels: page.projectModels, isActive: isActive,
-                             pageStamp: ProjectPageStamp(revision: page.revision, pricingStamp: page.pricingStamp,
-                                                         range: page.range))
+                             selection: $selectedProjectID)
+                    // 同 timeframe 背景 refresh(FSEvents / 輪詢重載頁面)以**有序 id 清單**和解:選取仍在 → 保留,不在 → 清除。
+                    // 純邏輯在 UsageCore `ProjectInspectorSelection.retained`(永不把 nil 變回 id)。
+                    .onChange(of: page.projects.map(\.projectId)) { _, ids in
+                        selectedProjectID = ProjectInspectorSelection.retained(selectedProjectID, in: ids)
+                    }
+                    // owner r3:表格優先於下方 Spacer 取得剩餘高度 —— 空間吃緊時不得出現「列表被壓掉、表格下方卻留白」。
+                    .layoutPriority(1)
             } else {
                 Spacer()
                 ProgressView("Loading…").frame(maxWidth: .infinity)
@@ -1045,74 +1089,34 @@ struct ProjectsView: View {
         }
         .padding(16)
         .task { await model.reloadProjectPage() }
+        // 離開 Projects → 清除;回到 Projects 時 inspector 一律從關閉開始。
+        .onChange(of: isActive) { _, active in if !active { selectedProjectID = nil } }
+        .onDisappear { selectedProjectID = nil }
     }
 }
 
-/// Usage-M3 A1(ROW-ONLY preview,owner 裁定 2026-09-24):各列回報自身 `frame(in: .named("projectTable"))`,
-/// table 層收成 `rowFrames` 交給 `ProjectHoverController`;單一 `NSTrackingArea`(`HoverTrackingRepresentable`)的
-/// pointer location 於同一座標空間 → `HoverZoneResolver` 只判**哪一列**含指標 → FSM。preview 純視覺、不參與 hover
-/// 解析(故無 CardFrameKey / card zone / lastPointer)。取代先前 per-view `.onHover` 與 SwiftUI `.onContinuousHover`。
-private struct RowFramesKey: PreferenceKey {
-    static var defaultValue: [String: CGRect] { [:] }
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-}
-
-/// 頁面內容身分(= `ProjectPageData` 的 projectPage 快取鍵投影):`(revision, pricingStamp, range)` 唯一決定頁面
-/// 內容,故任何 tokens/cost/order/range 變動都改變它。ProjectTable 以此當 `.onChange` 鍵驅動 controller 重取
-/// preview 切片(owner spike#3 fix #2:忠實身分,非弱 count fingerprint;不需給 ModelUsageSummary 加 Hashable)。
-struct ProjectPageStamp: Equatable {
-    let revision: UInt64
-    let pricingStamp: UInt64
-    let range: DateInterval
-}
-
-/// owner D3 — validity identity for RETAINED row geometry. `rowFrames` (viewport-space rects) is re-handed to the
-/// controller on tab/appear re-activation to avoid a "dead until scroll" gap; but stale rects must never resolve a
-/// pointer to the WRONG project. The retained geometry is valid ONLY while the page content identity (`pageStamp`)
-/// AND the ordered project ids are unchanged. Viewport/layout identity (pure resize while inactive) is deliberately
-/// NOT tracked here (would need viewport-size plumbing) — that residual is an accepted RECORD, self-corrected by the
-/// first fresh `RowFramesKey` flush after re-activation. Principle: temporary no-hover > wrong-project hover.
-private struct RowGeometryIdentity: Equatable {
-    let pageStamp: ProjectPageStamp
-    let orderedIDs: [String]
-}
-
+/// Usage-M3 A1 — Projects 表格 + **bottom inspector**(owner ruling 2026-09-29:放棄浮動 hover,改 in-view 底部面板)。
+/// 互動只有三種:滑鼠 click 選取(列內淡 accent 底)、有選取時 ↑/↓ 依目前順序切換、Esc 關閉。一般 hover 不呈現任何
+/// 東西、不留任何互動狀態。沒有 NSPanel / NSTrackingArea / 列幾何解析 / hover FSM / grace timer / PresentationGate /
+/// mouse marker。選取狀態由 ProjectsView 持有(binding 傳入);inspector 內容只讀 page-build 已建好的
+/// `projectModels[id]`(0 ledger walk、0 coordinator lookup)。
 struct ProjectTable: View {
     let projects: [ProjectSummary]
-    // Usage-M2b:per-project 模型明細(page-build 已建好、已依 §9.3 全序排好)。drill-down 互動**只讀此切片**
-    // ——view 直接讀 `projectModels[key] ?? []`(與 `ProjectPageData.projectModelRows(forKey:)` seam 同 miss→空
-    // 語意;該 seam 供 §10 no-lookup 測試),絕不重掃或呼叫 coordinator。**必填**(無預設):
-    // 漏傳會編成空 drill-down 而 UsageCore 測試偵測不到(impl-xcheck grok/sol footgun),故強制在 call site 供給。
+    // Usage-M2b:per-project 模型明細(page-build 已建好、已依 §9.3 全序排好)。inspector **只讀此切片**
+    // ——`projectModels[key] ?? []`(與 `ProjectPageData.projectModelRows(forKey:)` seam 同 miss→空語意;該 seam 供
+    // §10 no-lookup 測試),絕不重掃或呼叫 coordinator。**必填**(無預設):漏傳會編成空明細而 UsageCore 測試偵測
+    // 不到(impl-xcheck grok/sol footgun),故強制在 call site 供給。
     let projectModels: [String: [ModelUsageSummary]]
-    // Projects 是否為當前分頁。切離→controller 硬關;切回→controller 開新 session(NSTrackingArea 自然重接,
-    // 無需 `.id`/epoch —— spike#2 的舊法)。修「切 tab 回來 hover 死、需切 range 才復活」。
+    // Projects 是否為當前分頁:鍵盤 handler 只在「當前分頁 + 有選取」時處理(ProjectsView 離開時也會清選取,此為雙保險)。
     let isActive: Bool
-    // owner spike#3 fix #2:頁面內容身分(revision/pricingStamp/range 投影)。任何 payload 變動(含 same
-    // ids/counts 換料)都改變它 → 驅動 controller 重取 preview 切片,免展示舊數字。非弱 fingerprint、不需 Hashable。
-    let pageStamp: ProjectPageStamp
-    // Usage-M3 A1(owner re-architecture 2026-09-24,spike #2 FAILED):互動全部移到 `ProjectHoverController`
-    // ——單一 owner 持有 row-only FSM + 唯一 output-only NSPanel + 列幾何;單一 `NSTrackingArea`
-    // (`HoverTrackingRepresentable`)為唯一指標源(取代 SwiftUI `.onContinuousHover` 與失敗的 `.id(hoverEpoch)`
-    // 重接)。preview 改由 screen 座標的 NSPanel 呈現(可超出 dashboard 視窗、只夾在 `NSScreen.visibleFrame`)。
-    // 純件(HoverZoneResolver / AnchoredHoverModel / PanelPlacement)在 UsageCore 已單元測試;詳見 ProjectHoverPanel.swift。
-    @StateObject private var controller = ProjectHoverController()
-    @FocusState private var focusedRow: String?
-    // spike#3 case B:保留最後已知的**非空**列幾何(viewport 空間)。切回 Projects 時顯式交回 controller,免得
-    // 等 RowFramesKey 因 scroll/range 才重發(切離時列消失使 RowFramesKey 短暫收成空,是「切回 hover 死到 scroll
-    // 才復活」的成因)。live 更新仍走 onPreferenceChange;此 @State 只快取最後非空值供 re-arm。
-    @State private var rowFrames: [String: CGRect] = [:]
-    // owner D3 — the page/order identity the retained `rowFrames` belong to; re-handed geometry is honored only
-    // while this still matches the live `geometryIdentity` (else stale → wait for a fresh RowFramesKey flush).
-    @State private var rowFramesIdentity: RowGeometryIdentity?
-    @Environment(\.controlActiveState) private var controlActiveState
-    private static let spaceName = "projectTable"
-
-    /// owner D3 — current geometry validity identity (page content + ordered ids). See `RowGeometryIdentity`.
-    private var geometryIdentity: RowGeometryIdentity {
-        RowGeometryIdentity(pageStamp: pageStamp, orderedIDs: projects.map { $0.projectId })
-    }
+    @Binding var selection: String?
+    // 鍵盤歸屬(owner r2):表格層級 focus 範圍是否持有鍵盤。只決定 ↑/↓/Esc 由誰處理,不是選取模型。
+    @FocusState private var tableHasKeyboard: Bool
+    // owner r4:表格只在滑鼠(或 VoiceOver)選取後才可 focus;表格失去 focus 即清除。表格可 focus ⇔ keyboardArmed ∧ 有選取,
+    // 所以 Tab 永遠不會停在表格(r3 沒選取時是死停點)。不要改回無條件 `.focusable`(r4 focus probe K1/K7 會轉紅)。
+    @State private var keyboardArmed = false
+    // owner r3:列表最小高度 ≈ 5 列(列高約 28pt)。可依 GUI 證據微調,非契約數字。
+    private static let listMinHeight: CGFloat = 140
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1125,86 +1129,68 @@ struct ProjectTable: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        // Share 欄整組配額(‰,一位小數;和恆 ≤100%,xcheck r1 twin)。
-                        // 全集列 → 分母即列和。
-                        let mille = ReportGenerator.rowShares(
-                            rows: projects.map { $0.tokens.total },
-                            periodTotal: projects.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
-                        ForEach(Array(projects.enumerated()), id: \.element.id) { index, p in
-                            row(p, shareMille: mille[index])
-                                .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            // Share 欄整組配額(‰,一位小數;和恆 ≤100%,xcheck r1 twin)。
+                            // 全集列 → 分母即列和。
+                            let mille = ReportGenerator.rowShares(
+                                rows: projects.map { $0.tokens.total },
+                                periodTotal: projects.reduce(0) { $0 + $1.tokens.total }, scale: 1000)
+                            ForEach(Array(projects.enumerated()), id: \.element.id) { index, p in
+                                row(p, shareMille: mille[index], selected: p.projectId == selection)
+                                    .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
+                            }
                         }
                     }
+                    // 鍵盤(owner r2 ruling):**單一**表格層級 focus 範圍,取代 Phase 1 的隱形全域快捷鍵(那會搶走 Custom
+                    // DatePicker 的方向鍵,owner GUI 重現 R1 STOP)。owner r4:此範圍**不是** Tab 停靠點 —— 只在點列(或
+                    // VoiceOver 啟用)後可 focus,列本身仍不可 focus。點列會把鍵盤交給此範圍;此範圍持有 focus 時 ↑/↓ 依目前
+                    // 順序移動(兩端停住)、Esc 關閉 inspector。DatePicker 或其他控制項取得 focus 時這些 handler 收不到按鍵,
+                    // 原生行為優先。無 NSEvent monitor。
+                    // `tableHasKeyboard` 只代表鍵盤歸屬,不是選取模型(選取仍是 ProjectsView 的 selectedProjectID)。
+                    .focusable(keyboardArmed && selection != nil, interactions: .edit)
+                    .focused($tableHasKeyboard)
+                    .onChange(of: tableHasKeyboard) { _, has in if !has { keyboardArmed = false } }
+                    .onKeyPress(.upArrow) { move(.previous) }
+                    .onKeyPress(.downArrow) { move(.next) }
+                    .onKeyPress(.escape) { closeInspector() }
+                    // owner r3:列表永遠保有可用高度(約 5 列),inspector 打開後仍可看到並點選其他專案。
+                    .frame(minHeight: Self.listMinHeight)
+                    // 選取改變(點擊 / 鍵盤 / VoiceOver)後把選取列以最小捲動帶進可視範圍。延到下一輪 runloop:inspector
+                    // 出現或換高度會改變列表的可視高度,須等版面更新後再捲(否則點靠下的列可能仍被擠出畫面)。
+                    .onChange(of: selection) { _, id in
+                        guard let id else { return }
+                        DispatchQueue.main.async { proxy.scrollTo(id) }
+                    }
                 }
-                // 單一 NSTrackingArea 指標源覆蓋此 viewport(取代 `.onContinuousHover` 與失敗的 `.id(hoverEpoch)`
-                // 重接)。座標空間放在 ScrollView(viewport)上 → 列以 viewport 空間回報 frame(RowFramesKey),與
-                // tracker 的 flipped local 座標對齊;tracker hitTest→nil 不吃 click(列仍可 click-focus)。
-                .coordinateSpace(name: Self.spaceName)
-                // owner spike#3 hardening:tracker 明確填滿 viewport(避免 overlay 實際 bounds < viewport)。
-                .overlay { HoverTrackingRepresentable(controller: controller).frame(maxWidth: .infinity, maxHeight: .infinity) }
+                // Bottom inspector:table / Divider / inspector 的簡單 VStack(不是 NSPanel、不是獨立視窗)。選取 id 不在
+                // 目前清單時不畫(ProjectsView 的 refresh 和解會同一輪把它清掉)。
+                if let id = selection, let p = projects.first(where: { $0.projectId == id }) {
+                    Divider()
+                    ProjectModelInspector(projectName: p.projectName, rows: projectModels[id] ?? [])
+                        // owner r3:高度優先序 = 列表 > inspector。較高 layout priority 讓 stack 先保留列表的最小高度,
+                        // 再給 inspector 其自然高度(有上限);空間不足時由 inspector 先縮,內容改為內部捲動。
+                        .layoutPriority(1)
+                }
             }
         }
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
-        // 列幾何(viewport 空間)→ controller(唯一持有 FSM / panel / rowRects)。捲動/版面變動時 controller 內部
-        // 作廢 pointer 擁有權(grace 關閉,focus 持有則留),不做 lastPointer 幾何重解(守 STOP 契約)。
-        // spike#3 case B:忽略**空**的 flush(切離 Projects 時列消失會使 RowFramesKey 短暫收成空;若讓它清掉
-        // retained 幾何,切回時 controller 拿到空 → hover 死)。非空才快取 + 轉交。可見列永遠非空(空專案走另一分支)。
-        .onPreferenceChange(RowFramesKey.self) { newFrames in
-            guard !newFrames.isEmpty else { return }
-            rowFrames = newFrames
-            rowFramesIdentity = geometryIdentity          // owner D3: stamp the identity these frames belong to
-            controller.setRows(newFrames)
-        }
-        // 視窗級 Esc catcher(僅在 preview 顯示時存在):inert(key equivalent 仍觸發);action 走 controller.escape()。
-        .background(alignment: .topLeading) {
-            if controller.isShowing {
-                Button("") { controller.escape() }
-                    .keyboardShortcut(.cancelAction)
-                    .focusable(false).allowsHitTesting(false).opacity(0).accessibilityHidden(true)
-            }
-        }
-        // 整列 focus 變動 → controller(show 僅在 key window;non-key 不得 show)。
-        .onChange(of: focusedRow) { oldValue, newValue in controller.setFocus(old: oldValue, new: newValue) }
-        // key window 變動 → controller(失去 key → 硬關)。RECORD:`controlActiveState` 自 macOS 15 deprecated,本輪不換 API。
-        .onChange(of: controlActiveState) { _, state in
-            controller.setWindowActive(state == .key)
-            // grok review r2:失去 key 由 hardClear 清 FSM focus;重獲 key 時 @FocusState 可能仍在某列(值未變 →
-            // 無 onChange(focusedRow))→ 顯式重新灌回 controller,否則鍵盤 focus 的 preview 於 Cmd-Tab 來回後會死。
-            if state == .key, let f = focusedRow { controller.setFocus(old: nil, new: f) }
-        }
-        // Projects 分頁 activate/deactivate 的**顯式**生命週期。切回時開新 session、**不重載資料**;NSTrackingArea 自然
-        // 重接(不需 `.id`/epoch —— 那正是 spike #2 失敗的舊法)。先更新 panel 內容切片,再 activate。
-        .onChange(of: isActive) { _, active in
-            controller.setData(projectModels: projectModels, names: nameMap)
-            controller.setActive(active)
-            // spike#3 case B:切回時**顯式**把最後已知列幾何交回 controller(不等 RowFramesKey 因 scroll/range 才重發)。
-            // grok review r2:切回時 @FocusState 若仍在某列,也重新灌回 FSM(setActive 已清 FSM focus)。
-            if active {
-                // owner D3: honor retained geometry only if its identity still matches (else wait for fresh flush)
-                if rowFramesIdentity == geometryIdentity { controller.setRows(rowFrames) }
-                if let f = focusedRow { controller.setFocus(old: nil, new: f) }
-            }
-        }
-        // 資料變動(頁重載 / 換 range / refresh 同形換料)→ 以頁面內容身分為鍵更新 controller 供 panel 呈現的切片
-        // (owner spike#3 fix #2:取代原本靠 project ids + model count 猜的弱 fingerprint)。
-        .onChange(of: pageStamp) { _, _ in controller.setData(projectModels: projectModels, names: nameMap) }
-        .onAppear {
-            controller.setData(projectModels: projectModels, names: nameMap)
-            controller.setWindowActive(controlActiveState == .key)
-            controller.setActive(isActive)
-            if isActive {
-                if rowFramesIdentity == geometryIdentity { controller.setRows(rowFrames) }   // owner D3: identity-gated re-hand (spike#3 case B: appear-while-active)
-                if let f = focusedRow { controller.setFocus(old: nil, new: f) }   // grok r2:重灌 @FocusState
-            }
-        }
-        .onDisappear { controller.teardown() }
     }
 
-    /// projectId → 已淨化顯示名(隱私:不外洩原始路徑),供 NSPanel 標題與 controller.setData 用。
-    private var nameMap: [String: String] {
-        Dictionary(projects.map { ($0.projectId, $0.projectName) }, uniquingKeysWith: { first, _ in first })
+    /// ↑/↓(只在表格持有鍵盤時收到):用純 seam 算下一個選取(依目前順序、兩端停住);捲動由列表的
+    /// `onChange(of: selection)` 統一處理。沒有選取或不在 Projects 分頁時不處理,按鍵照常往上傳遞。
+    private func move(_ step: ProjectInspectorSelection.Step) -> KeyPress.Result {
+        guard isActive, selection != nil else { return .ignored }
+        selection = ProjectInspectorSelection.step(step, from: selection, in: projects.map(\.projectId))
+        return .handled
+    }
+
+    /// Esc(只在表格持有鍵盤時收到):清除選取、關閉 inspector;沒有選取時不處理。
+    private func closeInspector() -> KeyPress.Result {
+        guard isActive, selection != nil else { return .ignored }
+        selection = nil
+        return .handled
     }
 
     private var header: some View {
@@ -1223,7 +1209,7 @@ struct ProjectTable: View {
         .padding(.vertical, 7)
     }
 
-    private func row(_ p: ProjectSummary, shareMille: Int) -> some View {
+    private func row(_ p: ProjectSummary, shareMille: Int, selected: Bool) -> some View {
         HStack(spacing: 8) {
             // 隱私:不在 tooltip 露出完整本機路徑(與報告的 redact 姿態一致)
             Text(p.projectName).lineLimit(1)
@@ -1253,42 +1239,63 @@ struct ProjectTable: View {
         .font(.callout)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .contentShape(Rectangle())                       // 全列命中(click-focus / focus ring 覆整列)
-        .focusable()                                     // 鍵盤可達(整列 = focus anchor;非 pointer-only)
-        .focused($focusedRow, equals: p.projectId)
-        .onDisappear {   // scroll-away / LazyVStack recycle:同步告知 controller(移除殘留 rect + FSM 和解),並清實際 @FocusState
-            controller.rowDisappeared(p.projectId)
-            if focusedRow == p.projectId { focusedRow = nil }
+        // 選取樣式(owner ruling):列內淡語意 accent 底 + 窄 leading 指示條,全畫在列自身範圍內(不外框、不蓋表頭),
+        // 不是系統 focus ring(列不可 focus)。只用語意色、不做 colorScheme 分支(AppearanceTests source guard)。
+        .background {
+            if selected {
+                Color.accentColor.opacity(0.14)
+                    .overlay(alignment: .leading) { Color.accentColor.frame(width: 3) }
+            }
+        }
+        .contentShape(Rectangle())                       // 全列命中
+        // 滑鼠:click A → 選 A;click B → 選 B(inspector 原地更新);再點已選列維持選取(不 toggle)。列**不可 focus**
+        // (不是 Tab 停靠點、不畫系統藍框);點列同時把鍵盤交給表格層級 focus 範圍(owner r2;r4 先 arm 才可 focus)。
+        // 一般 hover 不呈現任何東西。
+        .onTapGesture {
+            selection = p.projectId
+            keyboardArmed = true
+            tableHasKeyboard = true
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(p.projectName), \(tk(p.tokens.total)) tokens")
         .accessibilityHint("Shows this project's model breakdown")   // 承接被移除 chevron 的 a11y
-        // 列回報自身 frame(同 "projectTable" 座標空間)→ rowFrames;NSTrackingArea 的 pointer location 據此判 zone。
-        // 不再用 per-row .onHover / anchorPreference —— 單一 `NSTrackingArea`(HoverTrackingRepresentable)為唯一指標源。
-        .background(GeometryReader { g in
-            Color.clear.preference(key: RowFramesKey.self,
-                                   value: [p.projectId: g.frame(in: .named(Self.spaceName))])
-        })
+        // VoiceOver:暴露選取狀態與啟用動作(不為了滑鼠選取而恢復列的 focus);啟用與點擊一樣交出鍵盤歸屬。
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+        .accessibilityAction {
+            selection = p.projectId
+            keyboardArmed = true
+            tableHasKeyboard = true
+        }
     }
 }
 
-// MARK: - Usage-M2b:project → provider → model drill-down popover(§9.3)
+// MARK: - Usage-M2b → M3 A1:project → provider → model 明細(bottom inspector 內容,§9.3)
 // 平面清單(跨 provider),**可見 Provider 欄**;欄 = Provider | Model | In | Out | Cache | Total | Cost | Share;
-// share 為**組內(專案內)**配額(D2);top 12 於自身 bounded 捲動區可見、其餘捲動揭露(「+K more」);
-// 鍵盤可達、Esc 關閉;模型名走封閉 modelLabel(路徑形 → basename;不外洩原始 id / 專案路徑)。
-struct ModelDrilldownPopover: View {
+// share 為**組內(專案內)**配額(D2);內容區採自然高度、有上限,超過時改為自有捲動區(其餘捲動揭露「+K more」);
+// 模型名走封閉 modelLabel(路徑形 → basename;不外洩原始 id / 專案路徑)。原為浮動 hover panel 內的 drill-down
+// popover:owner ruling 2026-09-29 改為 in-view bottom inspector,舊名、固定 760pt 寬與 hover-first 註解都已不符,
+// 故改名並填滿表格寬。
+struct ProjectModelInspector: View {
     let projectName: String
     let rows: [ModelUsageSummary]      // 已依 §9.3 全序 (−total, providerId, unattributedLast, exactModelId) 排好
 
-    private let visibleCap = 12        // top 12 可見(n10);其餘於 bounded 捲動區揭露
+    // owner r3:內容區高度 = min(模型數, visibleCap) 列;1–2 個模型就只佔 1–2 列高,不再留大塊空白。popover 時代為
+    // 12(n10),r1/r2 固定 7 列高曾把專案列表壓到 0。超過上限 → 內部捲動 + 「+K more」。空間吃緊時 ProjectTable 會讓
+    // inspector 先縮(layoutPriority),同樣改為內部捲動。可調常數,非契約數字。
+    private let visibleCap = 4
+    private static let modelRowHeight: CGFloat = 26
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Usage-M3 A1:標題列 —— 無 Done/Close 鈕(hover-first)。preview 本身**不**處理 dismiss:指標離開
-            // 所有列由 table 層單一 `NSTrackingArea` 指標源經 grace 關閉;Esc 由 table 層 window 級 catcher 處理。
+            // 標題列:專案名 + 鍵盤提示(owner 指定字串)。無 Close 鈕:Esc 由 ProjectTable 的鍵盤指令處理。
             HStack(spacing: 8) {
                 Text(projectName).font(Theme.FontScale.cardTitle).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                Text("↑ / ↓ Switch project · Esc Close")
+                    .font(Theme.FontScale.secondaryInfo)
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
             Divider()
@@ -1298,7 +1305,7 @@ struct ModelDrilldownPopover: View {
                 Text("No model usage in this project.")
                     .font(Theme.FontScale.secondaryInfo)
                     .foregroundStyle(Theme.textSecondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 20)
+                    .frame(maxWidth: .infinity).padding(.vertical, 12)
             } else {
                 // share = 組內(專案內)配額(和恆 ≤100%);全集列 → 分母即列和(§4/D2)。
                 let mille = ReportGenerator.rowShares(
@@ -1321,11 +1328,16 @@ struct ModelDrilldownPopover: View {
                         }
                     }
                 }
-                .frame(maxHeight: CGFloat(visibleCap) * 26)   // ~top-12 可見;其餘(含 footer)於捲動區內揭露
+                // 高度夾在 [1 列, min(模型數, visibleCap) 列] 之間(每列約 25pt,以 26 計):空間足夠時剛好貼合內容
+                // (1–2 個模型不留大塊空白);模型多時停在上限並內部捲動;ProjectTable 空間吃緊時可一路縮到 1 列。
+                .frame(minHeight: Self.modelRowHeight,
+                       maxHeight: CGFloat(min(rows.count, visibleCap)) * Self.modelRowHeight)
             }
         }
-        .frame(width: 760)             // bounded 寬度(絕不覆蓋整窗);Model 欄得 ~212pt 可讀(impl-xcheck sol)
+        .frame(maxWidth: .infinity)    // 填滿表格寬(in-view 面板,不再固定 760)
         .padding(.bottom, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Model breakdown for \(projectName)")
     }
 
     private var header: some View {
