@@ -72,6 +72,9 @@ struct AppSettings: Codable {
     var openRouterCreditsEnabled: Bool = false
     var grokQuotaEnabled: Bool = false
     var grokQuotaKilledAtVersion: String? = nil
+    /// App 外觀偏好(Appearance V1):System / Light / Dark,經 `NSApp.appearance` 整 app 套用。
+    /// GUI-only,刻意不放 `core`(CLI 無外觀);缺鍵 / 未知值 fail-soft → `.system`。
+    var appearance: AppearancePreference = .system
     var core = CoreSettings()
 
     // MARK: - EngineV2 pack id 相容 facade(M2 §3-A;語意委派 PetSpecies,PetCore 端可測)
@@ -101,6 +104,7 @@ struct AppSettings: Codable {
         case openRouterCreditsEnabled
         case grokQuotaEnabled
         case grokQuotaKilledAtVersion
+        case appearance
         case core
     }
 
@@ -134,6 +138,8 @@ struct AppSettings: Codable {
         openRouterCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .openRouterCreditsEnabled)) ?? false ?? false
         grokQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .grokQuotaEnabled)) ?? false ?? false
         grokQuotaKilledAtVersion = (try? c.decodeIfPresent(String.self, forKey: .grokQuotaKilledAtVersion)) ?? nil ?? nil
+        // 先讀 raw 字串再對映:未知值("ocean")→ .system,不拋、不毒化 sibling(PetCore 可測)。
+        appearance = AppearancePreference.decodeTolerant(from: c, forKey: .appearance)
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
     }
 }

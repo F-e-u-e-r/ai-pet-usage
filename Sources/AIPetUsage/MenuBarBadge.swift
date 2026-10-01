@@ -44,7 +44,9 @@ struct MenuBarBadgeView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(petEmoji).font(.system(size: 13))
+            // 每個 Text 都明確上色:ImageRenderer 的預設 ink 是固定的淺色配色(黑),不跟 systemIsDark 也不跟 app 外觀
+            //(probe G4)。彩色 emoji 不受 foreground 影響;單色 glyph 靠這行在深色選單列上保有對比。
+            Text(petEmoji).font(.system(size: 13)).foregroundStyle(baseColor)
             if badges.isEmpty, showsPlaceholder {
                 Text("—")
                     .font(.system(size: 11, weight: .semibold))
@@ -104,11 +106,14 @@ struct MenuBarBadgeView: View {
 
 @MainActor
 enum MenuBarBadgeRenderer {
-    /// 以 2x 烤出非 template NSImage。選單列深淺以系統外觀近似
-    /// (罕見的桌布淺色選單列 + 深色系統外觀組合會有對比落差,屬已知限制)。
-    static func image(petEmoji: String, badges: [MenuBadge], showsPlaceholder: Bool) -> NSImage? {
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let base = dark ? Color(white: 0.98) : Color(white: 0.15)
+    /// 以 2x 烤出非 template NSImage。純函數:選單列屬於系統,深淺由呼叫端解析好的**系統**外觀
+    /// `systemIsDark` 決定(Appearance V1 badge exception)—— 這裡不讀 app 自身的 effective 外觀
+    ///(會被 app 的 Light/Dark 偏好覆寫,徽章會在系統選單列上失去對比)、不讀繪圖 context、不讀設定;
+    /// 上述禁令由 AppearanceWiringGuardTests 以字面掃描鎖住(含註解)。
+    /// 選單列深淺以系統外觀近似(罕見的桌布淺色選單列 + 深色系統外觀組合會有對比落差,屬已知限制)。
+    static func image(petEmoji: String, badges: [MenuBadge], showsPlaceholder: Bool,
+                      systemIsDark: Bool) -> NSImage? {
+        let base = Color(white: MenuBarBadgeInk.baseWhite(systemIsDark: systemIsDark))
         let renderer = ImageRenderer(content: MenuBarBadgeView(
             petEmoji: petEmoji, badges: badges,
             showsPlaceholder: showsPlaceholder, baseColor: base))

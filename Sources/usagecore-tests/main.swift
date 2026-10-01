@@ -1212,4 +1212,29 @@ runSuite("AnchoredHoverModelTests", [
     ("testGateVisibleSameKeyRepositionsOnlyWhenFollowing", anchoredHoverModel.testGateVisibleSameKeyRepositionsOnlyWhenFollowing),
 ])
 
+// Appearance V1:PetCore 語意(偏好解碼 / 映射 / 徽章墨色 / 系統外觀讀取)+ app target 接線 source guard。
+let appearance = AppearanceTests()
+runSuite("AppearanceTests", [
+    ("testMissingAppearanceDecodesAsSystem", appearance.testMissingAppearanceDecodesAsSystem),
+    ("testUnknownAppearanceFailsSoftToSystemWithoutPoisoningSiblings", appearance.testUnknownAppearanceFailsSoftToSystemWithoutPoisoningSiblings),
+    ("testWrongTypeOrNullAppearanceFailsSoftToSystem", appearance.testWrongTypeOrNullAppearanceFailsSoftToSystem),
+    ("testValidAppearanceRoundTrips", appearance.testValidAppearanceRoundTrips),
+    ("testRawValuesDisplayNamesAndCaseOrder", appearance.testRawValuesDisplayNamesAndCaseOrder),
+    ("testPreferenceToAppearanceNameMapping", appearance.testPreferenceToAppearanceNameMapping),
+    ("testBadgeInkFollowsInjectedSystemAppearanceOnly", appearance.testBadgeInkFollowsInjectedSystemAppearanceOnly),
+    ("testSystemAppearanceProviderResolvesThroughInjectedReader", appearance.testSystemAppearanceProviderResolvesThroughInjectedReader),
+    ("testLiveProviderReadsGlobalDomainNotProcessDefaults", appearance.testLiveProviderReadsGlobalDomainNotProcessDefaults),
+])
+
+let appearanceWiring = AppearanceWiringGuardTests()
+runSuite("AppearanceWiringGuardTests", [
+    ("testAppSettingsUsesTolerantAppearanceDecode", appearanceWiring.testAppSettingsUsesTolerantAppearanceDecode),
+    ("testCoreSettingsAndCLIHaveNoAppearanceCoupling", appearanceWiring.testCoreSettingsAndCLIHaveNoAppearanceCoupling),
+    ("testMenuBarBadgeRendererIsPureAndTakesInjectedSystemAppearance", appearanceWiring.testMenuBarBadgeRendererIsPureAndTakesInjectedSystemAppearance),
+    ("testAppModelRoutesLaunchAndManualChangeThroughOneApplyPath", appearanceWiring.testAppModelRoutesLaunchAndManualChangeThroughOneApplyPath),
+    ("testAppHasSingleAppLevelAppearanceAssignmentAndNoPerViewBranching", appearanceWiring.testAppHasSingleAppLevelAppearanceAssignmentAndNoPerViewBranching),
+    ("testMenuBarLabelInjectsSystemAppearanceIntoRenderer", appearanceWiring.testMenuBarLabelInjectsSystemAppearanceIntoRenderer),
+    ("testGeneralSettingsHasSegmentedAppearancePicker", appearanceWiring.testGeneralSettingsHasSegmentedAppearancePicker),
+])
+
 finishTestRun()

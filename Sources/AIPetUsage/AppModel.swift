@@ -84,6 +84,8 @@ final class AppModel {
     // MARK: - 生命週期
 
     func start() {
+        // 持久化的 Appearance 偏好在任何視窗/面板建立前先套到 NSApp(整 app 一體繼承)。
+        applyAppearancePreference()
         // EngineV2 flag 必須在 petPanel 建立前映射(PetPanelController.show() 據此掛 driver)。
         EngineV2.isEnabled = settings.petEngineV2Enabled
         if LaunchAtLogin.available {
@@ -143,7 +145,8 @@ final class AppModel {
         grokQuota.setEnabled(false)   // r1 三鏡:stop 漏停 grok 會讓輪詢在 teardown 後殘留
     }
 
-    /// 深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
+    /// 系統深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
+    /// 與手動 Appearance 偏好變更(`applyAppearancePreference()`)共用同一個 `appearanceTick`。
     private func observeAppearanceChanges() {
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
@@ -151,6 +154,14 @@ final class AppModel {
         ) { [weak self] _ in
             Task { @MainActor in self?.appearanceTick += 1 }
         }
+    }
+
+    /// 把 app 外觀偏好套到 NSApp —— 整 app 唯一一處指派,Dashboard / Settings / A1 hover panel /
+    /// menu-bar panel / pet panel / NSSavePanel 全部繼承(`.system` → nil = 回到跟隨系統)。
+    /// 隨後走**同一條** `appearanceTick` 重烤路徑:手動偏好變更與系統外觀通知只有一個 refresh authority。
+    private func applyAppearancePreference() {
+        NSApp.appearance = settings.appearance.nsAppearanceName.flatMap { NSAppearance(named: $0) }
+        appearanceTick += 1
     }
 
     /// 使用者手動刷新(⌘R / Refresh 鈕專用):credits/grok 的 manual 語義**只**綁真
@@ -332,8 +343,13 @@ final class AppModel {
         let oldRange = settings.petWanderRangePercent
         let oldORCredits = settings.openRouterCreditsEnabled
         let oldGrokQuota = settings.grokQuotaEnabled
+        let oldAppearance = settings.appearance
         settingsStore.update(mutate)
         settings = settingsStore.settings
+        // Appearance 偏好變更 → 與啟動套用同一條 apply/refresh 路徑(NSApp.appearance + appearanceTick)。
+        if oldAppearance != settings.appearance {
+            applyAppearancePreference()
+        }
         // OpenRouter credits 開關:啟用即抓一次 + 開始 15 分鐘輪詢;停用即取消並清空狀態。
         if oldGrokQuota != settings.grokQuotaEnabled {
             grokQuota.setEnabled(settings.grokQuotaEnabled)
@@ -544,8 +560,16 @@ final class AppModel {
 
     // MARK: - 選單列
 
-    /// 外觀(深/淺)切換計數:label 讀取它以觸發重烤。
+    /// 外觀切換計數(唯一的 refresh authority):系統深/淺色通知與手動 Appearance 偏好變更都 +1,
+    /// label 讀取它以觸發重烤。
     private(set) var appearanceTick = 0
+
+    /// macOS **全域**外觀讀取器(badge exception):選單列徽章跟隨系統外觀,不隨 app 偏好。
+    /// production = CFPreferences 全域域;不是 NSApp.effectiveAppearance(會被偏好覆寫)。
+    private let systemAppearance = SystemAppearanceProvider.live
+
+    /// 目前系統選單列是否深色 —— 每次讀取即時解析,label 在 appearanceTick 變動時重讀。
+    var systemIsDark: Bool { systemAppearance.systemIsDark }
 
     /// 選單列徽章(UIUX spec P0):物種 emoji 開頭、依顯示名稱字母序、
     /// 略過無資料 provider、identity dot 恆定、severity 只上在百分比。
