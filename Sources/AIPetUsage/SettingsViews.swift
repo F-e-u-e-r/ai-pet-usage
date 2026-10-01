@@ -39,6 +39,20 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Appearance V1:app 層級 System / Light / Dark(整 app 一體;選單列徽章例外,跟系統)。
+            // caption 決定尚未定案 —— 此候選刻意不加說明行。
+            Section {
+                Picker("Appearance", selection: Binding(
+                    get: { model.settings.appearance },
+                    set: { v in model.updateSettings { $0.appearance = v } }
+                )) {
+                    ForEach(AppearancePreference.allCases, id: \.self) { pref in
+                        Text(pref.displayName).tag(pref)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section {
                 Picker("Menu bar", selection: Binding(
                     get: { model.settings.menuBarDisplayMode },
