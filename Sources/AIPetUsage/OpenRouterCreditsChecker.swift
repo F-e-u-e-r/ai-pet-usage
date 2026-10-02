@@ -121,7 +121,7 @@ final class OpenRouterCreditsChecker {
 
     /// 回傳 nil = fetch 被取消(不是結果,絕不寫入 status —— R2 grok F1)。
     private func performFetch(key: String) async -> OpenRouterCreditsOutcome? {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let version = AppVersionInfo.current.displayVersion ?? "dev"
         let request = OpenRouterCreditsEngine.request(key: key, appVersion: version)
         do {
             let (bytes, response) = try await session.bytes(for: request)

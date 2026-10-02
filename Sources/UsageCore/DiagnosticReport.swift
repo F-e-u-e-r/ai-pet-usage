@@ -88,7 +88,8 @@ public struct DiagnosticSourceState: Sendable {
     }
 }
 
-/// CLI 蒐集的 app/OS 資訊(受控:version 為我方注入的 semver,os 由數字元件組成)。
+/// CLI 蒐集的 app/OS 資訊(受控:version 為 AppVersionInfo 的顯示版號 —— canonical 文法,
+/// 如 `0.1.0-beta.1` 或 `0.0.0`;os 由數字元件組成)。
 public struct DiagnosticAppInfo: Sendable {
     public var version: String?
     public var channel: BuildChannel?
@@ -405,11 +406,12 @@ public extension DiagnosticReport {
         return digits.isEmpty ? nil : Int(digits)
     }
 
-    /// version 必須是我方注入的 semver(僅數字與點);否則視為未知,以維持「無任意執行期字串」。
+    /// version 必須完全符合 canonical 顯示文法(`X.Y.Z` 或 `X.Y.Z-(alpha|beta|rc).N`,只限 ASCII;
+    /// docs/release/VERSIONING.md);否則視為未知,以維持「無任意執行期字串」。舊規則「只有數字與點」
+    /// 會把 `0.1.0-beta.1` 變成 unknown,且 `isNumber` 會放行非 ASCII 數字。
     private static func sanitizedVersion(_ v: String?) -> String? {
-        guard let v, !v.isEmpty else { return nil }
-        let ok = v.allSatisfy { $0.isNumber || $0 == "." }
-        return ok ? v : nil
+        guard let v, CanonicalVersion(displayVersion: v) != nil else { return nil }
+        return v
     }
 
     /// os 由 ProcessInfo 的數字元件組成(如 "14.5.0");非「數字與點」一律視為 unknown。

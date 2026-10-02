@@ -105,6 +105,6 @@ launch-at-login too.
 
 ## Status
 
-Alpha software, provided as-is with no warranty. Found a privacy problem? Please report it **privately** —
+Beta software, provided as-is with no warranty. Found a privacy problem? Please report it **privately** —
 see [`SECURITY.md`](SECURITY.md). The boundary a change must not cross is enumerated in
 [`docs/DATA_BOUNDARY.md`](docs/DATA_BOUNDARY.md).

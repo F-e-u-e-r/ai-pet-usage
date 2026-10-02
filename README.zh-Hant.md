@@ -38,7 +38,7 @@
 - 🪶 **僅監看(低記憶體)模式** —— Settings → General:完全不建立漂浮寵物視窗與動畫,餵食/XP 引擎僅在完整寵物模式下實例化(切到僅監看即釋放);使用量追蹤、選單列、頁面、通知與匯出照常運作。
 - ⌨️ **無頭 `aipet` CLI** —— 從終端機取得狀態、報表與 sprite 匯出。
 
-## 📦 安裝(alpha)
+## 📦 安裝(beta)
 
 **Homebrew(Apple Silicon)** —— 推薦:
 
@@ -47,6 +47,14 @@ brew install --cask F-e-u-e-r/tap/ai-pet-usage
 ```
 
 一併處理安裝、`brew upgrade` 與 `brew uninstall`。**或**到 [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) 取得最新的 `AI-Pet-Usage-…-arm64.zip`,把 app 拖進 Applications。
+
+**從舊版 `alpha-v*` 升級?**
+
+- 舊版的 app 內更新看不到 Beta 版本線。
+- Homebrew 使用者:執行 `brew upgrade --cask ai-pet-usage`(或 `brew reinstall --cask ai-pet-usage`)。
+- zip 使用者:請下載最新版本。
+
+已退役的版本列在 [`docs/release/LEGACY-ALPHA-HISTORY.md`](docs/release/LEGACY-ALPHA-HISTORY.md)。
 
 從原始碼建置(約一分鐘;Intel Mac 必須這樣做):
 
@@ -58,9 +66,9 @@ open "dist/AI Pet Usage.app"
 ```
 
 - **需求**:macOS 14+。Homebrew cask 與預先建置的 zip 為 Apple Silicon;從原始碼建置需 Xcode Command Line Tools（`xcode-select --install`）。
-- **首次啟動**:alpha 為 ad-hoc 簽章、**未經公證**,macOS 首次會封鎖。先嘗試打開 app,再到 **系統設定 → 隱私權與安全性** 選 **「強制打開」/「仍要打開」**(依 macOS 版本而定;僅在你信任此版本時)。Homebrew **不會**移除這一次性核准 —— 只有 Developer ID 公證能(規劃於 beta)。
+- **首次啟動**:beta 為 ad-hoc 簽章、**未經公證**,macOS 首次會封鎖。先嘗試打開 app,再到 **系統設定 → 隱私權與安全性** 選 **「強制打開」/「仍要打開」**(依 macOS 版本而定;僅在你信任此版本時)。Homebrew **不會**移除這一次性核准 —— 只有 Developer ID 公證能(已在規劃中)。
 - app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。可**檢查 GitHub 更新**(opt-in —— Settings → General → *Automatically check for updates*;僅版本檢查,不送任何使用資料),或從選單列隨時手動檢查。
-- Developer ID 簽章/公證的下載規劃於 beta(見 [`ROADMAP.md`](ROADMAP.md))。
+- Developer ID 簽章/公證的下載已在規劃中(見 [`ROADMAP.md`](ROADMAP.md))。
 
 ### Claude Code 官方限額(可選的 statusline hook)
 
@@ -165,7 +173,7 @@ app 與 `aipet` CLI 共用 `~/Library/Application Support/AIPetUsage/`。這在�
 
 寵物讓使用量狀態一目了然,無需開啟儀表板或執行指令,並對有用的訊號做出反應:配額剩餘、重置視窗、token 消耗率、資料過期、專注時段與使用里程碑。
 
-此產品刻意避開擁擠的單頁儀表板:使用量分拆為三個頁面(Today、Limits、Projects),而 HTML 報表匯出屬於 alpha 範圍,作為同一份資料可離線閱讀的本機快照。
+此產品刻意避開擁擠的單頁儀表板:使用量分拆為三個頁面(Today、Limits、Projects),而 HTML 報表匯出屬於產品範圍,作為同一份資料可離線閱讀的本機快照。
 
 ### 平台與技術棧
 

@@ -170,11 +170,11 @@ Task {
         let now = Date()
         let dash = await coordinator.dashboard()
         let sources = await coordinator.diagnosticSourceStates(now: now)
-        let info = Bundle.main.infoDictionary
+        let versionInfo = AppVersionInfo.current
         let osv = ProcessInfo.processInfo.operatingSystemVersion
         let app = DiagnosticAppInfo(
-            version: info?["CFBundleShortVersionString"] as? String,
-            channel: BuildChannel(known: info?["AIPetUsageBuildChannel"] as? String),
+            version: versionInfo.displayVersion,
+            channel: versionInfo.buildChannel,
             os: "\(osv.majorVersion).\(osv.minorVersion).\(osv.patchVersion)"
         )
         let report = DiagnosticReport.collect(dashboard: dash, sourceStates: sources,

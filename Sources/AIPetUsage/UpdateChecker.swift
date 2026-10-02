@@ -17,7 +17,6 @@ final class UpdateChecker {
         UserDefaults.standard.object(forKey: autoCheckDefaultsKey) as? Bool ?? false
     }
 
-    private let releasesURL = URL(string: "https://api.github.com/repos/F-e-u-e-r/ai-pet-usage/releases")!
     private let brewUpgradeCommand = "brew upgrade --cask ai-pet-usage"
     private let minInterval: TimeInterval = 24 * 3600   // 成功後每日節流
     private let failureBackoff: TimeInterval = 3600      // 失敗後退避,避免每次 relaunch 重打
@@ -28,18 +27,12 @@ final class UpdateChecker {
         static let skippedTag = "update.skippedTag"
     }
 
-    /// 目前版本(數字);缺 CFBundleShortVersionString → 無法解析 → latestApplicable nil(fail closed)。
-    private var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-    }
+    /// 版本身分(唯一讀取點;docs/release/VERSIONING.md)。比較只用 `releaseVersion`(完整 canonical 身分,
+    /// 能區分 beta.1 / beta.2);顯示與 UA 用 `displayVersion`。
+    private let versionInfo = AppVersionInfo.current
 
-    /// source/dev 建置(AIPetUsageBuildChannel = source/dev):不做更新比對(版號非正式通道,
-    /// 且數字版號 0.0.0 若比對會被任何 release 蓋過而誤報)。key 不存在(舊 release build)→
-    /// 視為正式版照常檢查(向後相容)。
-    private var isDevBuild: Bool {
-        let channel = Bundle.main.infoDictionary?["AIPetUsageBuildChannel"] as? String
-        return channel == "source" || channel == "dev"
-    }
+    /// 顯示用版本字串(如 `0.1.0-beta.1`)。
+    private var currentVersion: String { versionInfo.displayVersion ?? "unknown" }
 
     /// single-flight:選單/設定/延遲自動可能併發,避免疊多個 fetch 與 modal alert。
     private var isChecking = false
@@ -55,10 +48,19 @@ final class UpdateChecker {
         defer { isChecking = false }
 
         // source/dev 建置:不比對更新(避免對 0.0.0 誤報「落後」)。
-        if isDevBuild {
+        if versionInfo.isDevBuild {
             if manual {
                 presentInfo(title: "Development build",
                             text: "You’re running a source/development build. Update checks apply to released builds — see the project’s Releases page for the latest version.")
+            }
+            return
+        }
+        // 缺少有效的 canonical release 身分(release metadata 缺漏 / 不合法 / 與 core 不一致,或未知建置):
+        // fail closed —— 不連網、不猜版本。
+        guard let installed = versionInfo.releaseVersion else {
+            if manual {
+                presentInfo(title: "Can't check for updates",
+                            text: "This build doesn’t carry a valid release version, so it can’t be compared with published releases. See the project’s Releases page for the latest version.")
             }
             return
         }
@@ -87,7 +89,7 @@ final class UpdateChecker {
 
         let skipped = manual ? nil : defaults.string(forKey: Key.skippedTag)
         guard let update = UpdateModel.latestApplicable(releases: releases,
-                                                        currentVersion: currentVersion,
+                                                        installed: installed,
                                                         skippedTag: skipped) else {
             if manual {
                 presentInfo(title: "You're up to date",
@@ -98,16 +100,24 @@ final class UpdateChecker {
         present(update)
     }
 
+    /// 有界分頁:`per_page=100`,依 `Link: rel="next"` 續抓,最多 `UpdateModel.maxReleasePages` 頁;
+    /// 挑選在整個集合上以 canonical 語意排序進行(不依 API 回應順序)。
     private func fetchReleases() async throws -> [GitHubRelease] {
-        var req = URLRequest(url: releasesURL)
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("AIPetUsage/\(currentVersion)", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        let userAgent = "AIPetUsage/\(currentVersion)"
+        return try await UpdateModel.collectReleases { page in
+            var req = URLRequest(url: UpdateModel.releasesPageURL(page: page))
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            req.timeoutInterval = 15
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
+            return UpdateModel.ReleasePage(
+                releases: releases,
+                hasNextPage: UpdateModel.linkHeaderHasNext(http.value(forHTTPHeaderField: "Link")))
         }
-        return try JSONDecoder().decode([GitHubRelease].self, from: data)
     }
 
     private func present(_ release: GitHubRelease) {

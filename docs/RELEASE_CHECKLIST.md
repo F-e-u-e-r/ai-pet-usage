@@ -24,7 +24,8 @@ note. **Do not apply scheduled changes before their effective date.**
 ## 2. Build & test (must be green)
 
 1. `Scripts/swiftpm.sh run usagecore-tests` — all tests pass.
-2. `Scripts/build-app.sh` — produces `dist/AI Pet Usage.app`; `codesign --verify --strict` passes.
+2. `/bin/bash Scripts/test-release-version.sh` — release tooling tests pass.
+3. `Scripts/build-app.sh` — produces `dist/AI Pet Usage.app`; `codesign --verify --strict` passes.
 
 ## 3. Manual smoke (see the beta gate)
 
@@ -32,14 +33,36 @@ Launch the app, then verify the beta gate below.
 
 ## 4. Publish
 
-1. **Annotate** the release tag with the changelog as its message — bullet lines only, **no
-   `## What's new` heading** (the release workflow adds that heading; a duplicate truncates the in-app
-   "What's new"). e.g. `git tag -a alpha-v0.1.3 -m "- Fixed X" -m "- Added Y"`.
-2. Push the tag → the `release-app` workflow builds, ad-hoc signs, and publishes the GitHub Release with the
-   arm64 zip asset.
-3. Bump the cask in `F-e-u-e-r/homebrew-tap` (run its `bump-cask` workflow, or wait ~6h) → `brew style`, then
-   smoke `brew install --cask F-e-u-e-r/tap/ai-pet-usage`. (The in-app updater reads GitHub Releases
-   directly, so a fresh release can be ahead of `brew upgrade` until the cask is bumped.)
+Release tags follow the canonical grammar in [`docs/release/VERSIONING.md`](release/VERSIONING.md):
+`vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, `vX.Y.Z-rc.N` or `vX.Y.Z`. Use lowercase, no leading zeros, and N ≥ 1.
+The retired `alpha-v*` namespace is never used again.
+
+1. **Annotate** the release tag on the commit to ship. That commit must already contain the canonical
+   release workflow, because a tag push runs the workflow from the tagged commit.
+   - Use the changelog as the tag message: bullet lines only, **no `## What's new` heading**. The release
+     workflow adds that heading, and a duplicate truncates the in-app "What's new".
+     e.g. `git tag -a v0.1.0-beta.1 -m "- Fixed X" -m "- Added Y"`.
+   - **Tags are immutable**: the `protect-tags` ruleset forbids moving or deleting them. Check the commit
+     and the tag name before pushing. A mistaken tag burns that version number, and the fix is the next
+     iteration.
+   - Optional rehearsal: run `release-app` via **workflow_dispatch** on the commit you intend to tag, with
+     `rehearse_tag` set to the tag. It builds that commit with the tag's release identity, verifies it like
+     the release, and never publishes. If the tag already exists, it must point at that commit.
+2. Push the tag. The `release-app` workflow then:
+   - validates the tag with `Scripts/release-version.sh`;
+   - builds and ad-hoc signs the app;
+   - verifies the Info.plist identity (`CFBundleShortVersionString` = `X.Y.Z`, `AIPetUsageReleaseTag` = the
+     tag);
+   - publishes the GitHub Release with `AI-Pet-Usage-<tag>-arm64.zip`, as a pre-release for
+     `alpha` / `beta` / `rc` and as a full release for a stable `vX.Y.Z`;
+   - re-verifies the published tag, pre-release flag, asset and digest;
+   - for a stable release, marks the highest canonical stable release Latest and confirms it after its own
+     write (`Scripts/reconcile-latest.sh`).
+3. Bump the cask in `F-e-u-e-r/homebrew-tap`: run its `bump-cask` workflow, or wait about 6h. The cask
+   tracks the highest canonical beta / rc / stable release.
+   - Then run `brew style` and smoke `brew install --cask F-e-u-e-r/tap/ai-pet-usage`.
+   - The in-app updater reads GitHub Releases directly, so a fresh release can be ahead of `brew upgrade`
+     until the cask is bumped.
 
 ---
 

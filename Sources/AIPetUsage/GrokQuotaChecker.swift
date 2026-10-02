@@ -131,7 +131,9 @@ final class GrokQuotaChecker {
 
         // schemaKilled gate(r1 三鏡:kill 後常規 tick 零外呼;離開只經 reactivate ——
         // app 版本變更後自動 probe 一次,或 toggle off→on 的手動 re-enable[policy 已重置])。
-        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        // 版本身分用 AppVersionInfo.displayVersion(release build = 完整 canonical 顯示版號,每個 prerelease
+        // 迭代都不同;純數字的 CFBundleShortVersionString 在 beta.1 → beta.2 間不變,會讓「版本變了」偵測失效)。
+        let currentVersion = AppVersionInfo.current.displayVersion ?? "dev"
         var reactivationProbe = false
         // 重啟 hydrate(r2 P7):persisted kill + in-memory 未 killed(新 policy)——
         // 手動 re-enable(off→on)→ probe 一次;同版本且非手動 → 恢復凍結零外呼;
@@ -223,7 +225,7 @@ final class GrokQuotaChecker {
     }
 
     private func performFetch(key: String) async -> GrokQuotaOutcome? {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let version = AppVersionInfo.current.displayVersion ?? "dev"
         let request = GrokQuotaEngine.request(key: key, appVersion: version)
         do {
             let (bytes, response) = try await session.bytes(for: request)

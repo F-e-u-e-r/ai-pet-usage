@@ -98,13 +98,35 @@ final class DiagnosticReportTests: XCTestCase {
 
     private func collect(now: Date, dashboard: DashboardState? = nil,
                          sources: [DiagnosticSourceState]? = nil,
-                         settings: CoreSettings? = nil) -> DiagnosticReport {
+                         settings: CoreSettings? = nil,
+                         appVersion: String? = "0.1.6") -> DiagnosticReport {
         DiagnosticReport.collect(
             dashboard: dashboard ?? sentinelDashboard(now: now),
             sourceStates: sources ?? sentinelSources(),
             settings: settings ?? CoreSettings(),
-            app: DiagnosticAppInfo(version: "0.1.6", channel: .release, os: "14.5.0"),
+            app: DiagnosticAppInfo(version: appVersion, channel: .release, os: "14.5.0"),
             now: now)
+    }
+
+    // canonical 顯示版號(docs/release/VERSIONING.md)必須完整保留在 diag(含 prerelease 後綴)。
+    func testCanonicalReleaseVersionSurvivesDiag() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for v in ["0.1.0-beta.1", "0.1.0-rc.2", "0.1.0-alpha.3", "0.1.0", "0.0.0", "10.20.30-beta.12"] {
+            let text = collect(now: now, appVersion: v).renderText(home: home)
+            XCTAssertTrue(text.contains("app: \(v) (release)"), "diag dropped canonical version \(v):\n\(text)")
+            let json = collect(now: now, appVersion: v).renderJSON(home: home)
+            XCTAssertTrue(json.contains("\"\(v)\""), "diag JSON dropped canonical version \(v)")
+        }
+    }
+
+    // 非 canonical 的版本字串(含 legacy、帶 v 的 tag、非 ASCII 數字、路徑)一律 unknown —— 維持封閉詞彙。
+    func testNonCanonicalVersionRendersUnknown() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for v in ["0.1.0-beta.01", "0.1.0-beta.0", "0.1.0 (x)", "０.1.0", "٠.1.0", "1.2", "0.1.0-preview.1",
+                  "alpha-v0.4.0", "v0.1.0-beta.1", "/Users/alice/secret", ""] {
+            let text = collect(now: now, appVersion: v).renderText(home: home)
+            XCTAssertTrue(text.contains("app: unknown (release)"), "diag kept non-canonical version [\(v)]:\n\(text)")
+        }
     }
 
     private let leaks = ["/Users/", "/Volumes/ClientX", "AcmeSecretProject", "AcmeSecretLaunchPlan",
