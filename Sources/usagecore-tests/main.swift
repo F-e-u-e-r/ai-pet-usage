@@ -265,11 +265,57 @@ runSuite("PricingTests", [
     ("testPriceKeyCollisionAndExactVsWildcardOverrideParity", pricing.testPriceKeyCollisionAndExactVsWildcardOverrideParity),
 ])
 
+let canonicalVersion = CanonicalVersionTests()
+runSuite("CanonicalVersionTests", [
+    ("testFixtureLoadsFrozenVectorCounts", canonicalVersion.testFixtureLoadsFrozenVectorCounts),
+    ("testAcceptVectorsResolveToExpectedFields", canonicalVersion.testAcceptVectorsResolveToExpectedFields),
+    ("testRejectVectorsAreRefused", canonicalVersion.testRejectVectorsAreRefused),
+    ("testOrderVectorsAreSemantic", canonicalVersion.testOrderVectorsAreSemantic),
+    ("testBashScriptAgreesWithSwiftOnEveryVector", canonicalVersion.testBashScriptAgreesWithSwiftOnEveryVector),
+    ("testAssetNameTagAndCaskURLAgreeMechanically", canonicalVersion.testAssetNameTagAndCaskURLAgreeMechanically),
+])
+
+let appVersionInfo = AppVersionInfoTests()
+runSuite("AppVersionInfoTests", [
+    ("testReleaseBuildWithCanonicalTagHasFullIdentity", appVersionInfo.testReleaseBuildWithCanonicalTagHasFullIdentity),
+    ("testReleaseBuildWithMissingTagFailsClosed", appVersionInfo.testReleaseBuildWithMissingTagFailsClosed),
+    ("testReleaseBuildWithMalformedOrLegacyTagFailsClosed", appVersionInfo.testReleaseBuildWithMalformedOrLegacyTagFailsClosed),
+    ("testReleaseTagWhoseCoreDisagreesWithShortVersionFailsClosed", appVersionInfo.testReleaseTagWhoseCoreDisagreesWithShortVersionFailsClosed),
+    ("testSourceAndDevBuildsNeverCarryAReleaseIdentity", appVersionInfo.testSourceAndDevBuildsNeverCarryAReleaseIdentity),
+    ("testUnknownOrMissingBuildChannelHasNoReleaseIdentity", appVersionInfo.testUnknownOrMissingBuildChannelHasNoReleaseIdentity),
+    ("testDisplayVersionRejectsNonCanonicalShortVersion", appVersionInfo.testDisplayVersionRejectsNonCanonicalShortVersion),
+    ("testDisplayVersionDiffersAcrossPrereleaseIterations", appVersionInfo.testDisplayVersionDiffersAcrossPrereleaseIterations),
+])
+
+let versionWiring = VersionIdentityWiringGuardTests()
+runSuite("VersionIdentityWiringGuardTests", [
+    ("testAppAndCLIReadVersionOnlyThroughAppVersionInfo", versionWiring.testAppAndCLIReadVersionOnlyThroughAppVersionInfo),
+    ("testGrokKillMarkerUsesDisplayVersion", versionWiring.testGrokKillMarkerUsesDisplayVersion),
+    ("testUpdateCheckerUsesCanonicalIdentityAndBoundedPagination", versionWiring.testUpdateCheckerUsesCanonicalIdentityAndBoundedPagination),
+])
+
 let updateModel = UpdateModelTests()
 runSuite("UpdateModelTests", [
-    ("testParseVersionIsStrictAndFailsClosed", updateModel.testParseVersionIsStrictAndFailsClosed),
-    ("testIsNewerIsNumericNotLexical", updateModel.testIsNewerIsNumericNotLexical),
-    ("testLatestApplicableSkipSuppressesThatVersionAndOlder", updateModel.testLatestApplicableSkipSuppressesThatVersionAndOlder),
+    ("testUpdateOfferedAlongTheChannelLadder", updateModel.testUpdateOfferedAlongTheChannelLadder),
+    ("testChannelFloorAppliesAcrossCoreVersions", updateModel.testChannelFloorAppliesAcrossCoreVersions),
+    ("testMalformedCanonicalTagsAreIgnored", updateModel.testMalformedCanonicalTagsAreIgnored),
+    ("testLegacyAlphaTagsNeverEnterCanonicalOrdering", updateModel.testLegacyAlphaTagsNeverEnterCanonicalOrdering),
+    ("testPrereleaseFlagMustAgreeWithTagChannel", updateModel.testPrereleaseFlagMustAgreeWithTagChannel),
+    ("testIterationOrderingIsNumericNotLexical", updateModel.testIterationOrderingIsNumericNotLexical),
+    ("testDraftsAreIgnored", updateModel.testDraftsAreIgnored),
+    ("testCanonicalSkipSuppressesThatVersionAndOlder", updateModel.testCanonicalSkipSuppressesThatVersionAndOlder),
+    ("testLegacySkippedTagDoesNotSuppressCanonicalUpdates", updateModel.testLegacySkippedTagDoesNotSuppressCanonicalUpdates),
+    ("testHighestApplicableWins", updateModel.testHighestApplicableWins),
+    ("testEqualOrOlderIsNotAnUpdate", updateModel.testEqualOrOlderIsNotAnUpdate),
+    ("testReleasesPageURLRequestsHundredPerPageOnFixedEndpoint", updateModel.testReleasesPageURLRequestsHundredPerPageOnFixedEndpoint),
+    ("testStableFoundBehindManyNewerPrereleasesAcrossPages", updateModel.testStableFoundBehindManyNewerPrereleasesAcrossPages),
+    ("testSelectionIgnoresApiResponseOrder", updateModel.testSelectionIgnoresApiResponseOrder),
+    ("testPaginationTerminatesAtTheSafetyCap", updateModel.testPaginationTerminatesAtTheSafetyCap),
+    ("testCapReachedWithANextPageMakesNoDecision", updateModel.testCapReachedWithANextPageMakesNoDecision),
+    ("testMalformedAndLegacyPagesCannotChangeSelection", updateModel.testMalformedAndLegacyPagesCannotChangeSelection),
+    ("testPaginationStopsOnlyWithoutANextPageOrAtTheCap", updateModel.testPaginationStopsOnlyWithoutANextPageOrAtTheCap),
+    ("testAFailedPageFailsTheWholeCheck", updateModel.testAFailedPageFailsTheWholeCheck),
+    ("testLinkHeaderNextDetection", updateModel.testLinkHeaderNextDetection),
 ])
 
 let report = ReportTests()
@@ -616,6 +662,8 @@ runSuite("RedactionTests", [
 
 let diagReport = DiagnosticReportTests()
 runSuite("DiagnosticReportTests", [
+    ("testCanonicalReleaseVersionSurvivesDiag", diagReport.testCanonicalReleaseVersionSurvivesDiag),
+    ("testNonCanonicalVersionRendersUnknown", diagReport.testNonCanonicalVersionRendersUnknown),
     ("testTextHasNoLeaks", diagReport.testTextHasNoLeaks),
     ("testJSONHasNoLeaks", diagReport.testJSONHasNoLeaks),
     ("testAllowListedContentPresent", diagReport.testAllowListedContentPresent),

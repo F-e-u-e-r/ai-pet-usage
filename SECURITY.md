@@ -11,8 +11,9 @@ promise in plain language,
 
 ## Supported versions
 
-This is alpha software. Security fixes are made against the latest `alpha-v*` release and `main`. There is
-no long-term-support branch yet.
+This is beta software. Security fixes are made against the latest canonical release (`vX.Y.Z-beta.N` or
+later; see [`docs/release/VERSIONING.md`](docs/release/VERSIONING.md)) and `main`. The retired `alpha-v*`
+builds receive no fixes. There is no long-term-support branch yet.
 
 ## Reporting a vulnerability
 
@@ -47,4 +48,4 @@ and is what a fix is built from.
 - Estimated numbers being imprecise (Grok tokens are a lower bound; Claude percentages without the
   statusline hook are estimates) — these are documented as estimates, not exact figures. File an accuracy
   issue instead.
-- Gatekeeper warning on first launch (the alpha is ad-hoc signed, not yet notarized).
+- Gatekeeper warning on first launch (the beta is ad-hoc signed, not yet notarized).

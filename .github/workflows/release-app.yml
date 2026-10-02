@@ -1,16 +1,35 @@
-# 無 Developer ID 的 alpha 出包(R4 三方裁定 T4):
-#   - tag `alpha-v*` 推送時自動建 GitHub Release 並附上 Apple Silicon zip;
-#   - workflow_dispatch 僅出 artifact(不建 Release),供手動驗證;
+# 無 Developer ID 的 canonical 版本出包(R4 三方裁定 T4;版本契約見 docs/release/VERSIONING.md):
+#   - 推送 canonical tag(vX.Y.Z / vX.Y.Z-alpha.N / vX.Y.Z-beta.N / vX.Y.Z-rc.N)時自動建 GitHub Release 並附上
+#     Apple Silicon zip。下方 tag pattern 只是粗略過濾 —— 權威的嚴格解析器是 Scripts/release-version.sh,
+#     不合法的 tag 在任何建置或發佈之前就失敗。退役的 legacy `alpha-v*` 命名空間不會觸發任何發佈。
+#   - alpha / beta / rc → prerelease=true、latest=false;stable → prerelease=false。發佈 stable 後由
+#     Scripts/reconcile-latest.sh 把最高的 canonical stable 標為 Latest,寫入後再確認(並行發佈時過時的寫入會被更正)。
+#     說明文字依通道。
+#   - tag 不可變(protect-tags ruleset 禁止 update / deletion):推錯的 tag 會燒掉該版號,只能改發下一個 N。
+#   - workflow_dispatch **絕不發佈**:不帶輸入 → dev artifact(VERSION=0.0.0、BUILD_CHANNEL=dev);帶 rehearse_tag
+#     → 以該 tag 的 release 身分建置「本次 dispatch 的 commit」並完整驗證,只上傳標記 REHEARSAL 的 artifact。
+#     請在打算打 tag 的 commit 上 dispatch;若該 tag 已存在,它必須指向這個 commit,否則失敗。
 #   - ad-hoc 簽章(STRICT_SIGN=1:簽失敗即紅,並 --verify --strict);
 #   - zip 而非 dmg:未公證時 dmg 不減 Gatekeeper 摩擦,只多一層製作;
-#   - 版號由 tag 注入 Info.plist(alpha-v0.1.2 → 0.1.2),About 與 Release 一致;
+#   - 版號由 tag 注入 Info.plist:CFBundleShortVersionString = CFBundleVersion = X.Y.Z,完整 tag 在
+#     AIPetUsageReleaseTag(app 內更新比對靠它區分 beta.1 / beta.2);
 #   - runner 為 arm64;Intel 使用者請 build from source(README Install)。
+#   - 外部值(ref 名稱、dispatch 輸入)一律經環境變數傳入 script,不以 ${{ }} 內插進 run 區塊。
 name: release-app
 
 on:
   push:
-    tags: ["alpha-v*"]
-  workflow_dispatch: {}
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      rehearse_tag:
+        description: "Optional canonical tag to rehearse: builds the dispatched commit with that tag's release identity and verifies it; never publishes"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -21,74 +40,189 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Resolve canonical release version (fails before any build or publish)
+        env:
+          REHEARSE_TAG: ${{ github.event.inputs.rehearse_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            MODE=release; TAG="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${REHEARSE_TAG}" ]]; then
+            MODE=rehearsal; TAG="${REHEARSE_TAG}"
+          else
+            MODE=dev; TAG=""
+          fi
+          if [[ "${MODE}" == dev ]]; then
+            # 檔名 label 用允許清單消毒:GitHub ref / 分支名可含特殊字元,artifact 名亦拒 " < > | 等。
+            LABEL="${GITHUB_REF_NAME:-manual}"
+            LABEL="${LABEL//[^A-Za-z0-9._-]/-}"
+            {
+              echo "MODE=dev"
+              echo "VERSION=0.0.0"            # 數字版號(Apple 契約);dev channel 抑制 app 內更新提示
+              echo "BUILD_CHANNEL=dev"
+              echo "RELEASE_TAG="
+              echo "ZIP_NAME=AI-Pet-Usage-${LABEL}-arm64.zip"
+              echo "ARTIFACT_NAME=AI-Pet-Usage-${LABEL}-arm64"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # 嚴格解析;不合法 → exit 2、此步驟失敗,不輸出任何變數(後續建置 / 發佈都不會執行)。
+          RESOLVED="$(Scripts/release-version.sh "${TAG}")"
+          if [[ "${MODE}" == rehearsal ]]; then
+            # rehearsal 建置的是本次 dispatch 的 commit(掛上該 tag 的身分)。tag 若已存在就必須指向這個 commit,
+            # 否則 artifact 會以 tag B 的身分包裝 commit A。tag 尚未存在 = 打 tag 前的預演,允許。
+            REMOTE_COMMIT="$(git ls-remote --tags origin "refs/tags/${TAG}" \
+              | awk -v t="refs/tags/${TAG}" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }')"
+            if [[ -n "${REMOTE_COMMIT}" && "${REMOTE_COMMIT}" != "${GITHUB_SHA}" ]]; then
+              echo "rehearse_tag ${TAG} already exists and points at ${REMOTE_COMMIT}, not this run's commit ${GITHUB_SHA}"
+              exit 1
+            fi
+          fi
+          ASSET_NAME="$(printf '%s\n' "${RESOLVED}" | sed -n 's/^ASSET_NAME=//p')"
+          if [[ "${MODE}" == release ]]; then ARTIFACT="${ASSET_NAME%.zip}"; else ARTIFACT="REHEARSAL-${ASSET_NAME%.zip}"; fi
+          {
+            printf '%s\n' "${RESOLVED}"
+            echo "MODE=${MODE}"
+            echo "BUILD_CHANNEL=release"     # 建置來源;與發行通道 RELEASE_CHANNEL 是兩回事
+            echo "ZIP_NAME=${ASSET_NAME}"
+            echo "ARTIFACT_NAME=${ARTIFACT}"
+          } >> "$GITHUB_ENV"
+          printf '%s\n' "${RESOLVED}"
+
       - name: Build app bundle (ad-hoc signed, strict)
         run: |
-          # 只有「tag push」才用 tag 版號;workflow_dispatch(即使跑在 tag ref 上)
-          # 一律 dev 版號 — 與下方「dispatch 僅出 artifact、不建 Release」同一守門。
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#alpha-v}"; CHANNEL="release"
-          else
-            VERSION="0.0.0"; CHANNEL="dev"   # 數字版號(Apple 契約);dev channel 抑制 app 內更新提示
-          fi
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          VERSION="${VERSION}" BUILD_CHANNEL="${CHANNEL}" STRICT_SIGN=1 Scripts/build-app.sh
+          VERSION="${VERSION}" BUILD_CHANNEL="${BUILD_CHANNEL}" RELEASE_TAG="${RELEASE_TAG}" STRICT_SIGN=1 Scripts/build-app.sh
 
-      - name: Verify signature and launchability structure
+      - name: Verify signature and Info.plist version identity
         run: |
+          set -euo pipefail
+          PLIST="dist/AI Pet Usage.app/Contents/Info.plist"
           codesign --verify --deep --strict "dist/AI Pet Usage.app"
-          plutil -lint "dist/AI Pet Usage.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
-            "dist/AI Pet Usage.app/Contents/Info.plist"
+          plutil -lint "${PLIST}"
+          get() { /usr/libexec/PlistBuddy -c "Print :$1" "${PLIST}" 2>/dev/null || true; }
+          [ "$(get CFBundleShortVersionString)" = "${VERSION}" ] || { echo "CFBundleShortVersionString != ${VERSION}"; exit 1; }
+          [ "$(get CFBundleVersion)" = "${VERSION}" ] || { echo "CFBundleVersion != ${VERSION}"; exit 1; }
+          [ "$(get AIPetUsageBuildChannel)" = "${BUILD_CHANNEL}" ] || { echo "AIPetUsageBuildChannel != ${BUILD_CHANNEL}"; exit 1; }
+          if [ "${BUILD_CHANNEL}" = release ]; then
+            [ "$(get AIPetUsageReleaseTag)" = "${RELEASE_TAG}" ] || { echo "AIPetUsageReleaseTag != ${RELEASE_TAG}"; exit 1; }
+          elif /usr/libexec/PlistBuddy -c "Print :AIPetUsageReleaseTag" "${PLIST}" >/dev/null 2>&1; then
+            echo "non-release build must not carry AIPetUsageReleaseTag"; exit 1
+          fi
+          echo "Info.plist OK: ${VERSION} / ${BUILD_CHANNEL} / ${RELEASE_TAG:-no release tag}"
 
       - name: Zip (ditto keeps resource forks + bundle structure)
         run: |
+          set -euo pipefail
           cd dist
-          # 檔名 label 用允許清單消毒:GitHub ref / 分支名可含特殊字元,artifact 名亦拒 " < > | 等。
-          # 非 [A-Za-z0-9._-] 一律換 '-'。tag push 的 alpha-v0.1.2 不變 → 與 cask 期望的資產名一致。
-          LABEL="${GITHUB_REF_NAME:-manual}"
-          LABEL="${LABEL//[^A-Za-z0-9._-]/-}"
-          echo "ZIP_LABEL=${LABEL}" >> "$GITHUB_ENV"
-          ditto -c -k --sequesterRsrc --keepParent "AI Pet Usage.app" \
-            "AI-Pet-Usage-${LABEL}-arm64.zip"
-          ls -la *.zip
+          ditto -c -k --sequesterRsrc --keepParent "AI Pet Usage.app" "${ZIP_NAME}"
+          ls -la "${ZIP_NAME}"
+          shasum -a 256 "${ZIP_NAME}"
 
       - name: Upload artifact (always; the only output for workflow_dispatch)
         uses: actions/upload-artifact@v5
         with:
-          name: AI-Pet-Usage-${{ env.ZIP_LABEL }}-arm64
-          path: dist/*.zip
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/${{ env.ZIP_NAME }}
 
-      - name: Create GitHub Release (tag pushes only)
-        if: github.event_name == 'push' && github.ref_type == 'tag'
+      - name: Create GitHub Release (canonical tag pushes only)
+        if: github.event_name == 'push' && github.ref_type == 'tag' && env.MODE == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         # 發行說明以 printf 逐行寫檔(--notes-file):heredoc 內文若頂格會截斷
         # YAML 的 run 區塊(alpha-v0.1.2 首跑即因此 startup failure)。
         run: |
-          # 「What's new」僅取自「附註標籤(annotated tag)」訊息;lightweight tag 的 %(contents)
-          # 會回傳其指向的 commit 訊息(非空),故先確認是 tag 物件再取,否則退回預設。
+          set -euo pipefail
+          export LC_ALL=C
+          # 發佈前驗證 tag:遠端存在、指向本次 run 的 commit。
           # actions/checkout 會以 SHA 二次重抓、把 pushed tag 覆寫成 lightweight(cat-file 看到
           # "commit"、%(contents) 變成 commit 訊息),fetch-depth 也擋不住;故此處顯式重抓
           # annotated tag 物件還原,cat-file 才會是 "tag"、%(contents) 才是 tag 訊息(本機已驗證)。
-          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}" 2>/dev/null || true
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [ "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "${GITHUB_SHA}" ] \
+            || { echo "${RELEASE_TAG} does not point at ${GITHUB_SHA}"; exit 1; }
+          # 「What's new」僅取自「附註標籤(annotated tag)」訊息;lightweight tag 的 %(contents)
+          # 會回傳其指向的 commit 訊息(非空),故先確認是 tag 物件再取,否則退回預設。
           NOTES=""
-          if [ "$(git cat-file -t "${GITHUB_REF_NAME}" 2>/dev/null)" = "tag" ]; then
-            NOTES="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" 2>/dev/null)"
+          if [ "$(git cat-file -t "${RELEASE_TAG}" 2>/dev/null)" = "tag" ]; then
+            NOTES="$(git tag -l --format='%(contents)' "${RELEASE_TAG}" 2>/dev/null)"
           fi
           [ -n "$NOTES" ] || NOTES="See the commit history for changes in this build."
+          case "${RELEASE_CHANNEL}" in
+            alpha)  BANNER="Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized." ;;
+            beta)   BANNER="Beta build — Apple Silicon (arm64), ad-hoc signed, not notarized." ;;
+            rc)     BANNER="Release candidate — Apple Silicon (arm64), ad-hoc signed, not notarized." ;;
+            stable) BANNER="Apple Silicon (arm64), ad-hoc signed, not notarized." ;;
+            *) echo "unexpected RELEASE_CHANNEL '${RELEASE_CHANNEL}'"; exit 1 ;;
+          esac
           {
             printf '## What'\''s new\n\n%s\n\n' "$NOTES"
             printf '## Install\n\n'
             printf 'Homebrew (Apple Silicon, recommended):\n\n'
             printf '    brew install --cask F-e-u-e-r/tap/ai-pet-usage\n\n'
             printf 'Or download the arm64 zip below and drag the app to Applications.\n\n'
-            printf '**Alpha build — Apple Silicon (arm64), ad-hoc signed, not notarized.**\n'
+            printf '**%s**\n' "${BANNER}"
             printf 'macOS blocks the first launch: open the app, then System Settings -> Privacy & Security -> **Open Anyway** (only if you trust this release).\n'
             printf 'Homebrew does not remove this one-time approval; only Developer ID notarization would.\n\n'
             printf 'Requirements: macOS 14+. Intel Macs: build from source (see README -> Install).\n'
             printf 'Local-first: the app reads Claude Code / Codex / Grok CLI logs on your machine; it never uploads usage data.\n'
           } > "$RUNNER_TEMP/notes.md"
-          gh release create "${GITHUB_REF_NAME}" dist/*.zip \
-            --title "AI Pet Usage ${GITHUB_REF_NAME}" \
-            --prerelease \
-            --notes-file "$RUNNER_TEMP/notes.md"
+          # 已發佈的 stable tag 名稱(legacy / 不合法 / prerelease 由 --highest-stable 忽略)。上限 1000 筆、多要 1 筆:
+          # 超過上限 = 清單已知不完整 → 發佈前就失敗,不以殘缺清單決定 Latest(與 reconcile-latest.sh 同一上限)。
+          stable_tags() {
+            gh release list --repo "${GITHUB_REPOSITORY}" --limit 1001 --exclude-drafts --exclude-pre-releases \
+              --json tagName --jq '.[].tagName'
+          }
+          # stable 才需要決定 Latest。發佈前先以快照預估(循序發佈時一次到位);並行發佈由下方的發佈後校正處理。
+          HIGHEST_STABLE=false
+          if [ "${RELEASE_CHANNEL}" = stable ]; then
+            stable_tags > "$RUNNER_TEMP/stable-tags.txt"
+            if [ "$(grep -c '' "$RUNNER_TEMP/stable-tags.txt")" -gt 1000 ]; then
+              echo "more than 1000 stable releases: the listing would be incomplete; not deciding Latest"
+              exit 1
+            fi
+            printf '%s\n' "${RELEASE_TAG}" >> "$RUNNER_TEMP/stable-tags.txt"
+            if [ "$(Scripts/release-version.sh --highest-stable < "$RUNNER_TEMP/stable-tags.txt")" = "${RELEASE_TAG}" ]; then
+              HIGHEST_STABLE=true
+            fi
+          fi
+          # 先以賦值取得旗標(失敗會因 set -e 中止);here-string 內的 $(…) 失敗不會中止,故不可直接 read <<< "$(…)"。
+          FLAGS_LINE="$(Scripts/release-version.sh --gh-release-flags "${RELEASE_TAG}" "${HIGHEST_STABLE}")"
+          [ -n "${FLAGS_LINE}" ] || { echo "empty gh release flags"; exit 1; }
+          read -r -a FLAGS <<< "${FLAGS_LINE}"
+          gh release create "${RELEASE_TAG}" "dist/${ASSET_NAME}" \
+            --verify-tag \
+            --title "AI Pet Usage ${RELEASE_TAG}" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "${FLAGS[@]}"
+          # 發佈後驗證:tag / prerelease 旗標 / 唯一 asset 的名稱、大小、digest,以及遠端 tag 仍指向本 commit。
+          # GitHub 計算 asset digest 可能稍有延遲 → 有界重試(最多 5 次、間隔 5 秒),仍不符即失敗。
+          LOCAL_SHA="$(shasum -a 256 "dist/${ASSET_NAME}" | awk '{print $1}')"
+          LOCAL_SIZE="$(stat -f %z "dist/${ASSET_NAME}")"
+          ok=false
+          for attempt in 1 2 3 4 5; do
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "$RUNNER_TEMP/release.json"
+            if jq -e --arg tag "${RELEASE_TAG}" --argjson pre "${PRERELEASE}" --arg asset "${ASSET_NAME}" \
+                  --arg digest "sha256:${LOCAL_SHA}" --argjson size "${LOCAL_SIZE}" '
+                  .tag_name == $tag and .draft == false and .prerelease == $pre
+                  and (.assets | length) == 1
+                  and .assets[0].name == $asset and .assets[0].size == $size
+                  and .assets[0].digest == $digest' "$RUNNER_TEMP/release.json" > /dev/null; then
+              ok=true; break
+            fi
+            sleep 5
+          done
+          if [ "$ok" != true ]; then
+            echo "post-publish verification FAILED"
+            jq '{tag_name, draft, prerelease, assets: [.assets[] | {name, size, digest}]}' "$RUNNER_TEMP/release.json"
+            exit 1
+          fi
+          REMOTE_COMMIT="$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" \
+            | awk -v t="refs/tags/${RELEASE_TAG}" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }')"
+          [ "${REMOTE_COMMIT}" = "${GITHUB_SHA}" ] \
+            || { echo "remote tag ${RELEASE_TAG} does not point at ${GITHUB_SHA}"; exit 1; }
+          # Latest 校正(僅 stable):Scripts/reconcile-latest.sh 以「寫入後再確認」的 detect-and-retry 把最高的 canonical
+          # stable 標為 Latest(並行發佈時,過時的寫入由寫入者自己的確認迴圈更正)。
+          if [ "${RELEASE_CHANNEL}" = stable ]; then
+            Scripts/reconcile-latest.sh "${GITHUB_REPOSITORY}" "${RELEASE_TAG}"
+          fi
+          echo "published ${RELEASE_TAG}: prerelease=${PRERELEASE} latest-flag=${FLAGS[*]} asset=${ASSET_NAME} sha256=${LOCAL_SHA}"

@@ -1,0 +1,81 @@
+# Canonical release tag test vectors (Phase 1 design artifact; proposed shared fixture for Phase 2).
+# Columns (TAB-separated): kind  input  expected...
+#   accept  <tag>  <VERSION>  <RELEASE_CHANNEL>  <ITERATION or ->  <PRERELEASE>  <DISPLAY_VERSION>  <ASSET_NAME>
+#   reject  <tag>  <reason>
+#   order   <lower-tag>  <higher-tag>
+# Input column: leading/trailing spaces are literal; the two characters \n mean a newline character.
+accept	v0.1.0-alpha.1	0.1.0	alpha	1	true	0.1.0-alpha.1	AI-Pet-Usage-v0.1.0-alpha.1-arm64.zip
+accept	v0.1.0-alpha.2	0.1.0	alpha	2	true	0.1.0-alpha.2	AI-Pet-Usage-v0.1.0-alpha.2-arm64.zip
+accept	v0.1.0-alpha.3	0.1.0	alpha	3	true	0.1.0-alpha.3	AI-Pet-Usage-v0.1.0-alpha.3-arm64.zip
+accept	v0.1.0-alpha.10	0.1.0	alpha	10	true	0.1.0-alpha.10	AI-Pet-Usage-v0.1.0-alpha.10-arm64.zip
+accept	v0.1.0-beta.1	0.1.0	beta	1	true	0.1.0-beta.1	AI-Pet-Usage-v0.1.0-beta.1-arm64.zip
+accept	v0.1.0-beta.2	0.1.0	beta	2	true	0.1.0-beta.2	AI-Pet-Usage-v0.1.0-beta.2-arm64.zip
+accept	v0.1.0-rc.1	0.1.0	rc	1	true	0.1.0-rc.1	AI-Pet-Usage-v0.1.0-rc.1-arm64.zip
+accept	v0.1.0-rc.2	0.1.0	rc	2	true	0.1.0-rc.2	AI-Pet-Usage-v0.1.0-rc.2-arm64.zip
+accept	v0.1.0	0.1.0	stable	-	false	0.1.0	AI-Pet-Usage-v0.1.0-arm64.zip
+accept	v0.1.1-alpha.1	0.1.1	alpha	1	true	0.1.1-alpha.1	AI-Pet-Usage-v0.1.1-alpha.1-arm64.zip
+accept	v1.0.0	1.0.0	stable	-	false	1.0.0	AI-Pet-Usage-v1.0.0-arm64.zip
+accept	v10.20.30-beta.12	10.20.30	beta	12	true	10.20.30-beta.12	AI-Pet-Usage-v10.20.30-beta.12-arm64.zip
+accept	v0.0.0	0.0.0	stable	-	false	0.0.0	AI-Pet-Usage-v0.0.0-arm64.zip
+accept	v999999999.0.0	999999999.0.0	stable	-	false	999999999.0.0	AI-Pet-Usage-v999999999.0.0-arm64.zip
+accept	v0.1.0-beta.999999999	0.1.0	beta	999999999	true	0.1.0-beta.999999999	AI-Pet-Usage-v0.1.0-beta.999999999-arm64.zip
+reject	alpha-v0.1.0	retired legacy prefix
+reject	beta-v0.1.0	retired/never-canonical prefix
+reject	rc-v0.1.0	retired/never-canonical prefix
+reject	alpha-v0.4.0	legacy namespace (live legacy tag)
+reject	v0.1.0-alpha	missing iteration
+reject	v0.1.0-beta	missing iteration
+reject	v0.1.0-rc	missing iteration
+reject	v0.1.0-alpha.0	iteration must be >= 1
+reject	v0.1.0-beta.0	iteration must be >= 1
+reject	v0.1.0-rc.0	iteration must be >= 1
+reject	v0.1.0-beta.01	leading zero in iteration
+reject	v0.1.0-beta.x	non-numeric iteration
+reject	v0.1-beta.1	core must have exactly three fields
+reject	v0.1.0.0	core must have exactly three fields
+reject	v01.1.0-beta.1	leading zero in MAJOR
+reject	v0.01.0-beta.1	leading zero in MINOR
+reject	v0.1.00-beta.1	leading zero in PATCH
+reject	V0.1.0-beta.1	uppercase prefix
+reject	v0.1.0-BETA.1	uppercase channel
+reject	v0.1.0-Beta.1	mixed-case channel
+reject	v0.1.0-preview.1	unknown channel
+reject	v0.1.0-dev.1	unknown channel
+reject		empty string
+reject	v	prefix only
+reject	0.1.0	missing v prefix (tag grammar)
+reject	0.1.0-beta.1	missing v prefix (tag grammar)
+reject	v0.1.0-beta.1.2	extra prerelease field
+reject	v0.1.0-beta1	missing dot before iteration
+reject	v0.1.0-beta-1	hyphen instead of dot
+reject	v0.1.0+build.1	build metadata not in grammar
+reject	v0.1.0-beta.1+build	build metadata not in grammar
+reject	 v0.1.0	leading space
+reject	v0.1.0 	trailing space
+reject	v0.1.0\n	trailing newline
+reject	v+1.0.0	sign
+reject	v0.1.0-beta.+1	sign in iteration
+reject	v0.1.0-beta.-1	negative iteration
+reject	v1000000000.0.0	numeric field longer than 9 digits (implementation bound)
+reject	v0.1.0-beta.1000000000	iteration longer than 9 digits (implementation bound)
+reject	v０.1.0	full-width digit
+reject	v٠.1.0	Arabic-Indic digit
+reject	vv0.1.0	double prefix
+reject	v0..1.0	empty field
+reject	v.0.1.0	empty field
+reject	v0.1.0-	empty prerelease
+reject	v0.1.0-.1	empty channel
+reject	refs/tags/v0.1.0	full ref name, not a tag name
+order	v0.1.0-alpha.1	v0.1.0-alpha.2
+order	v0.1.0-alpha.2	v0.1.0-alpha.10
+order	v0.1.0-alpha.10	v0.1.0-beta.1
+order	v0.1.0-beta.1	v0.1.0-beta.2
+order	v0.1.0-beta.2	v0.1.0-beta.10
+order	v0.1.0-beta.2	v0.1.0-rc.1
+order	v0.1.0-rc.1	v0.1.0
+order	v0.1.0-rc.9	v0.1.0-rc.10
+order	v0.1.0	v0.1.1-alpha.1
+order	v0.1.9	v0.2.0-alpha.1
+order	v0.99.99	v1.0.0
+order	v0.9.0	v0.10.0
+order	v0.1.0-beta.12	v0.1.1-alpha.1

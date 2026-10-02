@@ -15,6 +15,11 @@ on:
       - 'Sources/**'
       - 'Package.swift'
       - '.github/workflows/swift-tests.yml'
+      - '.github/workflows/release-app.yml'
+      - 'Scripts/release-version.sh'
+      - 'Scripts/reconcile-latest.sh'
+      - 'Scripts/write-info-plist.sh'
+      - 'Scripts/test-release-version.sh'
 
 jobs:
   tests:
@@ -30,3 +35,6 @@ jobs:
         run: swift build
       - name: Run test suite
         run: swift run usagecore-tests
+      # canonical release 工具(docs/release/VERSIONING.md):版號文法、Info.plist 不變式、release-app.yml 接線守則。
+      - name: Release tooling tests
+        run: /bin/bash Scripts/test-release-version.sh

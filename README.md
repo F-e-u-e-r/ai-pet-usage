@@ -38,7 +38,7 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 - 🪶 **Monitor-only (low RAM) mode** — Settings → General: the floating pet window and animations are never created, and the feeding/XP engine is only instantiated in full-pet mode (switching to monitor-only releases it); usage tracking, menu bar, pages, notifications, and export keep working.
 - ⌨️ **Headless `aipet` CLI** — status, reports, and sprite export from the terminal.
 
-## 📦 Install (alpha)
+## 📦 Install (beta)
 
 **Homebrew (Apple Silicon)** — recommended:
 
@@ -47,6 +47,14 @@ brew install --cask F-e-u-e-r/tap/ai-pet-usage
 ```
 
 This handles install, `brew upgrade`, and `brew uninstall`. **Or** grab the latest `AI-Pet-Usage-…-arm64.zip` from [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) and drag the app to Applications.
+
+**Coming from a legacy `alpha-v*` build?**
+
+- The in-app updater in those builds doesn't see the Beta line.
+- Homebrew users: run `brew upgrade --cask ai-pet-usage` (or `brew reinstall --cask ai-pet-usage`).
+- Zip users: download the latest release.
+
+The retired versions are listed in [`docs/release/LEGACY-ALPHA-HISTORY.md`](docs/release/LEGACY-ALPHA-HISTORY.md).
 
 Build from source (about a minute; required for Intel Macs):
 
@@ -58,9 +66,9 @@ open "dist/AI Pet Usage.app"
 ```
 
 - **Requirements**: macOS 14+. The Homebrew cask and the prebuilt zip are Apple Silicon; building from source needs the Xcode Command Line Tools (`xcode-select --install`).
-- **First launch**: the alpha is ad-hoc signed and **not notarized**, so macOS blocks it the first time. Try to open the app, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (only if you trust the release). Homebrew does *not* remove this one-time approval — only Developer ID notarization would (planned for the beta).
+- **First launch**: the beta is ad-hoc signed and **not notarized**, so macOS blocks it the first time. Try to open the app, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (only if you trust the release). Homebrew does *not* remove this one-time approval — only Developer ID notarization would (planned).
 - The app lives in the menu bar; enable **launch at login** in Settings if you want it always on. It can **check GitHub for updates** (opt-in — Settings → General → *Automatically check for updates*; a version check only, no usage data is sent), or check on demand from the menu bar.
-- Developer ID–signed/notarized downloads are planned for the beta (see [`ROADMAP.md`](ROADMAP.md)).
+- Developer ID–signed/notarized downloads are planned (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Claude Code official limits (optional statusline hook)
 
@@ -167,7 +175,7 @@ The app combines two ideas:
 
 The pet makes usage state visible without requiring the user to open dashboards or run commands, reacting to useful signals such as quota remaining, reset windows, token burn rate, stale data, focus sessions, and usage milestones.
 
-The product deliberately avoids a crowded single-page dashboard: usage is separated into the three pages (Today, Limits, Projects), and the HTML report export is part of the alpha scope as a local, offline-readable snapshot of the same data.
+The product deliberately avoids a crowded single-page dashboard: usage is separated into the three pages (Today, Limits, Projects), and the HTML report export is part of the product scope as a local, offline-readable snapshot of the same data.
 
 ### Platform & stack
 
