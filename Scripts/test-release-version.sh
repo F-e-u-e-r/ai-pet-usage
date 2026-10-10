@@ -348,6 +348,91 @@ else
     printf 'SKIP: ruby not available — YAML parse checks not run\n'
 fi
 
+# ---------------------------------------------------------------- 5b. remote tag resolver (annotated vs lightweight)
+# The workflow resolves a pushed/rehearsed tag to its TARGET COMMIT with `git ls-remote … | awk …`. An annotated
+# tag's commit lives only on the peeled ref (refs/tags/X^{}), and ls-remote's exact-ref pattern "refs/tags/X" does
+# NOT return that ^{} line unless it is requested too — so the query must pass BOTH refs/tags/X and refs/tags/X^{}.
+# This section runs the resolver EXACTLY as extracted from release-app.yml against a throwaway origin (annotated +
+# lightweight + prefix siblings): a revert to a single-pattern query — which resolves annotated tags to the
+# tag-object SHA — turns this RED. (That single-pattern form was release run 38076324109's verifier bug.)
+# Hermetic for EVERY git call below (fixture build AND the rp/resolve lookups): a global url.*.insteadOf (or similar)
+# would otherwise rewrite the `origin` path and silently resolve against another repo. Identity stays fixture-local.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+RES="$TMP/resolver"; RES_O="$RES/origin"; RES_W="$RES/work"
+mkdir -p "$RES"
+(
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q "$RES_O"
+    cd "$RES_O"
+    echo a > f; git add f; git commit -qm c1
+    git tag -a v9.9.9-beta.1 -m "annotated beta 1"           # annotated → C1 (tag object != commit)
+    echo b >> f; git commit -qam c2
+    git tag v9.9.9-light                                     # lightweight → C2 (direct)
+    echo c >> f; git commit -qam c3
+    git tag -a v9.9.9-beta.10 -m "annotated beta 10"         # annotated → C3 (numeric prefix sibling of beta.1)
+    echo d >> f; git commit -qam c4
+    git tag -a v9.9.9-beta.1-extra -m "annotated extra"      # annotated → C4 (prefix extension of beta.1)
+    git init -q "$RES_W"; git -C "$RES_W" remote add origin "$RES_O"
+) >/dev/null 2>&1
+rp() { git -C "$RES_O" rev-parse "$1" 2>/dev/null; }
+C_ANNO="$(rp 'v9.9.9-beta.1^{commit}')"; OBJ_ANNO="$(rp 'v9.9.9-beta.1')"
+C_LIGHT="$(rp 'v9.9.9-light^{commit}')"
+C_SIB="$(rp 'v9.9.9-beta.10^{commit}')"; C_EXTRA="$(rp 'v9.9.9-beta.1-extra^{commit}')"
+check "resolver fixture built (annotated tag object differs from its commit)" \
+    "$([ -n "$C_ANNO" ] && [ -n "$OBJ_ANNO" ] && [ "$C_ANNO" != "$OBJ_ANNO" ] && echo ok)" ok
+
+# Extract the two resolver pipelines verbatim from the workflow (rehearsal uses ${TAG}, publish uses ${RELEASE_TAG}).
+rs_line="$(grep -nF 'origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}"' "$WF" | cut -d: -f1)"
+rl_line="$(grep -nF 'origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"' "$WF" | cut -d: -f1)"
+check "rehearsal resolver queries the peeled ref" "$([ -n "$rs_line" ] && echo ok)" ok
+check "publish resolver queries the peeled ref" "$([ -n "$rl_line" ] && echo ok)" ok
+total_lsr="$(grep -c 'git ls-remote --tags origin' "$WF")"
+peeled_lsr="$(grep 'git ls-remote --tags origin' "$WF" | grep -c '\^{}')"
+check "every release ls-remote query also requests the peeled ref" "$total_lsr|$peeled_lsr" "2|2"
+
+if [ -n "$rs_line" ] && [ -n "$rl_line" ]; then
+    reh="$(sed -n "${rs_line},$((rs_line + 1))p" "$WF")"
+    rel="$(sed -n "${rl_line},$((rl_line + 1))p" "$WF")"
+    norm() { sed 's/^[[:space:]]*//; s/RELEASE_TAG/TAG/g'; }
+    check "both resolvers are the same logic (single source of truth)" \
+        "$(printf '%s\n' "$rel" | norm)" "$(printf '%s\n' "$reh" | norm)"
+    resolve() { ( cd "$RES_W"; export "$2=$3"; eval "$1"; printf '%s' "${REMOTE_COMMIT-}" ); }
+    # A annotated → peeled COMMIT (not tag object). B lightweight → direct. E exact ref, no prefix bleed. C missing → empty.
+    check "A annotated tag resolves to its peeled commit" "$(resolve "$reh" TAG v9.9.9-beta.1)" "$C_ANNO"
+    check "A annotated result is NOT the tag object" \
+        "$([ "$(resolve "$reh" TAG v9.9.9-beta.1)" != "$OBJ_ANNO" ] && echo ok)" ok
+    check "B lightweight tag resolves to its direct commit" "$(resolve "$reh" TAG v9.9.9-light)" "$C_LIGHT"
+    check "E numeric prefix sibling resolves to its own commit" "$(resolve "$reh" TAG v9.9.9-beta.10)" "$C_SIB"
+    check "E querying beta.1 never returns beta.10's commit" \
+        "$([ "$(resolve "$reh" TAG v9.9.9-beta.1)" != "$C_SIB" ] && echo ok)" ok
+    check "E prefix-extension tag resolves to its own commit" "$(resolve "$reh" TAG v9.9.9-beta.1-extra)" "$C_EXTRA"
+    check "E querying beta.1 never returns beta.1-extra's commit" \
+        "$([ "$(resolve "$reh" TAG v9.9.9-beta.1)" != "$C_EXTRA" ] && echo ok)" ok
+    check "C missing tag resolves to empty" "$(resolve "$reh" TAG v9.9.9-absent)" ""
+    # §2E exactness: the live two-pattern query never returns siblings, so prefix safety also rests on the awk
+    # comparing refnames with EXACT == (not a prefix/suffix match). Feed the awk extracted from the workflow a
+    # sibling-laden stream (as a broadened query would yield), with beta.1^{} placed early so a last-wins prefix
+    # match would resolve to a sibling; exact == still selects beta.1's peeled commit.
+    line2="$(sed -n "$((rs_line + 1))p" "$WF")"; tmp="${line2#*\'}"; awkprog="${tmp%\'*}"
+    synth() {
+        printf 'CB1\trefs/tags/v9.9.9-beta.1^{}\n';          printf 'OBJB1\trefs/tags/v9.9.9-beta.1\n'
+        printf 'OBJB10\trefs/tags/v9.9.9-beta.10\n';         printf 'CB10\trefs/tags/v9.9.9-beta.10^{}\n'
+        printf 'OBJB1X\trefs/tags/v9.9.9-beta.1-extra\n';    printf 'CB1X\trefs/tags/v9.9.9-beta.1-extra^{}\n'
+    }
+    check "E awk selects the peeled commit by EXACT refname (prefix siblings excluded)" \
+        "$(synth | awk -v t="refs/tags/v9.9.9-beta.1" "$awkprog")" "CB1"
+    # The publish-path caller is `[ "$REMOTE_COMMIT" = "$GITHUB_SHA" ] || fail`: encode C/D (fail closed) directly.
+    rverify() { [ "$(resolve "$rel" RELEASE_TAG "$1")" = "$2" ] && echo pass || echo fail; }
+    check "D publish verify passes on the correct commit" "$(rverify v9.9.9-beta.1 "$C_ANNO")" pass
+    check "D publish verify fails closed on a wrong commit" \
+        "$(rverify v9.9.9-beta.1 0000000000000000000000000000000000000000)" fail
+    check "C publish verify fails closed on a missing tag" "$(rverify v9.9.9-absent "$C_ANNO")" fail
+    check "publish resolver also resolves an annotated tag to its peeled commit" \
+        "$(resolve "$rel" RELEASE_TAG v9.9.9-beta.1)" "$C_ANNO"
+else
+    bad "resolver: could not locate the ls-remote resolver lines in $WF"
+fi
+
 # ---------------------------------------------------------------- summary
 total=$((pass + fail))
 if [ "$fail" -eq 0 ] && [ "$total" -gt 0 ]; then

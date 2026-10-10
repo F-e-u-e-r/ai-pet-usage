@@ -71,7 +71,12 @@ jobs:
           if [[ "${MODE}" == rehearsal ]]; then
             # rehearsal 建置的是本次 dispatch 的 commit(掛上該 tag 的身分)。tag 若已存在就必須指向這個 commit,
             # 否則 artifact 會以 tag B 的身分包裝 commit A。tag 尚未存在 = 打 tag 前的預演,允許。
-            REMOTE_COMMIT="$(git ls-remote --tags origin "refs/tags/${TAG}" \
+            # 解析遠端 tag 指向的 commit:annotated tag 的 commit 只在 peeled ref(refs/tags/X^{})上,而 ls-remote
+            # 的「精確 ref」pattern「refs/tags/X」不會回傳該 ^{} 行,故必須同時查詢 refs/tags/X 與 refs/tags/X^{};
+            # 否則 annotated tag 會解析成 tag 物件 SHA(非 commit)。awk 以精確 refname 比對、偏好 peeled commit、
+            # 否則退回 direct ref(lightweight),並拒絕 prefix 碰撞(beta.1 不吃 beta.10)。回歸:
+            # Scripts/test-release-version.sh「remote tag resolver」。
+            REMOTE_COMMIT="$(git ls-remote --tags origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}" \
               | awk -v t="refs/tags/${TAG}" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }')"
             if [[ -n "${REMOTE_COMMIT}" && "${REMOTE_COMMIT}" != "${GITHUB_SHA}" ]]; then
               echo "rehearse_tag ${TAG} already exists and points at ${REMOTE_COMMIT}, not this run's commit ${GITHUB_SHA}"
@@ -216,7 +221,9 @@ jobs:
             jq '{tag_name, draft, prerelease, assets: [.assets[] | {name, size, digest}]}' "$RUNNER_TEMP/release.json"
             exit 1
           fi
-          REMOTE_COMMIT="$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" \
+          # 遠端 tag → commit(同 rehearsal 的 resolver):精確 ref pattern 不含 ^{} peeled 行,故 annotated tag
+          # 必須同時查詢 refs/tags/X 與 refs/tags/X^{},否則會比對到 tag 物件 SHA。回歸:test-release-version.sh「remote tag resolver」。
+          REMOTE_COMMIT="$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}" \
             | awk -v t="refs/tags/${RELEASE_TAG}" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p != "" ? p : l) }')"
           [ "${REMOTE_COMMIT}" = "${GITHUB_SHA}" ] \
             || { echo "remote tag ${RELEASE_TAG} does not point at ${GITHUB_SHA}"; exit 1; }
