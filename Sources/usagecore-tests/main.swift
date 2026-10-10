@@ -1285,4 +1285,26 @@ runSuite("AppearanceWiringGuardTests", [
     ("testGeneralSettingsHasSegmentedAppearancePicker", appearanceWiring.testGeneralSettingsHasSegmentedAppearancePicker),
 ])
 
+let codexSourceB = CodexSourceBTests()
+runSuite("CodexSourceBTests", [
+    ("testR1_resetRegression_freshBSupersedesExpiredA", codexSourceB.testR1_resetRegression_freshBSupersedesExpiredA),
+    ("testR2_freshSameWindowCorrection_BWins", codexSourceB.testR2_freshSameWindowCorrection_BWins),
+    ("testR3_bUnavailable_fallsBackToA_neverZero", codexSourceB.testR3_bUnavailable_fallsBackToA_neverZero),
+    ("testR4_partialB_fiveHourOnly_preservesWeeklyFallback", codexSourceB.testR4_partialB_fiveHourOnly_preservesWeeklyFallback),
+    ("testR9_bFiveHourResetDoesNotDamageWeekly", codexSourceB.testR9_bFiveHourResetDoesNotDamageWeekly),
+    ("testR5_windowClassificationByDuration", codexSourceB.testR5_windowClassificationByDuration),
+    ("testR6_usedPercentStaysUsed", codexSourceB.testR6_usedPercentStaysUsed),
+    ("testR7_malformedAndFailSoft", codexSourceB.testR7_malformedAndFailSoft),
+    ("testR8_privacyNarrowDecodeExcludesForbiddenFields", codexSourceB.testR8_privacyNarrowDecodeExcludesForbiddenFields),
+    ("testFetchGate_guardrails", codexSourceB.testFetchGate_guardrails),
+    ("testDiscovery_envOverrideAndNotFound", codexSourceB.testDiscovery_envOverrideAndNotFound),
+    ("testPlanTypeSanitize_rejectsNonLabelStrings", codexSourceB.testPlanTypeSanitize_rejectsNonLabelStrings),
+    ("testPercentValidation_presentButBadWindowFailsSoftWholeReading", codexSourceB.testPercentValidation_presentButBadWindowFailsSoftWholeReading),
+    ("testClassifyLine_envelopeHandling", codexSourceB.testClassifyLine_envelopeHandling),
+    ("testCodexOnlyInjectionFilter_ignoresNonCodexReadings", codexSourceB.testCodexOnlyInjectionFilter_ignoresNonCodexReadings),
+    ("testResetsAtBound_rejectsImplausibleEpochs", codexSourceB.testResetsAtBound_rejectsImplausibleEpochs),
+    ("testDecoupledBIngest_surfacesEvenWhenSourceAFails", codexSourceB.testDecoupledBIngest_surfacesEvenWhenSourceAFails),
+    ("testFullReindexStaleBDoesNotClobberFreshA", codexSourceB.testFullReindexStaleBDoesNotClobberFreshA),
+])
+
 finishTestRun()
