@@ -271,6 +271,13 @@ public actor UsageCoordinator {
     private var ledgerURL: URL { dataDir.appendingPathComponent("ledger.jsonl") }
     /// #48 §7:本次 refresh 的逐 provider data action(每輪 refresh 重置;僅 fullReindex 填寫)。
     private var providerOutcomes: [String: ProviderDataAction] = [:]
+    /// Codex Source B(app-server)最近一次成功抓取的官方讀值(owner 2026-10-09)。背景 async
+    /// 驅動以 `setCodexOfficialReadings` 寫入;refresh 於**adapter 迴圈後**以一次**獨立**的
+    /// LimitEngine.ingest 折入(見迴圈後區塊),刻意**不耦合**於 rollout(Source A)adapter 分支的
+    /// 成敗/可用性——經**同一** LimitEngine 權威折疊(fresh observedAt 蓋過 turn-emission-bound 的
+    /// rollout)。空 = B 不可用/失敗 → A 依既有 freshness/expiry 規則治理。
+    /// 重入冪等:observedAt 固定,committed 後再 ingest 完全 inert(#49 I2),故每輪重折入無害。
+    private var pendingCodexOfficialReadings: [RateLimitReading] = []
 
     /// #83 A′ restart 判定(PLAN-v2 §3.4)。取代 proto-I4 的 absence→full 推導與 process-local
     /// pending-fullReindex set:full 續跑意圖由 R7(amended)顯式 durable intent 欄位
@@ -764,6 +771,15 @@ public actor UsageCoordinator {
         }
     }
 
+    /// Codex Source B(app-server)官方讀值的 off-hot-path 注入口(owner 2026-10-09)。背景驅動
+    /// 成功抓取後以此寫入 fresh 讀值,失敗/不可用則以空陣列清除(→ fail soft 回 Source A)。
+    /// 僅更新 stash;實際折疊/發布由下一次 `refresh()` 的 codex ingest 分支經既有單一權威完成。
+    /// **codex-only 強制**:LimitEngine.ingest 以 reading.providerId 為折疊權威,故此注入口只收
+    /// providerId == "codex" 的讀值 —— 絕不讓此 codex 專用通道誤動 claude/grok 等 out-of-scope provider。
+    public func setCodexOfficialReadings(_ readings: [RateLimitReading]) {
+        pendingCodexOfficialReadings = readings.filter { $0.providerId == "codex" }
+    }
+
     public func refresh(fullReindex: Bool = false) async -> RefreshOutcome {
         let now = Date()
         if refreshInFlight {
@@ -1182,6 +1198,7 @@ public actor UsageCoordinator {
                     //(owner D1 verdict:loud、explicit rerun required)。
                     let effFull = fullReindex || disposition == .firstContact
                     var limitsCommitted = true   // #83 W5
+                    // Codex Source B 不在此 union(見迴圈後的獨立 ingest)—— 刻意與 rollout adapter 分支解耦。
                     switch limits.ingest(readings: result.rateLimits, settings: settings, fullReindex: effFull, now: now, reconcilingProvider: pid) {
                     case .unchanged:
                         adoptScanState(pid, newState)
@@ -1239,6 +1256,28 @@ public actor UsageCoordinator {
             }
         }
 
+        // Codex Source B(app-server,owner 2026-10-09):把背景抓取的 fresh 官方讀值**獨立**餵入既有
+        // LimitEngine.ingest —— **不耦合**於 rollout(Source A)adapter 分支的成敗/可用性(B 是 primary,
+        // 即使 A 失敗/缺席也須浮現;xcheck r2 luna/sol)。observedAt=fetch 完成時刻,恆新於 turn-emission
+        // 的 rollout,故由既有 observedAt 權威自然勝出;重入冪等(固定 observedAt committed 後 inert)。
+        // reconcilingProvider:nil —— 純 reading fold,非 ledger slice 對帳,不需世代 bump。
+        // poison fail-closed(與 sweep 同):codex 被 poison(scan 世代超前 limits,row 5/8)時本獨立
+        // ingest 亦須跳過 —— poison = 該 provider 整輪 no-ingest/no-delivery(xcheck r3 grok/luna);
+        // 注意 throw ≠ poison,故對「A adapter throw」的解耦不受影響。
+        // **fullReindex 刻意固定 false(ordinary)**:B 是一筆普通 fresh 讀值,僅憑 observedAt 權威勝出。
+        // 曾嘗試傳入 request 的 fullReindex 以保 reindex 後 B 不被降級,但 `reconcilingProvider:nil` 下該 flag
+        // 變成**整批重建豁免**,會讓 **stale B 無條件蓋過 reindex 後較新的 A 並繞過 decrease guard**
+        //(xcheck r5 grok MAJOR)——比它要解的問題更糟,故還原為 ordinary。代價(已知、可自癒殘留):
+        // 使用者手動 reindex 後,較新的 stashed B 會暫時讓位給重建的 A,直到下一次 B 抓取(≤ 安全網間隔)
+        // 重新以更新的 observedAt 奪回。詳見 reviews/codex-quota-source-b/xcheck/FINAL_VERDICT.md 殘留節。
+        if settings.enabledProviders.contains("codex"), !poisonedThisRefresh.contains("codex"),
+           !pendingCodexOfficialReadings.isEmpty {
+            if case .committed(let t) = limits.ingest(readings: pendingCodexOfficialReadings,
+                                                      settings: settings, fullReindex: false,
+                                                      now: now, reconcilingProvider: nil) {
+                transitions += t
+            }
+        }
         transitions += limits.sweepExpiredWindows(now: now, excluding: poisonedThisRefresh)   // U2
 
         // Claude 估算區塊的重置偵測(U2:poisoned 亦排除)

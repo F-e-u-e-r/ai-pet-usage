@@ -63,6 +63,14 @@ final class AppModel {
     /// 是否所有已啟用的 provider 都已監看到記錄目錄。false 時維持快速輪詢以儘快發現新目錄,
     /// 全部鎖定後才切到 300s 慢速 fallback。
     private var allProviderRootsWatched = false
+    /// Codex Source B(app-server)官方額度抓取的 guardrail 閘(owner 2026-10-09):single-flight +
+    /// ~60s 最小間隔。活動(startup / FSEvents / 300s safety-net,皆經 refreshNow)可立即請求,
+    /// 但實際 spawn `codex app-server` 不超過 ~每 60s 一次;純決策在 UsageCore(已測)。
+    private var codexFetchGate = CodexAppServerLimits.FetchGate(minInterval: 60)
+    private var codexFetchTask: Task<Void, Never>?
+    /// stop() 後 fence:進行中的背景抓取(Task.detached 不受父 cancel 影響)完成時,據此不得再
+    /// setCodexOfficialReadings / refreshNow(避免 teardown 後復活一次刷新)。
+    private var codexStopped = false
 
     init() {
         dataDir = AppPaths.dataDirectory()
@@ -141,6 +149,8 @@ final class AppModel {
         fileWatcher?.stop()
         fileWatcher = nil
         settingsPushTask?.cancel()
+        codexStopped = true           // fence:in-flight 抓取完成後不得再 apply/refresh
+        codexFetchTask?.cancel()      // Source B:停止背景抓取(ProcessTransport 以 bounded timeout + teardown 自清)
         orCredits.setEnabled(false)
         grokQuota.setEnabled(false)   // r1 三鏡:stop 漏停 grok 會讓輪詢在 teardown 後殘留
     }
@@ -170,10 +180,50 @@ final class AppModel {
     func userRefresh() async {
         orCredits.refreshNow()
         if settings.grokQuotaEnabled { grokQuota.refreshNow() }
+        requestCodexOfficialFetch()   // ⌘R 亦受統一 60s 閘 + 單流(owner:B spawn 不超過 ~每 60s 一次)
         await refreshNow()
     }
 
+    // MARK: - Codex Source B(app-server)官方額度 — off-hot-path 抓取(owner 2026-10-09)
+
+    /// 請求一次 Source B 抓取。預設開啟(偵測到 codex 即整合;非 opt-in):codex 未啟用 → 清空
+    /// stash(→ fallback 回 Source A);gate 以**單調時鐘**擋下 single-flight 與 ~60s 最小間隔
+    /// (含手動,無例外)。絕不阻塞:實際 spawn 在 detached 背景執行。
+    func requestCodexOfficialFetch() {
+        guard !codexStopped else { return }   // stop() 後不得再發動(擋 teardown 期間 queued 的 refreshNow)
+        guard settings.core.enabledProviders.contains("codex") else {
+            // codex 停用:清空 stash,確保不殘留 B 影響(下輪 refresh 以純 Source A 規則治理)。
+            Task { [weak self] in await self?.coordinator.setCodexOfficialReadings([]) }
+            return
+        }
+        guard codexFetchGate.decide(now: ProcessInfo.processInfo.systemUptime) == .proceed else { return }
+        codexFetchGate.begin()
+        codexFetchTask = Task { [weak self] in await self?.performCodexOfficialFetch() }
+    }
+
+    private func performCodexOfficialFetch() async {
+        // 探路 + spawn 皆在背景(spawn ~0.8–2.5s;不得阻塞 MainActor 或 coordinator actor)。
+        // nil = 未偵測到 codex;[] = codex 在但抓取失敗;[reading] = 成功。三者都收斂成「寫 stash
+        // (nil→[])」→ 失敗/消失時清掉舊 B,改由 Source A 既有 freshness/expiry 規則治理(fail soft)。
+        let readings: [RateLimitReading] = await Task.detached(priority: .utility) {
+            guard let binary = CodexAppServerLimits.discoverCodexBinary() else { return [] } // 未安裝 → fail-soft
+            let transport = CodexAppServerLimits.ProcessTransport(binary: binary)
+            return CodexAppServerLimits.fetchReadings(transport: transport, timeout: 10)  // observedAt 於完成時蓋章
+        }.value
+        codexFetchGate.finish(at: ProcessInfo.processInfo.systemUptime)   // 解除單流 + 記錄抓取時刻
+        // fence:抓取期間 app 已 stop 或 codex 已被停用 → 不得 apply/refresh(Task.detached 不受父 cancel)。
+        guard !codexStopped, settings.core.enabledProviders.contains("codex") else { return }
+        await coordinator.setCodexOfficialReadings(readings)   // 成功 = fresh 讀值;失敗/消失 = [] → fallback A
+        // 跨 await 重 check:setCodexOfficialReadings 期間若 stop/停用,不得再 resurrect 一次 refresh。
+        guard !codexStopped, settings.core.enabledProviders.contains("codex") else { return }
+        await refreshNow()                          // 經既有單一權威把 B 併入顯示(此輪 min-interval 自然跳過)
+    }
+
     func refreshNow() async {
+        // Codex Source B hybrid(owner 2026-10-09):startup / FSEvents / 300s safety-net 全部匯流到此,
+        // 故在此請求一次 off-hot-path 的 app-server 抓取(gate 做 single-flight + 60s 最小間隔,防 spawn
+        // storm;抓取結束後自身會再呼叫一次 refreshNow 把 fresh B 併入顯示,屆時 min-interval 自然跳過)。
+        requestCodexOfficialFetch()
         // 進行中又被要求 → 記錄待處理,由目前這輪跑完後補一次(coalesce 檔案事件突發)。
         guard !refreshing else { refreshPending = true; return }
         refreshing = true
