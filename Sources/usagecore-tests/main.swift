@@ -65,6 +65,7 @@ runSuite("InstallHookTests", [
 let claude = ClaudeCodeAdapterTests()
 runSuite("ClaudeCodeAdapterTests", [
     ("testParsesFixture", claude.testParsesFixture),
+    ("testUsageSpeedNormalizedAndPreserved", claude.testUsageSpeedNormalizedAndPreserved),
     ("testStatuslinePayloadYieldsOfficialRateLimits", claude.testStatuslinePayloadYieldsOfficialRateLimits),
     ("testHookFrozenSchemaFixtureDecodes", claude.testHookFrozenSchemaFixtureDecodes),
     ("testHookProducedFileDecodesEndToEnd", claude.testHookProducedFileDecodesEndToEnd),
@@ -261,6 +262,7 @@ runSuite("PricingTests", [
     ("testUnknownModelIsNotSilentlyPriced", pricing.testUnknownModelIsNotSilentlyPriced),
     ("testUserOverrideBeatsBuiltin", pricing.testUserOverrideBeatsBuiltin),
     ("testBundledPriceListCoversCurrentModels", pricing.testBundledPriceListCoversCurrentModels),
+    ("testFastModeSpeedPricing", pricing.testFastModeSpeedPricing),
     ("testPriceIndexSemantics", pricing.testPriceIndexSemantics),
     ("testPriceKeyCollisionAndExactVsWildcardOverrideParity", pricing.testPriceKeyCollisionAndExactVsWildcardOverrideParity),
 ])
@@ -894,6 +896,7 @@ runSuite("CanonicalLedgerTests", [
     ("testImmutableFieldMutationsFail", clTests.testImmutableFieldMutationsFail),
     ("testOptionalFieldMutationsFail", clTests.testOptionalFieldMutationsFail),
     ("testAllowlistedModelEnrichmentPasses", clTests.testAllowlistedModelEnrichmentPasses),
+    ("testSpeedEnrichmentAndAllowedKey", clTests.testSpeedEnrichmentAndAllowedKey),
     ("testCandidatePersistedByteCanonicalization", clTests.testCandidatePersistedByteCanonicalization),
     ("testVersionAndSpecConstantsFrozen", clTests.testVersionAndSpecConstantsFrozen),
     ("testEncodingDomainGate", clTests.testEncodingDomainGate),
