@@ -296,6 +296,38 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         XCTAssertGreaterThan(state.files.values.first!.offset, 0)
     }
 
+    // A(fast mode):adapter 從 message.usage.speed 正規化速度 —— 標準("standard")/ 缺值 → nil
+    //(與舊帳本列逐位元相同);"fast" 與任何其他非標準值(如未來新速度層)原樣保留。
+    // end-to-end 證明 fast 事件計價高於同 token 的標準。
+    func testUsageSpeedNormalizedAndPreserved() throws {
+        let root = makeTempDir()
+        let projDir = root.appendingPathComponent("-Users-dev-projects-demo-app")
+        try FileManager.default.createDirectory(at: projDir, withIntermediateDirectories: true)
+        let jsonl = """
+        {"type":"assistant","timestamp":"2026-10-12T00:00:01Z","message":{"id":"msg_fast","model":"claude-opus-5-5","usage":{"input_tokens":100,"output_tokens":50,"speed":"fast"}}}
+        {"type":"assistant","timestamp":"2026-10-12T00:00:02Z","message":{"id":"msg_std","model":"claude-opus-5-5","usage":{"input_tokens":100,"output_tokens":50,"speed":"standard"}}}
+        {"type":"assistant","timestamp":"2026-10-12T00:00:03Z","message":{"id":"msg_none","model":"claude-opus-5-5","usage":{"input_tokens":100,"output_tokens":50}}}
+        {"type":"assistant","timestamp":"2026-10-12T00:00:04Z","message":{"id":"msg_unk","model":"claude-opus-5-5","usage":{"input_tokens":100,"output_tokens":50,"speed":"turbo"}}}
+
+        """
+        try jsonl.data(using: .utf8)!.write(to: projDir.appendingPathComponent("s.jsonl"))
+
+        let adapter = ClaudeCodeAdapter(roots: [root], statuslineFiles: [], planConfigFiles: [])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        let byId = Dictionary(uniqueKeysWithValues: result.events.map { ($0.id, $0) })
+
+        XCTAssertEqual(byId["cc:msg_fast:-"]?.speed, "fast", "speed:\"fast\" → 落地 fast")
+        XCTAssertNil(byId["cc:msg_std:-"]?.speed, "speed:\"standard\" → nil(與舊列逐位元相同)")
+        XCTAssertNil(byId["cc:msg_none:-"]?.speed, "缺 speed 鍵 → nil")
+        XCTAssertEqual(byId["cc:msg_unk:-"]?.speed, "turbo", "未知非標準 speed 原樣保留(供 cost 標 estimated)")
+
+        // end-to-end 計價:同 token,fast 事件貴於標準(falsification:若 speed 遺失,兩者同價)。
+        let registry = PricingRegistry.loadDefault(overridesURL: nil)
+        let fastUSD = registry.cost(of: byId["cc:msg_fast:-"]!).knownUSD
+        let stdUSD = registry.cost(of: byId["cc:msg_std:-"]!).knownUSD
+        XCTAssertGreaterThan(fastUSD, stdUSD, "fast 事件必須被以 premium 計價")
+    }
+
     func testStatuslinePayloadYieldsOfficialRateLimits() throws {
         // Claude Code statusline payload 的官方形狀(v2.1.x)
         let payload = """
@@ -2287,11 +2319,14 @@ final class PricingTests: XCTestCase {
         }
         let registry = PricingRegistry.loadDefault(overridesURL: nil)
 
-        // fast mode 仍存在(Opus 4.8/5/5.5,premium rate),但它是 request 參數 speed:"fast"
-        // (同一 model id,用 usage.speed 回報),不是獨立 model id;Claude Code ledger 從不產生
-        // claude-opus-*-fast(且 Opus 4.7 fast 已官方移除)。舊的「fast 走較長前綴溢價」斷言對的是
-        // 不可達的合成 SKU、已過時,2026-10-12 移除。(adapter 尚未解析 usage.speed → fast 用量目前
-        // 以 base 價計,屬另案限制。)前綴/exact 選取仍由下方 gpt-5.5 那組斷言覆蓋。
+        // fast mode(Opus 4.8/5/5.5,premium rate)是 request 參數 speed:"fast"(同一 model id,用
+        // usage.speed 回報),不是獨立 model id;Claude Code ledger 從不產生 claude-opus-*-fast(且
+        // Opus 4.7 fast 已官方移除)。故**不**造假的 *-fast* SKU;fast 費率改掛在真實模型條目的 `fast`
+        // 子物件,由事件攜帶的 speed 於 cost(of:) 套用(見 testFastModeSpeedPricing)。前綴/exact 選取
+        // 仍由下方 gpt-5.5 那組斷言覆蓋。
+        // fast 以真實條目的 `fast` 子物件表示,**不**造合成 *-fast* 模型 id(日誌 modelId 無此形)。
+        XCTAssertFalse(registry.entries.contains { $0.providerId == "claude-code" && $0.modelId.lowercased().contains("fast") },
+                       "claude-code 不得有 *-fast* 合成 SKU(fast 以 fast 子物件表示)")
 
         // 使用者實際在用的模型必須有價(2026-07 驗證過的官方價)
         let opus48 = registry.price(providerId: "claude-code", modelId: "claude-opus-4-8")
@@ -2299,6 +2334,12 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(opus48?.outputPerMillion, 25)
         XCTAssertEqual(opus48?.cacheReadPerMillion, 0.5)
         XCTAssertEqual(opus48?.cacheWrite1hPerMillion, 10)
+        // fast 費率(platform.claude.com/docs 'Fast mode pricing':fast base + 快取倍率疊加)。
+        XCTAssertEqual(opus48?.fast?.inputPerMillion, 10)
+        XCTAssertEqual(opus48?.fast?.outputPerMillion, 50)
+        XCTAssertEqual(opus48?.fast?.cacheReadPerMillion, 1.0)
+        XCTAssertEqual(opus48?.fast?.cacheWrite5mPerMillion, 12.5)
+        XCTAssertEqual(opus48?.fast?.cacheWrite1hPerMillion, 20)
 
         // 現行 Claude 模型官方價(platform.claude.com/docs pricing, snapshot 2026-10-12);curated 權威。
         // cache-read 比例逐代不同(Opus/Sonnet 5.5 = 0.05x input、Fable 5.1 = 0.025x、Opus 5 = 0.1x)。
@@ -2308,18 +2349,28 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(opus55?.cacheReadPerMillion, 0.2)
         XCTAssertEqual(opus55?.cacheWrite5mPerMillion, 5)
         XCTAssertEqual(opus55?.cacheWrite1hPerMillion, 8)
+        // Opus 5.5 fast:base $8/$40,cache read 0.05x × fast input = 0.4,write 1.25x/2x × fast input。
+        XCTAssertEqual(opus55?.fast?.inputPerMillion, 8)
+        XCTAssertEqual(opus55?.fast?.outputPerMillion, 40)
+        XCTAssertEqual(opus55?.fast?.cacheReadPerMillion, 0.4)
+        XCTAssertEqual(opus55?.fast?.cacheWrite5mPerMillion, 10)
+        XCTAssertEqual(opus55?.fast?.cacheWrite1hPerMillion, 16)
         let opus5 = registry.price(providerId: "claude-code", modelId: "claude-opus-5")
         XCTAssertEqual(opus5?.inputPerMillion, 5)
         XCTAssertEqual(opus5?.outputPerMillion, 25)
         XCTAssertEqual(opus5?.cacheReadPerMillion, 0.5)
         XCTAssertEqual(opus5?.cacheWrite5mPerMillion, 6.25)
         XCTAssertEqual(opus5?.cacheWrite1hPerMillion, 10)
+        XCTAssertEqual(opus5?.fast?.inputPerMillion, 10)
+        XCTAssertEqual(opus5?.fast?.outputPerMillion, 50)
+        XCTAssertEqual(opus5?.fast?.cacheReadPerMillion, 1.0)
         let sonnet55 = registry.price(providerId: "claude-code", modelId: "claude-sonnet-5-5")
         XCTAssertEqual(sonnet55?.inputPerMillion, 2)
         XCTAssertEqual(sonnet55?.outputPerMillion, 10)
         XCTAssertEqual(sonnet55?.cacheReadPerMillion, 0.1)
         XCTAssertEqual(sonnet55?.cacheWrite5mPerMillion, 2.5)
         XCTAssertEqual(sonnet55?.cacheWrite1hPerMillion, 4)
+        XCTAssertNil(sonnet55?.fast, "Sonnet 5.5 不支援 fast mode → 無 fast 費率")
         let fable51 = registry.price(providerId: "claude-code", modelId: "claude-fable-5-1")
         XCTAssertEqual(fable51?.inputPerMillion, 10)
         XCTAssertEqual(fable51?.outputPerMillion, 50)
@@ -2364,6 +2415,59 @@ final class PricingTests: XCTestCase {
                                                       cacheRead: 1_000_000, cacheWrite5m: 1_000_000),
                                sourceKind: "test")
         XCTAssertEqual(registry.cost(of: event).knownUSD, 36.75, accuracy: 0.001)
+    }
+
+    // A(fast mode):usage.speed == "fast" 的事件套用該模型的 fast 費率(逐類,含快取);
+    // 標準 / 缺值不變;無 fast 費率的模型或未知 speed 退回 base 並標 estimated;providerCost 仍優先。
+    func testFastModeSpeedPricing() {
+        let registry = PricingRegistry.loadDefault(overridesURL: nil)
+        // **非對稱** token:各類不同倍數(1/2/3/4/5 M),使每個費率對映唯一係數 —— 任何「把某類費率
+        // 套到別類 token」的錯誤都會改變總額(xcheck sol R-A4:1M 齊頭無法釘住逐類對映)。
+        func tok() -> TokenBreakdown {
+            TokenBreakdown(input: 1_000_000, output: 2_000_000, cacheRead: 3_000_000,
+                           cacheWrite5m: 4_000_000, cacheWrite1h: 5_000_000)
+        }
+        func ev(_ model: String, _ speed: String?) -> UsageEvent {
+            UsageEvent(id: "e", providerId: "claude-code", modelId: model, timestamp: Date(),
+                       tokens: tok(), sourceKind: "test", speed: speed)
+        }
+
+        // 標準 Opus 5.5:1·4 + 2·20 + 3·0.2 + 4·5 + 5·8 = 104.6(speed=nil 與 "standard" 皆走 base,非 estimated)。
+        let std = registry.cost(of: ev("claude-opus-5-5", nil))
+        XCTAssertEqual(std.knownUSD, 104.6, accuracy: 0.001)
+        XCTAssertFalse(std.isEstimated)
+        let stdExplicit = registry.cost(of: ev("claude-opus-5-5", "standard"))
+        XCTAssertEqual(stdExplicit.knownUSD, 104.6, accuracy: 0.001, "\"standard\" 與 nil 同價")
+        XCTAssertFalse(stdExplicit.isEstimated)
+
+        // fast Opus 5.5:1·8 + 2·40 + 3·0.4 + 4·10 + 5·16 = 209.2。與 base 不同 → 證明 speed 確實改變計價
+        //(falsification:若 adapter/cost 漏掉 speed,fast 會錯算成 104.6,本斷言即紅)。
+        let fast = registry.cost(of: ev("claude-opus-5-5", "fast"))
+        XCTAssertEqual(fast.knownUSD, 209.2, accuracy: 0.001)
+        XCTAssertFalse(fast.isEstimated)
+        XCTAssertGreaterThan(fast.knownUSD, std.knownUSD, "fast 必須嚴格高於 base(premium)")
+
+        // fast Opus 5:1·10 + 2·50 + 3·1.0 + 4·12.5 + 5·20 = 263。
+        XCTAssertEqual(registry.cost(of: ev("claude-opus-5", "fast")).knownUSD, 263, accuracy: 0.001)
+
+        // 無 fast 費率的模型(Sonnet 5.5 不支援 fast):退回 base(1·2+2·10+3·0.1+4·2.5+5·4 = 52.3)
+        // 但標 estimated(已知是 fast、卻只有 base 費率 → 下界,絕不呈現成精確)。
+        let noFast = registry.cost(of: ev("claude-sonnet-5-5", "fast"))
+        XCTAssertEqual(noFast.knownUSD, 52.3, accuracy: 0.001)
+        XCTAssertTrue(noFast.isEstimated, "fast 但無 fast 費率 → estimated 下界")
+
+        // 未知的非標準 speed(如未來新速度層)→ base 下界 + estimated(fail-loud;xcheck sol R-A1:
+        // 絕不把無法以 premium 計價的非標準 speed 默默當成精確標準價)。
+        let unknown = registry.cost(of: ev("claude-opus-5-5", "turbo"))
+        XCTAssertEqual(unknown.knownUSD, 104.6, accuracy: 0.001, "未知 speed 以 base 計(下界)")
+        XCTAssertTrue(unknown.isEstimated, "未知 speed 必須標 estimated,不得呈現成精確標準價")
+
+        // providerCost 優先序不受 speed 影響:有 providerCostUSD 時,speed 完全不參與。
+        var pc = ev("claude-opus-5-5", "fast")
+        pc.providerCostUSD = 1.23
+        let pcCost = registry.cost(of: pc)
+        XCTAssertEqual(pcCost.knownUSD, 1.23, accuracy: 0.0001)
+        XCTAssertEqual(pcCost.providerReportedUSD ?? -1, 1.23, accuracy: 0.0001)
     }
 
     func testUserOverrideBeatsBuiltin() {

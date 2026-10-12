@@ -326,6 +326,28 @@ final class CanonicalLedgerTests: XCTestCase {
                        .fail(missingEvents: 0, changedEvents: 1), "enriched 不得掩蓋同批 changed")
     }
 
+    // 6b) E2 speed:在場即為 allowed key(非 unknownTopLevelKey);absent/null→"fast" 屬 enrichment
+    //     (fast-mode 修補上線後重掃回填);known→known speed 變更 ⇒ fail。
+    func testSpeedEnrichmentAndAllowedKey() throws {
+        guard case .success(let withFast) = clSlice([clLine("e1", extraTopLevel: ["speed": "fast"])]) else {
+            XCTAssertTrue(false, "帶 speed 的合法行必須 canonicalize 成功(speed 是 allowed key)"); return
+        }
+        XCTAssertEqual(withFast.count, 1)
+        guard case .success(let base) = clSlice([clLine("e1")]) else { XCTAssertTrue(false); return }
+        XCTAssertEqual(CanonicalLedgerV1.compareMonotonic(baseline: base, candidate: withFast),
+                       .pass(newEvents: 0, enrichedEvents: 1), "speed absent→\"fast\" 屬 E2 enrichment")
+        guard case .success(let baseNull) = clSlice([clLine("e1", extraTopLevel: ["speed": NSNull()])]) else {
+            XCTAssertTrue(false); return
+        }
+        XCTAssertEqual(CanonicalLedgerV1.compareMonotonic(baseline: baseNull, candidate: withFast),
+                       .pass(newEvents: 0, enrichedEvents: 1), "explicit null→\"fast\" 同屬 E2")
+        guard case .success(let withStd) = clSlice([clLine("e1", extraTopLevel: ["speed": "standard"])]) else {
+            XCTAssertTrue(false); return
+        }
+        XCTAssertEqual(CanonicalLedgerV1.compareMonotonic(baseline: withStd, candidate: withFast),
+                       .fail(missingEvents: 0, changedEvents: 1), "known→known speed(\"standard\"→\"fast\")⇒ changed")
+    }
+
     // 5b) 其餘 identity/optional 欄位的 immutability(impl-r1 L10 缺口):providerCostUSD、accountId。
     func testOptionalFieldMutationsFail() throws {
         guard case .success(let base) = clSlice([clLine("e1", extraTopLevel:
@@ -396,6 +418,13 @@ final class CanonicalLedgerTests: XCTestCase {
     func testVersionAndSpecConstantsFrozen() throws {
         XCTAssertEqual(CanonicalLedgerV1.canonicalizerVersion, 1)
         XCTAssertEqual(CanonicalLedgerV1.ledgerSchemaAssumption, "usage-event-jsonl/current")
+        // Schema surface frozen (xcheck sol R-A3):任何 allowed/enrichable 集合變動都必須刻意更新此處,
+        // 否則本測試紅燈。`speed` 於 fast-mode 修補蓄意加入 optionalKeys(N2)與 enrichableKeys(E2)。
+        XCTAssertEqual(CanonicalLedgerV1.requiredKeys,
+                       ["id", "providerId", "timestamp", "tokens", "sourceKind"])
+        XCTAssertEqual(CanonicalLedgerV1.optionalKeys,
+                       ["accountId", "projectId", "projectName", "modelId", "sourcePath", "providerCostUSD", "speed"])
+        XCTAssertEqual(CanonicalLedgerV1.enrichableKeys, ["modelId", "speed"])
     }
 
     // 9) Encoding-domain gate(owner amendment):輸入契約 = 無 BOM 嚴格 UTF-8;

@@ -26,8 +26,10 @@ import Foundation
 // - 數值:token 欄位必須為 JSON 整數且可精確落入 Int64(unsigned 超界 ⇒ fail closed);
 //   `providerCostUSD` 保留 raw backing type(int-backed ≠ double-backed)——**沒有**型別形式
 //   等義這條 normalization,`1` 與 `1.0` 視為差異 ⇒ fail closed。
-// - 所有欄位預設 immutable。v1 enrichment allowlist 只有:
+// - 所有欄位預設 immutable。v1 enrichment allowlist:
 //   (E1) `modelId`:absent/null → known **非空** string(owner 裁定:`""` = invalid/unknown)。
+//   (E2) `speed`:absent/null → known **非空** string。fast-mode 修補上線後重掃同一行,先前未解碼
+//        speed 的事件(null)會補上 `"fast"`;與 modelId 同屬 null→known 回填,不是非單調改寫。
 //   known→known、known→nil、token/timestamp/identity/sourcePath 任何變化、未列舉差異 ⇒ fail。
 //   (契約提及的「與 model 綁定的 display metadata」目前 schema 無此欄位;保留為空集合。)
 // - candidate 一律以「實際將被持久化的 encoded bytes」進 canonicalization
@@ -40,18 +42,24 @@ public enum CanonicalLedgerV1 {
 
     public static let canonicalizerVersion = 1
     public static let ledgerSchemaAssumption = "usage-event-jsonl/current"
+    // 版本契約(xcheck sol R-A3):canonicalizerVersion 標定「演算法身分」,非欄位集合。純加法式
+    // 擴充 —— 新增一個 optionalKeys 成員(走 N2 absent≡null)與/或一個 enrichableKeys 成員(走
+    // null→非空 string 回填)—— **維持 v1**:它不重新詮釋既有資料(舊列無該鍵 → 兩側比較皆
+    // canonicalize 成 .null,對稱,無語意漂移),也不改動既有欄位的處理。欄位集合本身由
+    // testVersionAndSpecConstantsFrozen 逐一凍結(pin `optionalKeys`/`enrichableKeys`),故任何
+    // 集合變動都必須**刻意**更新該測試 —— 這正是本次 `speed` 加入被明文記錄為蓄意之處。
 
     /// UsageEvent 的全部現有 payload 欄位(§2 要求全欄位入 canonical representation)。
-    static let requiredKeys: Set<String> = ["id", "providerId", "timestamp", "tokens", "sourceKind"]
-    static let optionalKeys: Set<String> = ["accountId", "projectId", "projectName", "modelId",
-                                            "sourcePath", "providerCostUSD"]
+    public static let requiredKeys: Set<String> = ["id", "providerId", "timestamp", "tokens", "sourceKind"]
+    public static let optionalKeys: Set<String> = ["accountId", "projectId", "projectName", "modelId",
+                                            "sourcePath", "providerCostUSD", "speed"]
     static var allowedKeys: Set<String> { requiredKeys.union(optionalKeys) }
     static let requiredTokenKeys: Set<String> = ["input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h"]
     /// N1:cacheWriteUnknown absent ≡ 0。
     static let normalizedAbsentZeroTokenKeys: Set<String> = ["cacheWriteUnknown"]
     static var allowedTokenKeys: Set<String> { requiredTokenKeys.union(normalizedAbsentZeroTokenKeys) }
-    /// E1:唯一的 enrichment allowlist 欄位。
-    static let enrichableKeys: Set<String> = ["modelId"]
+    /// E1/E2:enrichment allowlist 欄位(null → 非空 string 回填)。
+    public static let enrichableKeys: Set<String> = ["modelId", "speed"]
 
     /// Canonical 值:顯式區分 string/int/double/bool/null(absent 依 N1/N2 收斂,否則為 fail)。
     public enum Value: Equatable, Sendable {
@@ -306,7 +314,7 @@ public enum CanonicalLedgerV1 {
         fields["id"] = .string(id)
         putString("providerId"); putString("timestamp"); putString("sourceKind")   // N3:timestamp 原字串
         putString("accountId"); putString("projectId"); putString("projectName")
-        putString("modelId"); putString("sourcePath")
+        putString("modelId"); putString("sourcePath"); putString("speed")
 
         switch obj["providerCostUSD"] {
         case nil, is NSNull: fields["providerCostUSD"] = .null                     // N2

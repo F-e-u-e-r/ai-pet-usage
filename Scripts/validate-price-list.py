@@ -94,6 +94,21 @@ def parse_entries(raw, label):
                 v = e[key]
                 check(is_finite_number(v) and v >= 0,
                       f"{label}[{i}] ({e.get('modelId', '?')}): {key} 必須為有限非負數,得到 {v!r}")
+        # fast(速度模式費率,Claude `speed: "fast"`)選配;在場即需為物件,其數值欄位與標準列同規:
+        # input/output 必備且有限非負,快取欄位在場即需合法(-1 少算、1e999 → Infinity 毒死 Swift 解碼,
+        # 且 drift 閘門只看頂層 input/output,不看 fast)。
+        if "fast" in e:
+            f = e["fast"]
+            if not isinstance(f, dict):
+                check(False, f"{label}[{i}] ({e.get('modelId', '?')}): fast 必須為物件,得到 {f!r}")
+            else:
+                for key in ("inputPerMillion", "outputPerMillion"):
+                    check(key in f and is_finite_number(f[key]) and f[key] >= 0,
+                          f"{label}[{i}] ({e.get('modelId', '?')}): fast.{key} 必須為有限非負數,得到 {f.get(key)!r}")
+                for key in ("cacheReadPerMillion", "cacheWrite5mPerMillion", "cacheWrite1hPerMillion"):
+                    if key in f:
+                        check(is_finite_number(f[key]) and f[key] >= 0,
+                              f"{label}[{i}] ({e.get('modelId', '?')}): fast.{key} 必須為有限非負數,得到 {f[key]!r}")
         ident = (e.get("providerId"), e.get("modelId"))
         if not all(isinstance(x, str) for x in ident):
             # 非字串 id(如 list)會讓集合運算直接 TypeError crash(r2 sol S4,

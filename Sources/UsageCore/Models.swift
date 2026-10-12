@@ -75,11 +75,17 @@ public struct UsageEvent: Codable, Hashable, Sendable, Identifiable {
     /// 僅在「有限、> 0、且該事件確有 token 差額」時由 adapter 填入;nil = 走 registry 計價。
     /// Optional → 舊帳本列缺鍵照常解碼。政策見 PricingRegistry.cost(of:)(單一優先序)。
     public var providerCostUSD: Double?
+    /// 請求的速度模式(Claude `message.usage.speed`)。正規化:標準速度(`"standard"`)/ 缺值 → nil
+    /// (標準用量序列化與舊帳本列逐位元相同,encoder 省略 nil optional);`"fast"` 與任何其他非標準值
+    /// (如未來新速度層)原樣保留。僅影響計價:`"fast"` 套用該模型 fast 費率;無法 premium 計價的
+    /// 非標準 speed 以 base 計並標 estimated 下界(見 PricingRegistry.cost(of:))。
+    /// **絕不**編進 modelId(不得製造假的 `*-fast*` 模型 id)。
+    public var speed: String?
 
     public init(id: String, providerId: String, accountId: String? = nil, projectId: String? = nil,
                 projectName: String? = nil, modelId: String? = nil, timestamp: Date,
                 tokens: TokenBreakdown, sourceKind: String, sourcePath: String? = nil,
-                providerCostUSD: Double? = nil) {
+                providerCostUSD: Double? = nil, speed: String? = nil) {
         self.id = id
         self.providerId = providerId
         self.accountId = accountId
@@ -91,6 +97,7 @@ public struct UsageEvent: Codable, Hashable, Sendable, Identifiable {
         self.sourceKind = sourceKind
         self.sourcePath = sourcePath
         self.providerCostUSD = providerCostUSD
+        self.speed = speed
     }
 }
 
