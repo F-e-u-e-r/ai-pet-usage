@@ -16,10 +16,10 @@ Before each release:
    copy generated entries.
 5. Confirm `model-prices.json` is valid JSON.
 
-**Scheduled change — 2026-09-01:** Claude Sonnet 5 intro pricing ends. On/after that date, update the
-`claude-sonnet-5*` entry in `model-prices.json`: input `2`→`3`, output `10`→`15`, cache-read `0.2`→`0.3`,
-cache-write-5m `2.5`→`3.75`, cache-write-1h `4`→`6`, `effectiveFrom` `"2026-09-01"`, refresh the `source`
-note. **Do not apply scheduled changes before their effective date.**
+**Canceled scheduled change — 2026-09-01 (Sonnet 5):** A post-intro increase for `claude-sonnet-5*`
+(input `2`→`3`, output `10`→`15`, cache-read `0.2`→`0.3`, cache-write-5m `2.5`→`3.75`, cache-write-1h `4`→`6`)
+was once scheduled, but it was **canceled** — Claude Sonnet 5 stays at its standard `$2/$10` rate, which the
+curated `model-prices.json` already reflects. No scheduled price change is pending.
 
 ## 2. Build & test (must be green)
 
