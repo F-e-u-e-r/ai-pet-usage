@@ -1307,4 +1307,10 @@ runSuite("CodexSourceBTests", [
     ("testFullReindexStaleBDoesNotClobberFreshA", codexSourceB.testFullReindexStaleBDoesNotClobberFreshA),
 ])
 
+let reportPricingDisplay = ReportPricingDisplayTests()
+runSuite("ReportPricingDisplayTests", [
+    ("testOverlappingPrefixDisplaysLongestMatch_shortPrefixFirst", reportPricingDisplay.testOverlappingPrefixDisplaysLongestMatch_shortPrefixFirst),
+    ("testOverlappingPrefixDisplayOrderIndependent_longPrefixFirst", reportPricingDisplay.testOverlappingPrefixDisplayOrderIndependent_longPrefixFirst),
+])
+
 finishTestRun()

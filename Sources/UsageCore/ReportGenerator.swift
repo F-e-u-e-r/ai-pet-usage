@@ -145,9 +145,17 @@ public enum ReportGenerator {
         html += "<section><h2>Model pricing assumptions</h2><table><thead><tr><th>Model</th><th>Tokens</th><th>Est. cost</th><th>Input $/M</th><th>Output $/M</th><th>Cache read $/M</th><th>Source</th><th>Effective</th></tr></thead><tbody>"
         for m in data.models {
             // modelId 現為 String?(unattributed → nil):價目查找僅對歸屬模型進行。
-            let price = m.modelId.flatMap { mid in data.pricingRows.first {
-                $0.providerId == m.providerId && ($0.modelId == mid || ($0.modelId.hasSuffix("*") && mid.hasPrefix(String($0.modelId.dropLast()))))
-            }}
+            // 顯示用價目列:精確 > 最長匹配前綴(對齊 PricingRegistry.price 的選取語意)。
+            // 舊 `.first` 在重疊 glob(如 claude-opus-5* 與 claude-opus-5-5*)下會依 pricingRows
+            // 迭代順序顯示較短前綴的價 —— 成本計算正確,但顯示錯。longest-prefix 使顯示與順序無關。
+            // 回歸由 ReportPricingDisplayTests 釘死(falsified:還原 .first 會 RED)。
+            let price = m.modelId.flatMap { mid -> ModelPrice? in
+                let rows = data.pricingRows.filter { $0.providerId == m.providerId }
+                if let exact = rows.first(where: { $0.modelId == mid }) { return exact }
+                return rows
+                    .filter { $0.modelId.hasSuffix("*") && mid.hasPrefix(String($0.modelId.dropLast())) }
+                    .max { $0.modelId.count < $1.modelId.count }
+            }
             // sink 防護(codex SEV1):模型名走封閉 modelLabel(絕對路徑形 → basename;`.unattributed`
             // → "unattributed";`""` → "empty model id";合法 `vendor/model` 相對形不受影響)。
             // source / effectiveFrom 是使用者覆寫檔可攜任意字串的描述性標籤 → safeLabel。
