@@ -2287,10 +2287,11 @@ final class PricingTests: XCTestCase {
         }
         let registry = PricingRegistry.loadDefault(overridesURL: nil)
 
-        // 生成長尾的例子:fast 變體有獨立(較長)前綴,不得吃到標準版價格
-        if let fast = registry.price(providerId: "claude-code", modelId: "claude-opus-4-8-fast") {
-            XCTAssertEqual(fast.inputPerMillion, 10, "fast 模式溢價必須來自較長前綴的條目")
-        }
+        // fast mode 仍存在(Opus 4.8/5/5.5,premium rate),但它是 request 參數 speed:"fast"
+        // (同一 model id,用 usage.speed 回報),不是獨立 model id;Claude Code ledger 從不產生
+        // claude-opus-*-fast(且 Opus 4.7 fast 已官方移除)。舊的「fast 走較長前綴溢價」斷言對的是
+        // 不可達的合成 SKU、已過時,2026-10-12 移除。(adapter 尚未解析 usage.speed → fast 用量目前
+        // 以 base 價計,屬另案限制。)前綴/exact 選取仍由下方 gpt-5.5 那組斷言覆蓋。
 
         // 使用者實際在用的模型必須有價(2026-07 驗證過的官方價)
         let opus48 = registry.price(providerId: "claude-code", modelId: "claude-opus-4-8")
@@ -2298,6 +2299,42 @@ final class PricingTests: XCTestCase {
         XCTAssertEqual(opus48?.outputPerMillion, 25)
         XCTAssertEqual(opus48?.cacheReadPerMillion, 0.5)
         XCTAssertEqual(opus48?.cacheWrite1hPerMillion, 10)
+
+        // 現行 Claude 模型官方價(platform.claude.com/docs pricing, snapshot 2026-10-12);curated 權威。
+        // cache-read 比例逐代不同(Opus/Sonnet 5.5 = 0.05x input、Fable 5.1 = 0.025x、Opus 5 = 0.1x)。
+        let opus55 = registry.price(providerId: "claude-code", modelId: "claude-opus-5-5")
+        XCTAssertEqual(opus55?.inputPerMillion, 4)
+        XCTAssertEqual(opus55?.outputPerMillion, 20)
+        XCTAssertEqual(opus55?.cacheReadPerMillion, 0.2)
+        XCTAssertEqual(opus55?.cacheWrite5mPerMillion, 5)
+        XCTAssertEqual(opus55?.cacheWrite1hPerMillion, 8)
+        let opus5 = registry.price(providerId: "claude-code", modelId: "claude-opus-5")
+        XCTAssertEqual(opus5?.inputPerMillion, 5)
+        XCTAssertEqual(opus5?.outputPerMillion, 25)
+        XCTAssertEqual(opus5?.cacheReadPerMillion, 0.5)
+        XCTAssertEqual(opus5?.cacheWrite5mPerMillion, 6.25)
+        XCTAssertEqual(opus5?.cacheWrite1hPerMillion, 10)
+        let sonnet55 = registry.price(providerId: "claude-code", modelId: "claude-sonnet-5-5")
+        XCTAssertEqual(sonnet55?.inputPerMillion, 2)
+        XCTAssertEqual(sonnet55?.outputPerMillion, 10)
+        XCTAssertEqual(sonnet55?.cacheReadPerMillion, 0.1)
+        XCTAssertEqual(sonnet55?.cacheWrite5mPerMillion, 2.5)
+        XCTAssertEqual(sonnet55?.cacheWrite1hPerMillion, 4)
+        let fable51 = registry.price(providerId: "claude-code", modelId: "claude-fable-5-1")
+        XCTAssertEqual(fable51?.inputPerMillion, 10)
+        XCTAssertEqual(fable51?.outputPerMillion, 50)
+        XCTAssertEqual(fable51?.cacheReadPerMillion, 0.25)
+        XCTAssertEqual(fable51?.cacheWrite5mPerMillion, 12.5)
+        XCTAssertEqual(fable51?.cacheWrite1hPerMillion, 20)
+        // Sonnet 5 = $2/$10(2026-09-01 漲到 $3/$15 的計畫已官方取消;修正既有過時條目)
+        let sonnet5 = registry.price(providerId: "claude-code", modelId: "claude-sonnet-5")
+        XCTAssertEqual(sonnet5?.inputPerMillion, 2)
+        XCTAssertEqual(sonnet5?.outputPerMillion, 10)
+        XCTAssertEqual(sonnet5?.cacheReadPerMillion, 0.2)
+        // Mythos 5.1 = Fable 5.1 費率;否則 fall-through 到 mythos-5* 會把 cache read 收成 4×
+        let mythos51 = registry.price(providerId: "claude-code", modelId: "claude-mythos-5-1")
+        XCTAssertEqual(mythos51?.inputPerMillion, 10)
+        XCTAssertEqual(mythos51?.cacheReadPerMillion, 0.25)
 
         let fable = registry.price(providerId: "claude-code", modelId: "claude-fable-5")
         XCTAssertEqual(fable?.inputPerMillion, 10)
