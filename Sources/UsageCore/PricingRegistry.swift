@@ -1,5 +1,27 @@
 import Foundation
 
+/// Fast 模式(Claude `speed: "fast"`,Opus 研究預覽)的逐類費率。存在時即為該模型 fast 用量的
+/// 權威費率;input/output 必備,快取欄位沿用與標準列相同的 optional 語意。
+/// 權威來源:platform.claude.com/docs pricing —— fast base 費率 + 「快取倍率疊加於 fast 定價之上」。
+/// 刻意**不**另造 `*-fast*` 模型 id(日誌裡的 modelId 仍是真實 Opus id;speed 由事件攜帶)。
+public struct FastRates: Codable, Sendable, Hashable {
+    public var inputPerMillion: Double
+    public var outputPerMillion: Double
+    public var cacheReadPerMillion: Double?
+    public var cacheWrite5mPerMillion: Double?
+    public var cacheWrite1hPerMillion: Double?
+
+    public init(inputPerMillion: Double, outputPerMillion: Double,
+                cacheReadPerMillion: Double? = nil,
+                cacheWrite5mPerMillion: Double? = nil, cacheWrite1hPerMillion: Double? = nil) {
+        self.inputPerMillion = inputPerMillion
+        self.outputPerMillion = outputPerMillion
+        self.cacheReadPerMillion = cacheReadPerMillion
+        self.cacheWrite5mPerMillion = cacheWrite5mPerMillion
+        self.cacheWrite1hPerMillion = cacheWrite1hPerMillion
+    }
+}
+
 public struct ModelPrice: Codable, Sendable, Hashable, Identifiable {
     public var providerId: String
     /// 完整 model id,或以 `*` 結尾的前綴樣式(如 `claude-sonnet-4-5*`)。
@@ -14,6 +36,8 @@ public struct ModelPrice: Codable, Sendable, Hashable, Identifiable {
     public var effectiveFrom: String
     public var source: String
     public var userOverride: Bool
+    /// 該模型 fast 模式的費率;nil = 此模型無 fast 模式(或未登錄)。缺鍵照常解碼(向後相容)。
+    public var fast: FastRates?
 
     public var id: String { providerId + "/" + modelId }
 
@@ -21,7 +45,8 @@ public struct ModelPrice: Codable, Sendable, Hashable, Identifiable {
                 inputPerMillion: Double, outputPerMillion: Double,
                 cacheReadPerMillion: Double? = nil,
                 cacheWrite5mPerMillion: Double? = nil, cacheWrite1hPerMillion: Double? = nil,
-                currency: String = "USD", effectiveFrom: String, source: String, userOverride: Bool = false) {
+                currency: String = "USD", effectiveFrom: String, source: String, userOverride: Bool = false,
+                fast: FastRates? = nil) {
         self.providerId = providerId
         self.modelId = modelId
         self.displayName = displayName
@@ -34,6 +59,7 @@ public struct ModelPrice: Codable, Sendable, Hashable, Identifiable {
         self.effectiveFrom = effectiveFrom
         self.source = source
         self.userOverride = userOverride
+        self.fast = fast
     }
 }
 
@@ -153,20 +179,46 @@ public struct PricingRegistry: Sendable {
         guard let price = price(providerId: event.providerId, modelId: event.modelId) else {
             return CostResult(knownUSD: 0, unknownModelTokens: event.tokens.total, isEstimated: true)
         }
-        let t = event.tokens
-        var usd = Double(t.input) / 1e6 * price.inputPerMillion
-        usd += Double(t.output) / 1e6 * price.outputPerMillion
         var estimated = false
+        // 速度模式費率解析:fast 事件(Claude `speed: "fast"`)套用該模型的 fast 費率;
+        // 標準 / 缺值一律走基準費率(與舊行為逐位元相同)。已知 fast 但目錄無 fast 費率 →
+        // 退回基準費率並標 estimated(基準是下界,絕不呈現成精確成本;operational §4 可見降級)。
+        let inputRate: Double
+        let outputRate: Double
+        let cacheReadRate: Double?
+        let cacheWrite5mRate: Double?
+        let cacheWrite1hRate: Double?
+        if event.speed == "fast", let f = price.fast {
+            inputRate = f.inputPerMillion
+            outputRate = f.outputPerMillion
+            cacheReadRate = f.cacheReadPerMillion
+            cacheWrite5mRate = f.cacheWrite5mPerMillion
+            cacheWrite1hRate = f.cacheWrite1hPerMillion
+        } else {
+            // 非標準 speed 卻拿不到對應 fast 費率(fast 但該模型無 fast 費率,或未知的新速度層)
+            // → 以基準費率計但標 estimated(下界;絕不把非標準 speed 默默呈現成精確標準價)。
+            // nil 與 "standard" 皆屬標準層 → 走 base 且**不**標 estimated(與舊行為相同;cost 不依賴
+            // adapter 是否已把 "standard" 正規化成 nil —— 直接收到 "standard" 也視為標準)。
+            if let s = event.speed, s != "standard" { estimated = true }
+            inputRate = price.inputPerMillion
+            outputRate = price.outputPerMillion
+            cacheReadRate = price.cacheReadPerMillion
+            cacheWrite5mRate = price.cacheWrite5mPerMillion
+            cacheWrite1hRate = price.cacheWrite1hPerMillion
+        }
+        let t = event.tokens
+        var usd = Double(t.input) / 1e6 * inputRate
+        usd += Double(t.output) / 1e6 * outputRate
         if t.cacheRead > 0 {
-            if let p = price.cacheReadPerMillion { usd += Double(t.cacheRead) / 1e6 * p }
+            if let p = cacheReadRate { usd += Double(t.cacheRead) / 1e6 * p }
             else { estimated = true }
         }
         if t.cacheWrite5m > 0 {
-            if let p = price.cacheWrite5mPerMillion { usd += Double(t.cacheWrite5m) / 1e6 * p }
+            if let p = cacheWrite5mRate { usd += Double(t.cacheWrite5m) / 1e6 * p }
             else { estimated = true }
         }
         if t.cacheWrite1h > 0 {
-            if let p = price.cacheWrite1hPerMillion { usd += Double(t.cacheWrite1h) / 1e6 * p }
+            if let p = cacheWrite1hRate { usd += Double(t.cacheWrite1h) / 1e6 * p }
             else { estimated = true }
         }
         // TTL 未知的快取寫入無從逐類計價 → 該部分未入帳,結果標 estimated(下界;

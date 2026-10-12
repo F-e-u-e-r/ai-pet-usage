@@ -290,6 +290,9 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
             let cache_read_input_tokens: Int?
             let cache_creation_input_tokens: Int?
             let cache_creation: CacheCreation?
+            /// Claude Code 的速度模式(`/fast` 切換 → 研究預覽 fast 模式,Opus only)。
+            /// 值為 `"standard"` / `"fast"`;fast 以該模型的 premium 費率計價。缺鍵 → nil。
+            let speed: String?
         }
         struct CacheCreation: Decodable {
             let ephemeral_5m_input_tokens: Int?
@@ -330,6 +333,12 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         let cwd = line.cwd
         let projectName = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
 
+        // speed 正規化:`"standard"` / 缺值 → nil(標準用量序列化與舊帳本列逐位元相同,encoder 省略
+        // nil optional)。`"fast"` 或**任何其他非標準值**(如未來新速度層)原樣保留 —— 讓 cost(of:)
+        // 把無法以 premium 計價的非標準 speed 標成 estimated 下界(fail-loud),而非默默當成精確標準價
+        // (operational §4)。speed 絕不編進 modelId(不得製造假的 `*-fast*` 模型 id)。
+        let speed: String? = (usage.speed == nil || usage.speed == "standard") ? nil : usage.speed
+
         return UsageEvent(
             id: id,
             providerId: "claude-code",
@@ -339,7 +348,8 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
             timestamp: timestamp,
             tokens: tokens,
             sourceKind: "claude-jsonl",
-            sourcePath: sourcePath
+            sourcePath: sourcePath,
+            speed: speed
         )
     }
 }

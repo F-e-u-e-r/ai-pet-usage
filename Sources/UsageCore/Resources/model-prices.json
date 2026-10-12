@@ -66,8 +66,15 @@
     "cacheWrite1hPerMillion": 8,
     "currency": "USD",
     "effectiveFrom": "2026-10-12",
-    "source": "platform.claude.com/docs pricing (snapshot 2026-10-12); official API rates; cache read 0.05x input per pricing-page footnote",
-    "userOverride": false
+    "source": "platform.claude.com/docs pricing (snapshot 2026-10-12); official API rates; cache read 0.05x input per pricing-page footnote; fast = fast-mode base ($8/$40) + standard caching multipliers stacked (pricing-page 'Fast mode pricing')",
+    "userOverride": false,
+    "fast": {
+      "inputPerMillion": 8,
+      "outputPerMillion": 40,
+      "cacheReadPerMillion": 0.4,
+      "cacheWrite5mPerMillion": 10,
+      "cacheWrite1hPerMillion": 16
+    }
   },
   {
     "providerId": "claude-code",
@@ -80,8 +87,15 @@
     "cacheWrite1hPerMillion": 10,
     "currency": "USD",
     "effectiveFrom": "2026-10-12",
-    "source": "platform.claude.com/docs pricing (snapshot 2026-10-12); official API rates",
-    "userOverride": false
+    "source": "platform.claude.com/docs pricing (snapshot 2026-10-12); official API rates; fast = fast-mode base ($10/$50) + standard caching multipliers stacked (pricing-page 'Fast mode pricing')",
+    "userOverride": false,
+    "fast": {
+      "inputPerMillion": 10,
+      "outputPerMillion": 50,
+      "cacheReadPerMillion": 1.0,
+      "cacheWrite5mPerMillion": 12.5,
+      "cacheWrite1hPerMillion": 20
+    }
   },
   {
     "providerId": "claude-code",
@@ -94,8 +108,15 @@
     "cacheWrite1hPerMillion": 10,
     "currency": "USD",
     "effectiveFrom": "2026-06-24",
-    "source": "docs.claude.com models overview (snapshot 2026-06-24)",
-    "userOverride": false
+    "source": "docs.claude.com models overview (snapshot 2026-06-24); fast = fast-mode base ($10/$50) + standard caching multipliers stacked (pricing-page 'Fast mode pricing')",
+    "userOverride": false,
+    "fast": {
+      "inputPerMillion": 10,
+      "outputPerMillion": 50,
+      "cacheReadPerMillion": 1.0,
+      "cacheWrite5mPerMillion": 12.5,
+      "cacheWrite1hPerMillion": 20
+    }
   },
   {
     "providerId": "claude-code",
