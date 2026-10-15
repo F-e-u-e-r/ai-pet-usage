@@ -255,6 +255,19 @@
   },
   {
     "providerId": "antigravity",
+    "modelId": "gemini-4-argon",
+    "displayName": "Gemini 4 Argon",
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 10.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-10-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-14)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.1,
+    "cacheWrite5mPerMillion": 0.1875
+  },
+  {
+    "providerId": "antigravity",
     "modelId": "gemini-nano-banana-2.1",
     "displayName": "Nano Banana 2.1",
     "inputPerMillion": 1.5,
@@ -313,13 +326,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.09,
-    "outputPerMillion": 0.3,
+    "inputPerMillion": 0.0765,
+    "outputPerMillion": 0.255,
     "currency": "USD",
-    "effectiveFrom": "2026-10-13",
-    "source": "openrouter.ai/api/v1/models (generated 2026-10-13)",
+    "effectiveFrom": "2026-10-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-14)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "cacheReadPerMillion": 0.0425
   },
   {
     "providerId": "antigravity",
@@ -1210,13 +1223,12 @@
     "providerId": "codex",
     "modelId": "gpt-oss-120b",
     "displayName": "gpt-oss-120b",
-    "inputPerMillion": 0.15,
-    "outputPerMillion": 0.6,
+    "inputPerMillion": 0.037,
+    "outputPerMillion": 0.17,
     "currency": "USD",
-    "effectiveFrom": "2026-10-13",
-    "source": "openrouter.ai/api/v1/models (generated 2026-10-13)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.075
+    "effectiveFrom": "2026-10-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-14)",
+    "userOverride": false
   },
   {
     "providerId": "codex",
