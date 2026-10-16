@@ -854,8 +854,11 @@ public actor UsageCoordinator {
         if ledger.shouldPhysicallyCompact(retentionDays: settings.retentionDays, now: now) {
             // gate-r2 luna L1-殘餘:讀不到 raw 或 canonicalization 失敗**一律**跳過 compact(fail closed)
             // ——typed 重寫會消滅 malformed/duplicate/unknown-key raw 證據,不得在可疑/不可驗檔上發生。
+            // Memory P2 Option C(C1):此 guard 只需 success/failure 判決,改用 validate-only 入口——
+            // 與 canonicalizeRawLines 等價的 fail-closed 決策,但不保留整份 Slice(消除 guard 階段最大
+            // 常駐結構;`== nil` ⟺ 原 `.success`,見 reviews/performance/memory-p2-optionc/)。
             if let raw = try? Data(contentsOf: ledgerURL),
-               case .success = CanonicalLedgerV1.canonicalizeRawLines(raw) {
+               CanonicalLedgerV1.canonicalizeRawLinesValidate(raw) == nil {
                 // sol r3 MF3:raw 保存式 compact——只丟可解析且確定過期的行,其餘逐位元組保留
                 // (不經 typed round-trip,不改寫任何 provider 的 raw 表示)。
                 switch ledger.compactRawPreserving(retentionDays: settings.retentionDays, now: now, raw: raw) {

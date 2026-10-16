@@ -120,8 +120,50 @@ public enum CanonicalLedgerV1 {
     /// 空白行(impl-r1 L1):唯一合法的空 subsequence 是「單一 trailing newline」產生的檔尾空段;
     /// 其餘(內部空白行、連續 newline)一律 malformed——靜默跳過即是未列舉 normalization。
     public static func canonicalizeRawLines(_ data: Data) -> Result<Slice, FailureSummary> {
-        if data.isEmpty { return .success(Slice(events: [:])) }   // 空輸入 = 合法空 slice(零事件)。
+        var byID: [String: [Event]] = [:]   // 先分組,不覆寫——duplicate 偵測先於任何 keep-first。
+        var (summary, offending) = canonicalizeScan(data) { event in
+            byID[event.id, default: []].append(event)
+        }
+        for (_, group) in byID where group.count > 1 {
+            summary.duplicateIDs += group.count
+        }
+        summary.offendingKeys = offending.sorted()
+        guard summary.isEmpty else { return .failure(summary) }
+        return .success(Slice(events: byID.compactMapValues(\.first)))
+    }
+
+    /// Memory P2 Option C(C1):steady-refresh compaction guard(UsageCoordinator:858)只消費
+    /// `.success`、丟棄回傳的 `Slice`;本入口做**與 `canonicalizeRawLines` 逐字相同的驗證**(共用
+    /// `canonicalizeScan`),但僅累積 `id → count` 以偵測 duplicate、**不保留 ~185K 個 `Event`**——
+    /// 消除 guard 階段最大常駐結構(SOURCE-TRACE §3.1 item 4:~150–280 MB 的 `[String:[Event]]`)。
+    /// 回傳 `nil` = 乾淨(對應原 `.success`);否則回傳**與原 `.failure` 完全相等**的 `FailureSummary`
+    /// (等價契約 O1∧O2,見 `reviews/performance/memory-p2-optionc/CONTRACT-TEST-PLAN.md` §3:
+    /// 決策與錯誤分類皆不弱化)。
+    static func canonicalizeRawLinesValidate(_ data: Data) -> FailureSummary? {
+        var idCounts: [String: Int] = [:]   // 只計數 id(不保留 Event):duplicate 偵測所需的最小狀態。
+        var (summary, offending) = canonicalizeScan(data) { event in
+            idCounts[event.id, default: 0] += 1
+        }
+        for (_, count) in idCounts where count > 1 {
+            summary.duplicateIDs += count
+        }
+        summary.offendingKeys = offending.sorted()
+        return summary.isEmpty ? nil : summary
+    }
+
+    /// 共用掃描核心(Memory P2 Option C)。`canonicalizeRawLines`(保留 Slice,供 monotonic gate 與
+    /// `canonicalizePersistedBytes`)與 `canonicalizeRawLinesValidate`(compaction guard,僅計數)
+    /// 唯一的差異是 `onEvent` sink 及其後的 duplicate 彙總;**pre-split encoding gates 與逐行 pipeline
+    /// 在此一字不改**,兩入口因此不可能漂移(等價性由此結構保證,再以測試證明)。
+    /// 回傳 duplicate-ID 彙總**之前**的 `summary` 與 `offending`(各入口以自己的累積器完成等價的 dup 計數,
+    /// 並於其後設定 `offendingKeys`——與原函式順序一致)。per-line body 以 `autoreleasepool` 包覆
+    /// (C-pool):compaction 在 `UsageCoordinator`(actor)內執行,否則每行 `JSONSerialization` 產生的
+    /// autoreleased `NSDictionary` 會累積到 executor 的 pool drain 才釋放(SOURCE-TRACE §3.1 item 3)。
+    /// 包覆僅改變釋放時機,不改任何決策/輸出(body 內部的 `return` 等義於原 `continue`:跳至下一行)。
+    private static func canonicalizeScan(_ data: Data,
+                                         onEvent: (Event) -> Void) -> (summary: FailureSummary, offending: Set<String>) {
         var summary = FailureSummary()
+        if data.isEmpty { return (summary, []) }   // 空輸入 = 合法空(呼叫端回 success / nil)。
 
         // Encoding-domain gate(owner amendment):**先驗證整份 raw data,再切行**——
         // alternative encoding 下的 LF framing 本身不可信,不得先按 byte 切分未驗證輸入。
@@ -129,15 +171,13 @@ public enum CanonicalLedgerV1 {
         // BOM/NUL 為固定優先序的可診斷前置拒絕(BOM > NUL > invalid-UTF-8,單一分類計 1)。
         // 驗證後仍以**原始 bytes** 掃描(不引入任何未規格化的 normalization);
         // scanner 與 JSONSerialization 因此消費同一份已驗證 UTF-8 line bytes。
-        if hasForbiddenBOM(data) { summary.bomCount = 1; return .failure(summary) }
-        if data.contains(0x00) { summary.nulByteCount = 1; return .failure(summary) }
+        if hasForbiddenBOM(data) { summary.bomCount = 1; return (summary, []) }
+        if data.contains(0x00) { summary.nulByteCount = 1; return (summary, []) }
         guard String(data: data, encoding: .utf8) != nil else {
-            summary.invalidEncodingCount = 1; return .failure(summary)
+            summary.invalidEncodingCount = 1; return (summary, [])
         }
 
         var offending: Set<String> = []
-        var byID: [String: [Event]] = [:]   // 先分組,不覆寫——duplicate 偵測先於任何 keep-first。
-
         let segments = data.split(separator: 0x0A, omittingEmptySubsequences: false)
         for (idx, line) in segments.enumerated() {
             if line.isEmpty {
@@ -149,31 +189,29 @@ public enum CanonicalLedgerV1 {
             // (先於 key 驗證),故先以 string-aware 掃描偵測同層重複 key;key 位置出現任何 JSON
             // escape(schema key 永為純 ASCII)同樣 fail closed——`"tokens"` 這類別名
             // 可繞過重複偵測、再被解碼塌縮(impl-r3 三 lens 收斂 MUST-FIX)。
-            let scan = scanRawMembers(in: line)
-            if scan.hasEscapedKey { summary.escapedKeyNames += 1; continue }
-            if scan.hasDuplicate { summary.duplicateJSONMembers += 1; continue }
-            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else {
-                summary.malformedLines += 1
-                continue
-            }
-            switch canonicalizeObject(obj) {
-            case .success(let event):
-                byID[event.id, default: []].append(event)
-            case .failure(let f):
-                summary.malformedLines += f.malformedLines
-                summary.missingRequiredKeys += f.missingRequiredKeys
-                summary.unknownTopLevelKeys += f.unknownTopLevelKeys
-                summary.unknownTokenKeys += f.unknownTokenKeys
-                summary.invalidTypes += f.invalidTypes
-                offending.formUnion(f.offendingKeys)
+            // C-pool:per-line Foundation churn 於此 autoreleasepool 內收斂(body 內 `return` = 原 `continue`)。
+            autoreleasepool {
+                let scan = scanRawMembers(in: line)
+                if scan.hasEscapedKey { summary.escapedKeyNames += 1; return }
+                if scan.hasDuplicate { summary.duplicateJSONMembers += 1; return }
+                guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else {
+                    summary.malformedLines += 1
+                    return
+                }
+                switch canonicalizeObject(obj) {
+                case .success(let event):
+                    onEvent(event)
+                case .failure(let f):
+                    summary.malformedLines += f.malformedLines
+                    summary.missingRequiredKeys += f.missingRequiredKeys
+                    summary.unknownTopLevelKeys += f.unknownTopLevelKeys
+                    summary.unknownTokenKeys += f.unknownTokenKeys
+                    summary.invalidTypes += f.invalidTypes
+                    offending.formUnion(f.offendingKeys)
+                }
             }
         }
-        for (_, group) in byID where group.count > 1 {
-            summary.duplicateIDs += group.count
-        }
-        summary.offendingKeys = offending.sorted()
-        guard summary.isEmpty else { return .failure(summary) }
-        return .success(Slice(events: byID.compactMapValues(\.first)))
+        return (summary, offending)
     }
 
     /// UTF-8/16/32 BOM 前綴(順序注意:UTF-32 的 BOM 含 UTF-16 BOM 前綴,先查 32)。
