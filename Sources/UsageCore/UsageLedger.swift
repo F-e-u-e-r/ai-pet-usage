@@ -470,19 +470,31 @@ public final class UsageLedger {
         let cutoff = Self.retentionCutoff(retentionDays: retentionDays, now: now)   // #50 R-retention:單一 predicate
         var newData = Data()
         var dropped = 0
+        // Memory P2 Option C:keep/drop 判定移入 per-line autoreleasepool —— 每行 JSONSerialization 的
+        // NSDictionary 於 pool 內 drain(不累積整檔 ~186K 個「simultaneously live temporary representations」);
+        // 僅三態決策逃出,bytes append 在 pool 外。drop 判準、.failed 語義、newData 內容**逐字不變**
+        //(pool body 內的 `return` 僅返回決策值,非函式返回)。
+        enum LineDecision { case keep, drop, failParse }
         for line in raw.split(separator: 0x0A, omittingEmptySubsequences: false) {
             if line.isEmpty { continue }   // 尾端 trailing-newline 空段(canonicalization 已拒內部空白行)
-            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else {
-                return .failed   // 防禦性:caller 已 canonicalize 成功,解析失敗即拒絕重寫(不冒險)
+            let decision: LineDecision = autoreleasepool {
+                guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else {
+                    return .failParse   // 防禦性:caller 已 canonicalize 成功,解析失敗即拒絕重寫(不冒險)
+                }
+                // sol r4 MF2:丟棄判定必須用 strict 解析(整串消耗+明確時區)——lenient 解析接受
+                // 垃圾後綴("…T00:00:00garbage"),會把 canonical 域視為 opaque 字串的行誤判為過期而刪除。
+                if let ts = obj["timestamp"] as? String, let d = ISO8601.parse(ts, strict: true), d < cutoff {
+                    return .drop   // 唯一允許丟棄的行:timestamp 可解析且確定過期
+                }
+                return .keep
             }
-            // sol r4 MF2:丟棄判定必須用 strict 解析(整串消耗+明確時區)——lenient 解析接受
-            // 垃圾後綴("…T00:00:00garbage"),會把 canonical 域視為 opaque 字串的行誤判為過期而刪除。
-            if let ts = obj["timestamp"] as? String, let d = ISO8601.parse(ts, strict: true), d < cutoff {
-                dropped += 1
-                continue   // 唯一允許丟棄的行:timestamp 可解析且確定過期
+            switch decision {
+            case .failParse: return .failed
+            case .drop: dropped += 1
+            case .keep:
+                newData.append(contentsOf: line)
+                newData.append(0x0A)
             }
-            newData.append(contentsOf: line)
-            newData.append(0x0A)
         }
         guard dropped > 0 else { return .noop }
         // #48 clearing-final sol#1:先 re-decode newData 再決定是否寫入——若丟棄後只剩 canonical 但
@@ -495,13 +507,17 @@ public final class UsageLedger {
         var reloadedRawOnlyProviders = Set<String>()   // v3.3:O4 raw-only 證據隨檔案重建
         let decoder = Self.ledgerLineDecoder()   // v3.3:與 load 同一 classifier(重建視角一致)
         for line in newData.split(separator: 0x0A, omittingEmptySubsequences: true) {
-            if let e = try? decoder.decode(UsageEvent.self, from: Data(line)) {
-                if reloadedIDs.insert(e.id).inserted { reloaded.append(e) }
-            } else if let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
-                      let rid = obj["id"] as? String {
-                reloadedReserved.insert(rid)   // #48 MF3 clearing twin:保留的 raw-only 行 id ⇒ collision-reserved
-                // v3.3 §1b O4 arm:與 load 同界(有 id 的 raw-only 行)提取 providerId 證據。
-                if let pid = obj["providerId"] as? String { reloadedRawOnlyProviders.insert(pid) }
+            // Memory P2 Option C:re-decode 的 JSONDecoder / JSONSerialization 中介物件於 pool 內 drain
+            //(reloaded 事件為 value type,append 後逃出;集合插入皆為外層變數,語義不變)。
+            autoreleasepool {
+                if let e = try? decoder.decode(UsageEvent.self, from: Data(line)) {
+                    if reloadedIDs.insert(e.id).inserted { reloaded.append(e) }
+                } else if let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                          let rid = obj["id"] as? String {
+                    reloadedReserved.insert(rid)   // #48 MF3 clearing twin:保留的 raw-only 行 id ⇒ collision-reserved
+                    // v3.3 §1b O4 arm:與 load 同界(有 id 的 raw-only 行)提取 providerId 證據。
+                    if let pid = obj["providerId"] as? String { reloadedRawOnlyProviders.insert(pid) }
+                }
             }
         }
         if reloaded.isEmpty && !newData.isEmpty {

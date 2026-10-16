@@ -1,5 +1,11 @@
 import Foundation
 
+// Memory P2 Option C — env-gated peak-footprint benchmark。AIPET_P2_BENCH=1 時只跑 benchmark 並退出
+// (跳過整個正常 suite),使每次量測為 fresh process、快速、allocator 狀態乾淨。平時不設此 env,無影響。
+if ProcessInfo.processInfo.environment["AIPET_P2_BENCH"] == "1" {
+    MemoryP2GuardBenchmark().runFromEnvironmentAndExit()   // never returns
+}
+
 // 手動註冊(無 XCTest runtime 探索可用)。新增測試方法時記得加進對應清單。
 
 let iso = ISO8601Tests()
@@ -900,6 +906,18 @@ runSuite("CanonicalLedgerTests", [
     ("testCandidatePersistedByteCanonicalization", clTests.testCandidatePersistedByteCanonicalization),
     ("testVersionAndSpecConstantsFrozen", clTests.testVersionAndSpecConstantsFrozen),
     ("testEncodingDomainGate", clTests.testEncodingDomainGate),
+])
+
+// Memory P2 Option C(C1):validate-only compaction guard 等價 oracle + fail-closed 驗收。
+let memP2OptionC = MemoryP2OptionCTests()
+runSuite("MemoryP2OptionCTests", [
+    ("testValidateEquivalenceAcrossFullVectorMatrix", memP2OptionC.testValidateEquivalenceAcrossFullVectorMatrix),
+    ("testValidateEquivalenceDuplicateIDs", memP2OptionC.testValidateEquivalenceDuplicateIDs),
+    ("testValidateEquivalenceEncodingGates", memP2OptionC.testValidateEquivalenceEncodingGates),
+    ("testValidateEquivalenceOnRealLedgerShape", memP2OptionC.testValidateEquivalenceOnRealLedgerShape),
+    ("testCompactionGuardFailClosedOnSuspectRaw", memP2OptionC.testCompactionGuardFailClosedOnSuspectRaw),
+    ("testSliceFormUnchangedRegressionSpotCheck", memP2OptionC.testSliceFormUnchangedRegressionSpotCheck),
+    ("testCompactRawPreservingFailsClosedOnUnparseableRaw", memP2OptionC.testCompactRawPreservingFailsClosedOnUnparseableRaw),
 ])
 
 // #64 durable-commit crash matrix(PLAN-v1 §5 preregistered;C7 注入 + C1–C3 構造 + 順序/等價鎖)。
