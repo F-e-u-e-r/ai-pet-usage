@@ -70,6 +70,18 @@ open "dist/AI Pet Usage.app"
 - app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。可**檢查 GitHub 更新**(opt-in —— Settings → General → *Automatically check for updates*;僅版本檢查,不送任何使用資料),或從選單列隨時手動檢查。
 - Developer ID 簽章/公證的下載已在規劃中(見 [`ROADMAP.md`](ROADMAP.md))。
 
+> [!WARNING]
+> **已知安裝問題 —— v0.1.0-beta.3**
+>
+> 在一台受測的 macOS 26.5 機器上,透過 Homebrew 安裝的 Beta.3 app 在首次啟動時被 Gatekeeper 封鎖,並被 macOS **移到垃圾桶**。它是*被移動,不是被刪除* —— 可從垃圾桶還原。本版本(以及先前的 beta.1–2)為 ad-hoc 簽章、**未經公證**,因此 macOS 不會把它視為受信任、已公證的發佈。
+>
+> - 這是**單一受測機器上已確認的事件**,並非「每一台 macOS 都會這樣」的通則。
+> - 它**不是** Apple 將此 app 判定為惡意軟體的證據。
+> - GitHub tag 與已發佈的 ZIP **維持不變**。
+> - Developer ID 簽章、**已公證**的版本正在為未來版本準備中;它需要另外的簽章與 Apple 帳號設定,且**不承諾發佈日期**。
+>
+> 請不要把停用 macOS 安全防護、或移除 quarantine 屬性(例如使用 `xattr`)當成例行安裝步驟。若下載的 app 被移到垃圾桶,**從原始碼建置**(見上方)會產生一份未被 quarantine 的本機建置,仍是受支援的 fallback。
+
 ### Claude Code 官方限額(可選的 statusline hook)
 
 Claude Code 會把官方限額(真實的 5 小時 / 週 `used_percentage`)餵給你在 `statusLine` 設定的指令。只要有 hook 把這份 payload 存到本機,app 就能顯示**官方回報**的限額 —— 不必手動設 token budget。

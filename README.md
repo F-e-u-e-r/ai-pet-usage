@@ -70,6 +70,18 @@ open "dist/AI Pet Usage.app"
 - The app lives in the menu bar; enable **launch at login** in Settings if you want it always on. It can **check GitHub for updates** (opt-in — Settings → General → *Automatically check for updates*; a version check only, no usage data is sent), or check on demand from the menu bar.
 - Developer ID–signed/notarized downloads are planned (see [`ROADMAP.md`](ROADMAP.md)).
 
+> [!WARNING]
+> **Known installation issue — v0.1.0-beta.3**
+>
+> On a tested macOS 26.5 system, the Homebrew-installed Beta.3 app was blocked by Gatekeeper on first launch and **moved to the Trash** by macOS. It was *moved, not deleted* — it can be recovered from the Trash. This release (and the earlier beta.1–2) are ad-hoc signed and **not notarized**, so macOS does not treat them as a trusted, notarized distribution.
+>
+> - This is a **confirmed incident on one tested system**, not a claim that every macOS install behaves this way.
+> - It is **not** evidence that Apple classified the app as malware.
+> - The GitHub tag and the published ZIP are **unchanged**.
+> - A Developer ID–signed, **notarized** build is in preparation for a future release. It needs separate signing and Apple-account setup, and **no release date is committed**.
+>
+> Please don't disable macOS security protections or strip the quarantine attribute (for example with `xattr`) as a routine install step. If a download is moved to the Trash, **building from source** (above) produces a local, un-quarantined build and remains the supported fallback.
+
 ### Claude Code official limits (optional statusline hook)
 
 Claude Code pipes its official rate limits (the real 5-hour / weekly `used_percentage`) into whatever `statusLine` command you configure. If a hook saves that payload locally, the app shows **provider-reported** limits — no manual token budget needed.
