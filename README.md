@@ -40,6 +40,18 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 
 ## 📦 Install (beta)
 
+> [!WARNING]
+> **Known installation issue — v0.1.0-beta.3**
+>
+> On one tested macOS 26.5 system, the Homebrew-installed Beta.3 app was rejected by Gatekeeper on first launch and **moved to the Trash** by macOS. The app was *moved rather than deleted*, and **may still be recoverable if it remains in the Trash**. This build is ad-hoc signed and **not notarized**; it should not be treated as a Developer ID–signed, notarized macOS distribution.
+>
+> - This is a **confirmed incident on the tested system**, not a claim that all macOS installations will fail.
+> - The incident does **not** establish that Apple classified the app as malware.
+> - The published Git tag and ZIP artifact have **not changed**.
+> - Developer ID signing and notarization are **planned for a future release**. No release version or date is committed.
+>
+> The general **Open Anyway** guidance below may not resolve this particular failure. If macOS moves the app to the Trash, do not disable system security protections or remove quarantine as a routine workaround.
+
 **Homebrew (Apple Silicon)** — recommended:
 
 ```bash
@@ -66,7 +78,7 @@ open "dist/AI Pet Usage.app"
 ```
 
 - **Requirements**: macOS 14+. The Homebrew cask and the prebuilt zip are Apple Silicon; building from source needs the Xcode Command Line Tools (`xcode-select --install`).
-- **First launch**: the beta is ad-hoc signed and **not notarized**, so macOS blocks it the first time. Try to open the app, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (only if you trust the release). Homebrew does *not* remove this one-time approval — only Developer ID notarization would (planned).
+- **First launch**: the beta is ad-hoc signed and **not notarized**, so macOS blocks it the first time (on the tested macOS 26.5 this block instead moved the app to the Trash — see the known-installation-issue warning above). Try to open the app, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (only if you trust the release). Homebrew does *not* remove this one-time approval — only Developer ID notarization would (planned).
 - The app lives in the menu bar; enable **launch at login** in Settings if you want it always on. It can **check GitHub for updates** (opt-in — Settings → General → *Automatically check for updates*; a version check only, no usage data is sent), or check on demand from the menu bar.
 - Developer ID–signed/notarized downloads are planned (see [`ROADMAP.md`](ROADMAP.md)).
 
