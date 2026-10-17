@@ -40,6 +40,18 @@
 
 ## 📦 安裝(beta)
 
+> [!WARNING]
+> **已知安裝問題 —— v0.1.0-beta.3**
+>
+> 在一台受測的 macOS 26.5 機器上,透過 Homebrew 安裝的 Beta.3 app 在首次啟動時遭 Gatekeeper 拒絕,並被 macOS **移到垃圾桶**。該 app 是*被移動,而非被刪除*,**若仍留在垃圾桶中,或許仍可還原**。本建置為 ad-hoc 簽章、**未經公證**,不應被視為 Developer ID 簽章、已公證的 macOS 發佈。
+>
+> - 這是**該受測機器上已確認的事件**,並非「所有 macOS 安裝都會失敗」的宣稱。
+> - 此事件**不足以**證明 Apple 將此 app 判定為惡意軟體。
+> - 已發佈的 Git tag 與 ZIP 產物**並未變更**。
+> - Developer ID 簽章與公證**已規劃於未來版本**;不承諾任何發佈版本號或日期。
+>
+> 下方一般性的 **Open Anyway**(強制打開)指引未必能解決此特定問題。若 macOS 把 app 移到垃圾桶,請勿把停用 macOS 安全防護、或移除 quarantine 屬性當成例行的變通步驟。
+
 **Homebrew(Apple Silicon)** —— 推薦:
 
 ```bash
@@ -66,21 +78,9 @@ open "dist/AI Pet Usage.app"
 ```
 
 - **需求**:macOS 14+。Homebrew cask 與預先建置的 zip 為 Apple Silicon;從原始碼建置需 Xcode Command Line Tools（`xcode-select --install`）。
-- **首次啟動**:beta 為 ad-hoc 簽章、**未經公證**,macOS 首次會封鎖。先嘗試打開 app,再到 **系統設定 → 隱私權與安全性** 選 **「強制打開」/「仍要打開」**(依 macOS 版本而定;僅在你信任此版本時)。Homebrew **不會**移除這一次性核准 —— 只有 Developer ID 公證能(已在規劃中)。
+- **首次啟動**:beta 為 ad-hoc 簽章、**未經公證**,macOS 首次會封鎖(在受測的 macOS 26.5 上,這次封鎖改為把 app 移到垃圾桶 —— 見上方的已知安裝問題警告)。先嘗試打開 app,再到 **系統設定 → 隱私權與安全性** 選 **「強制打開」/「仍要打開」**(依 macOS 版本而定;僅在你信任此版本時)。Homebrew **不會**移除這一次性核准 —— 只有 Developer ID 公證能(已在規劃中)。
 - app 常駐於選單列;想讓它一直開著,可在 Settings 啟用 **launch at login**。可**檢查 GitHub 更新**(opt-in —— Settings → General → *Automatically check for updates*;僅版本檢查,不送任何使用資料),或從選單列隨時手動檢查。
 - Developer ID 簽章/公證的下載已在規劃中(見 [`ROADMAP.md`](ROADMAP.md))。
-
-> [!WARNING]
-> **已知安裝問題 —— v0.1.0-beta.3**
->
-> 在一台受測的 macOS 26.5 機器上,透過 Homebrew 安裝的 Beta.3 app 在首次啟動時被 Gatekeeper 封鎖,並被 macOS **移到垃圾桶**。它是*被移動,不是被刪除* —— 可從垃圾桶還原。本版本(以及先前的 beta.1–2)為 ad-hoc 簽章、**未經公證**,因此 macOS 不會把它視為受信任、已公證的發佈。
->
-> - 這是**單一受測機器上已確認的事件**,並非「每一台 macOS 都會這樣」的通則。
-> - 它**不是** Apple 將此 app 判定為惡意軟體的證據。
-> - GitHub tag 與已發佈的 ZIP **維持不變**。
-> - Developer ID 簽章、**已公證**的版本正在為未來版本準備中;它需要另外的簽章與 Apple 帳號設定,且**不承諾發佈日期**。
->
-> 請不要把停用 macOS 安全防護、或移除 quarantine 屬性(例如使用 `xattr`)當成例行安裝步驟。若下載的 app 被移到垃圾桶,**從原始碼建置**(見上方)會產生一份未被 quarantine 的本機建置,仍是受支援的 fallback。
 
 ### Claude Code 官方限額(可選的 statusline hook)
 
