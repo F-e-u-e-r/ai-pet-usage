@@ -20,6 +20,10 @@ on:
       - 'Scripts/reconcile-latest.sh'
       - 'Scripts/write-info-plist.sh'
       - 'Scripts/test-release-version.sh'
+      # 簽名管線(PR-B):簽名實作與其離線 falsification 套件變更時,直推 main 也要觸發本 required check。
+      - 'Scripts/build-app.sh'
+      - 'Scripts/notarize-app.sh'
+      - 'Scripts/test-signing-pipeline.sh'
 
 jobs:
   tests:
@@ -38,3 +42,6 @@ jobs:
       # canonical release 工具(docs/release/VERSIONING.md):版號文法、Info.plist 不變式、release-app.yml 接線守則。
       - name: Release tooling tests
         run: /bin/bash Scripts/test-release-version.sh
+      # 簽名管線離線 falsification 套件(PR-B):以 fake 工具驗證 Developer ID 簽名/公證編排會 fail-closed(無憑證、不碰 Apple)。
+      - name: Signing pipeline tests
+        run: /bin/bash Scripts/test-signing-pipeline.sh
