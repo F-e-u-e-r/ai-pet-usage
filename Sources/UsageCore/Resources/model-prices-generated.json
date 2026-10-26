@@ -558,17 +558,6 @@
   },
   {
     "providerId": "codex",
-    "modelId": "gpt-3.5-turbo",
-    "displayName": "GPT-3.5 Turbo",
-    "inputPerMillion": 0.5,
-    "outputPerMillion": 1.5,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
     "modelId": "gpt-3.5-turbo-0613",
     "displayName": "GPT-3.5 Turbo (older v0613)",
     "inputPerMillion": 1.0,
@@ -584,17 +573,6 @@
     "displayName": "GPT-3.5 Turbo 16k",
     "inputPerMillion": 3.0,
     "outputPerMillion": 4.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
-    "modelId": "gpt-3.5-turbo-instruct",
-    "displayName": "GPT-3.5 Turbo Instruct",
-    "inputPerMillion": 1.5,
-    "outputPerMillion": 2.0,
     "currency": "USD",
     "effectiveFrom": "2026-07-25",
     "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
