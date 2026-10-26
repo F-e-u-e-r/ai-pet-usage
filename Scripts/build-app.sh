@@ -168,7 +168,7 @@ sign_app_bundle() {
 }
 
 # developer-id 最終權威驗證(fail-closed):封印完整性 + 對「每個 executable-code 項」(aipet + 外層)斷言
-# Developer ID 權威 + Team ID + Hardened Runtime flag,再斷言無 app-sandbox / 無 cs.* 例外(A1;對已簽二進位
+# Developer ID 權威 + Team ID + Hardened Runtime flag + 安全時間戳,再斷言無 app-sandbox / 無 cs.* 例外(A1;對已簽二進位
 # dump,非對 committed 檔)。spctl 不在此驗(它是 post-staple 檢查,此時尚未公證,spctl 會正確地拒絕)。
 # 每個檢查皆顯式 return(不倚賴 set -e)。
 verify_signature() {
@@ -195,6 +195,13 @@ verify_signature() {
             || { echo "verify: $item TeamIdentifier 不符預期($want_team)" >&2; return 1; }
         grep -Eq 'flags=.*runtime' <<<"$dv" \
             || { echo "verify: $item 缺 Hardened Runtime(runtime)flag" >&2; return 1; }
+        # F1:斷言「安全時間戳」確實存在於結果簽章的 metadata。codesign -dvvv 對帶 TSA 安全時間戳的簽章印出獨立的
+        #     'Timestamp=' 行;無安全時間戳(如以 --timestamp=none 簽、或時間戳遺失)時只印 'Signed Time='(簽章者
+        #     本機時鐘,非安全)。只檢查命令列曾帶 --timestamp 並不足夠(F1 契約:驗「結果簽章」真的含安全時間戳,
+        #     非只驗旗標)。錨定行首 ^Timestamp= 以免被 'Signed Time=' 矇過。本函式只在 developer-id 模式被呼叫,故
+        #     此檢查不加諸既有 ad-hoc 開發模式。
+        grep -q '^Timestamp=' <<<"$dv" \
+            || { echo "verify: $item 缺安全時間戳(codesign -dvvv 無 'Timestamp=' 行;--timestamp=none 或 TSA 時間戳遺失)" >&2; return 1; }
     done
     # 4) 無 app-sandbox、無 cs.* 例外(A1)。entitlements dump 失敗 → fail-closed(不吞,否則錯誤會變成「看似乾淨」)。
     local ent

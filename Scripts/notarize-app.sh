@@ -72,10 +72,12 @@ validate_ticket() {
     if ! out="$(spctl -a -vvv -t exec "$app" 2>&1)"; then
         echo "notarize: spctl 拒絕(非零退出)" >&2; printf '%s\n' "$out" >&2; return 1
     fi
-    # 錨定到行首的 source= 行(spctl 把 'source=Notarized Developer ID' 印成獨立一行);不可用未錨定子字串,否則
-    # 一個路徑恰含 'source=Notarized' 的 app 在實際 source 為 'Developer ID'(非 Notarized)時會被回顯的路徑矇過。
-    grep -q '^source=Notarized' <<<"$out" \
-        || { echo "notarize: spctl source 非 Notarized" >&2; printf '%s\n' "$out" >&2; return 1; }
+    # 「精確」核對 source 行必須「恰為」source=Notarized Developer ID(整行相符,僅容許無意義的尾端空白)。不可用
+    # 前綴比對(^source=Notarized):那會放行 'source=NotarizedFake' 等任意以 Notarized 開頭的字串。也不可用未錨定
+    # 子字串:一個路徑恰含 'source=Notarized' 的 app 在實際 source 為 'Developer ID'(非 Notarized)時會被回顯的
+    # 路徑矇過。spctl 把 'source=Notarized Developer ID' 印成獨立一行,故錨定整行、容忍尾端空白即可。
+    grep -qE '^source=Notarized Developer ID[[:space:]]*$' <<<"$out" \
+        || { echo "notarize: spctl source 非 'Notarized Developer ID'(exact)" >&2; printf '%s\n' "$out" >&2; return 1; }
     return 0
 }
 

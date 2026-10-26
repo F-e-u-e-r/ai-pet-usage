@@ -50,7 +50,9 @@ cat > "$TMP/bin/codesign" <<'FAKE'
 # 旗標:FAKE_SIGN_FAIL=1 簽失敗;FAKE_VERIFY_FAIL=1 verify 失敗;FAKE_RB_NEEDS_SIGNING=1 資源 bundle 未簽前 verify 報
 # 其專屬錯誤(A2);FAKE_TEAM_ID / FAKE_AUTHORITY / FAKE_RUNTIME_FLAG(0=無 runtime)控制 -dvvv;FAKE_AIPET_TEAM /
 # FAKE_AIPET_RUNTIME 針對巢狀 aipet 覆寫(測 verify 是否對每個 executable 項都查);FAKE_ENTITLEMENTS(sandbox|cs|空)
-# 控制 entitlements 傾印。
+# 控制 entitlements 傾印(FAKE_AIPET_ENTITLEMENTS 覆寫巢狀 aipet,「設為空字串」= 明確乾淨、不繼承外層)。
+# F1:FAKE_TIMESTAMP_FLAG / FAKE_AIPET_TIMESTAMP(0=無安全時間戳)控制 -dvvv 是否印 'Timestamp='(預設忠實依實際所簽
+# 的 --timestamp);用來模擬「命令列看似正常但結果簽章無安全時間戳」(如 --timestamp=none / 時間戳遺失)。
 D="$FAKE_DIR"
 printf '%s\n' "$*" >> "$D/codesign.log"
 is_sign=0; is_verify=0; is_dumpent=0; is_display=0
@@ -89,8 +91,10 @@ if [ "$is_verify" = 1 ]; then
 fi
 if [ "$is_dumpent" = 1 ]; then
     # per-item entitlements:FAKE_AIPET_ENTITLEMENTS 覆寫巢狀 aipet(讓「把 aipet 從 entitlements 檢查迴圈移除」會被抓到)。
+    # F2:用 ${VAR-...}(無冒號)區分「未設定=繼承外層」與「設為空字串=明確乾淨」,使差動 fixture 能獨立設定兩目標
+    #     (如外層髒、aipet 乾淨),而非共用單一全域值。
     ent="${FAKE_ENTITLEMENTS:-}"
-    case "$item" in */Contents/MacOS/aipet) ent="${FAKE_AIPET_ENTITLEMENTS:-$ent}" ;; esac
+    case "$item" in */Contents/MacOS/aipet) ent="${FAKE_AIPET_ENTITLEMENTS-$ent}" ;; esac
     case "$ent" in
         sandbox) printf '<?xml version="1.0"?>\n<dict><key>com.apple.security.app-sandbox</key><true/></dict>\n' ;;
         cs)      printf '<?xml version="1.0"?>\n<dict><key>com.apple.security.cs.allow-jit</key><true/></dict>\n' ;;
@@ -113,14 +117,19 @@ if [ "$is_display" = 1 ]; then
     [ -z "$team" ] && team=TEAM123456
     # runtime flag 預設 = 「實際所簽的 --options runtime」(忠實);FAKE 覆寫以模擬二進位被竄改。
     rflag="${rrt:-0}"
+    # F1:安全時間戳旗標預設 = 「實際所簽的 --timestamp」(忠實;--timestamp=none 不會設 ts 故為 0);FAKE 覆寫以
+    #     模擬「命令列看似正常但結果簽章無安全時間戳」。
+    tsflag="${rts:-0}"
     case "$item" in
         */Contents/MacOS/aipet)
             team="${FAKE_AIPET_TEAM:-$team}"
             rflag="${FAKE_AIPET_RUNTIME:-$rflag}"
+            tsflag="${FAKE_AIPET_TIMESTAMP:-$tsflag}"
             ;;
         *)
             team="${FAKE_TEAM_ID:-$team}"
             rflag="${FAKE_RUNTIME_FLAG:-$rflag}"
+            tsflag="${FAKE_TIMESTAMP_FLAG:-$tsflag}"
             ;;
     esac
     printf 'Authority=%s\n' "$auth" >&2
@@ -129,6 +138,13 @@ if [ "$is_display" = 1 ]; then
         printf 'CodeDirectory v=20500 flags=0x10000(runtime)\n' >&2
     else
         printf 'CodeDirectory v=20500 flags=0x0(none)\n' >&2
+    fi
+    # F1:忠實模擬 codesign -dvvv 的時間戳行為——有安全(TSA)時間戳 → 'Timestamp=';無(如 --timestamp=none)→ 只有
+    #     'Signed Time='(簽章者本機時鐘,非安全)。verify_signature 錨定 ^Timestamp= 以區分兩者。
+    if [ "$tsflag" = 1 ]; then
+        printf 'Timestamp=1 Jan 2026 at 00:00:00\n' >&2
+    else
+        printf 'Signed Time=1 Jan 2026 at 00:00:00\n' >&2
     fi
     exit 0
 fi
@@ -197,7 +213,9 @@ chmod +x "$TMP/bin/xcrun"
 cat > "$TMP/bin/spctl" <<'FAKE'
 #!/bin/bash
 # fake spctl。FAKE_SPCTL_REJECT=1 直接拒絕;FAKE_SPCTL_DECEPTIVE=1 拒絕(非零)但輸出含 'accepted' 子字串 +
-# source=Notarized(測 validate_ticket 以 exit status 為權威,不被子字串矇過);否則 accepted + source=Notarized。
+# source=Notarized(測 validate_ticket 以 exit status 為權威,不被子字串矇過);FAKE_SPCTL_WRONG_SOURCE=1 exit 0 但
+# source=Developer ID;FAKE_SPCTL_PATHSPOOF=1 exit 0 但 source=Notarized 僅出現在路徑;FAKE_SPCTL_NOTARIZED_PREFIX=1
+# (F3)exit 0 但 source=NotarizedFake(以 Notarized 開頭卻非 exact);否則 accepted + source=Notarized Developer ID。
 D="$FAKE_DIR"
 printf '%s\n' "$*" >> "$D/spctl.log"
 item="${@: -1}"
@@ -219,9 +237,16 @@ if [ "${FAKE_SPCTL_WRONG_SOURCE:-0}" = 1 ]; then
 fi
 if [ "${FAKE_SPCTL_PATHSPOOF:-0}" = 1 ]; then
     # 退出 0,「被接受」行含 'source=Notarized' 子字串(模擬 app 路徑含該字串被回顯),真正的 source 行卻是 Developer ID。
-    # 未錨定的 grep 會被路徑行矇過;錨定 ^source=Notarized 只看真正的 source 行 → 正確地 RED。
+    # 未錨定的 grep 會被路徑行矇過;錨定整行(exact)只看真正的 source 行 → 正確地 RED。
     printf '/tmp/source=Notarized/App.app: accepted\n' >&2
     printf 'source=Developer ID\n' >&2
+    exit 0
+fi
+if [ "${FAKE_SPCTL_NOTARIZED_PREFIX:-0}" = 1 ]; then
+    # F3:退出 0,source 以 'Notarized' 「開頭」卻非恰為 'Notarized Developer ID'(如 NotarizedFake)。前綴比對
+    #     (^source=Notarized)會誤放行;exact 比對(^source=Notarized Developer ID$)須擋下 → 正確地 RED。
+    printf '%s: accepted\n' "$item" >&2
+    printf 'source=NotarizedFake\n' >&2
     exit 0
 fi
 printf '%s: accepted\n' "$item" >&2
@@ -351,8 +376,8 @@ d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDE
 check "case4/A2 資源 bundle 於需要時被簽一次" "$(grep -- '--sign' "$d/codesign.log" | grep -c -- '/Contents/Resources/AIPetUsage_UsageCore.bundle$')" 1
 # M8:資源簽後外層須被「重簽」(兩次外層簽),否則外層密封失效卻矇過
 check "case4/A2(M8) 外層於資源 bundle 後被重簽(兩次外層簽)" "$(grep -- '--sign' "$d/codesign.log" | grep -cE -- '/AI Pet Usage\.app$')" 2
-# M8:資源 bundle 的簽帶 --options runtime --timestamp
-check "case4/A2(M8) 資源 bundle 簽帶 --options runtime --timestamp" "$(grep -- '/Contents/Resources/AIPetUsage_UsageCore.bundle$' "$d/codesign.log" | grep -c -- '--options runtime --timestamp')" 1
+# M8:資源 bundle 的簽帶 --options runtime --timestamp(token-boundary;不把 --timestamp=none 誤算成有效)
+check "case4/A2(M8) 資源 bundle 簽帶 --options runtime --timestamp" "$(grep -- '/Contents/Resources/AIPetUsage_UsageCore.bundle$' "$d/codesign.log" | grep -Ec -- '--options runtime --timestamp( |$)')" 1
 # M8:資源 bundle 簽在「最後一次外層簽」之前(先密封內層,再重簽外層)
 rb_line="$(grep -n -- '--sign' "$d/codesign.log" | grep -- '/Contents/Resources/AIPetUsage_UsageCore.bundle$' | head -1 | cut -d: -f1)"
 outer_last="$(grep -n -- '--sign' "$d/codesign.log" | grep -E -- '/AI Pet Usage\.app$' | tail -1 | cut -d: -f1)"
@@ -368,17 +393,32 @@ check "case5 有 >=2 個 developer-id 簽(aipet+外層;避免 0==0 虛綠)" "$([
 check "case5 每個 developer-id 簽都帶 --options runtime" \
     "$(grep -c -- '--sign' "$d/codesign.log")" "$(grep -- '--sign' "$d/codesign.log" | grep -c -- '--options runtime')"
 
-# ---- case 6:secure timestamp 缺失 ----
+# ---- case 6:secure timestamp(invocation log oracle + F1 runtime 驗證)----
+# (a) invocation log oracle:每個 developer-id 簽的命令列都帶 --timestamp,以 token-boundary 匹配(不把 --timestamp=none
+#     誤算成有效)。
 d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID"
 ts_signs="$(grep -c -- '--options runtime' "$d/codesign.log")"
-ts_with="$(grep -- '--options runtime' "$d/codesign.log" | grep -c -- '--timestamp')"
+ts_with="$(grep -- '--options runtime' "$d/codesign.log" | grep -Ec -- '(^| )--timestamp( |$)')"
 # 先證 gate 會 RED:合成一個「有 runtime 簽但無 --timestamp」的 log
 printf -- '--force --options runtime --sign X /x/Contents/MacOS/aipet\n' > "$TMP/nots.log"
 ts_signs_bad="$(grep -c -- '--options runtime' "$TMP/nots.log")"
-ts_with_bad="$(grep -- '--options runtime' "$TMP/nots.log" | grep -c -- '--timestamp')"
+ts_with_bad="$(grep -- '--options runtime' "$TMP/nots.log" | grep -Ec -- '(^| )--timestamp( |$)')"
 if [ "$ts_signs_bad" != "$ts_with_bad" ]; then ok; else bad "case6 RED: timestamp gate 應抓到缺 --timestamp 的簽"; fi
 check "case6 有 >=2 個 developer-id 簽(避免 0==0 虛綠)" "$([ "$ts_signs" -ge 2 ] && echo ok)" ok
 check "case6 GREEN: 每個 developer-id 簽都帶 --timestamp" "$ts_signs" "$ts_with"
+# F1 token-boundary oracle:'--timestamp=none' 不得被當成有效 secure timestamp。合成「有 runtime 簽但用 --timestamp=none」
+# 的 log;token-boundary 匹配須把它算成 0 個 --timestamp(偵測到缺安全時間戳),而舊的未錨定子字串會誤算成 1。
+printf -- '--force --options runtime --timestamp=none --sign X /x/Contents/MacOS/aipet\n' > "$TMP/tsnone.log"
+check "case6 RED(F1 token-boundary): --timestamp=none → 算 0(非有效 secure timestamp)" "$(grep -Ec -- '(^| )--timestamp( |$)' "$TMP/tsnone.log")" 0
+check "case6(F1 對照,非虛綠): 真正的 --timestamp → 算 1" "$(printf -- '--force --options runtime --timestamp --sign X /x/aipet\n' | grep -Ec -- '(^| )--timestamp( |$)')" 1
+# (b) F1 runtime 驗證(核心契約):verify_signature 須在 codesign -dvvv 斷言「安全時間戳」確實存在(^Timestamp=),而非
+#     只看命令列曾帶旗標。即使簽名「看似」正常,若 -dvvv 顯示無安全時間戳(FAKE_TIMESTAMP_FLAG=0 模擬 --timestamp=none
+#     的結果 / 二進位時間戳遺失)→ verify 須 RED。
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_TIMESTAMP_FLAG=0; red "case6 RED(F1 runtime): 外層無安全時間戳(-dvvv 無 Timestamp=)→ verify 非零" $?
+# M2b 式:僅巢狀 aipet 無安全時間戳(外層正常)也須被抓到(verify 對每個 executable 項都查 timestamp)
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_AIPET_TIMESTAMP=0; red "case6 RED(F1 runtime,M2b): 僅 aipet 無安全時間戳 → verify 非零" $?
+# 配對 GREEN:正常簽(-dvvv 有 Timestamp=)→ verify 0(證明本 gate 非恆 RED)
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID"; green "case6 GREEN(F1 runtime): -dvvv 有安全時間戳 → verify 0" $?
 
 # ---- case 7:巢狀 CLI 簽章無效(--verify --deep --strict 失敗)→ RED ----
 d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_VERIFY_FAIL=1; red "case7 RED: --verify --deep --strict 失敗 → 非零" $?
@@ -401,6 +441,14 @@ check "case16/A1 ENTITLEMENTS 設定時才帶 --entitlements" "$([ "$(grep -- '-
 d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_AUTHORITY="Software Signing"; red "F6a RED: Authority 非 Developer ID → verify 非零" $?
 # F6b:僅 aipet 帶 app-sandbox(外層乾淨)→ verify 的 entitlements 迴圈須查 aipet → RED(證明 aipet 有被查)
 d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_AIPET_ENTITLEMENTS=sandbox; red "F6b RED: 僅 aipet 帶 app-sandbox → verify 非零" $?
+# F2(outer-App entitlement oracle 差動):僅「外層 App」帶 app-sandbox、aipet 乾淨 → verify 的 entitlements 迴圈須
+# 「獨立」查外層 → RED(與 F6b 的「僅 aipet 髒」互補,證明外層 App 被獨立檢查)。兩目標以獨立 FAKE 值設定,非共用
+# 單一全域值(FAKE_AIPET_ENTITLEMENTS= 空字串 = aipet 明確乾淨、不繼承外層)。移除 verify 迴圈中的外層 $app 項會使本案虛綠。
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_ENTITLEMENTS=sandbox FAKE_AIPET_ENTITLEMENTS=; red "F2 RED: 僅外層 App 帶 app-sandbox(aipet 乾淨)→ verify 非零" $?
+# cs.* 變體(外層髒、aipet 乾淨)
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_ENTITLEMENTS=cs FAKE_AIPET_ENTITLEMENTS=; red "F2 RED: 僅外層 App 帶 cs.* 例外(aipet 乾淨)→ verify 非零" $?
+# 配對 GREEN:兩者皆乾淨、且「獨立設定」(非共用單一全域值)→ verify 0
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_ENTITLEMENTS= FAKE_AIPET_ENTITLEMENTS=; green "F2 GREEN: 外層與 aipet entitlements 皆乾淨(獨立設定)→ 0" $?
 # F6c:STRICT_SIGN=1 的 adhoc 路徑確有 --verify --deep --strict 把關(verify 失敗即 RED)
 d="$(new_state)"; drive_sign "$d" "$APP" STRICT_SIGN=1 FAKE_VERIFY_FAIL=1; red "F6c RED: STRICT_SIGN=1 + verify 失敗 → 非零" $?
 # F6d:未知 SIGN_MODE 走到 sign_app_bundle(非僅 validate)也 fail-closed
@@ -579,9 +627,12 @@ d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"' FAKE_SPCTL_RE
 d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"' FAKE_SPCTL_DECEPTIVE=1; red "case11 RED(M6): spctl 詐騙輸出(exit 3)仍被 exit-status 擋下" $?
 # M6b:spctl exit 0 但 source 非 Notarized → RED(證明 source 檢查非虛綠)
 d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"' FAKE_SPCTL_WRONG_SOURCE=1; red "case11 RED(M6b): spctl exit 0 但 source 非 Notarized → RED" $?
-# M6c:exit 0 且輸出含 'source=Notarized' 子字串於「被接受」行,但真 source 行是 Developer ID → 錨定 ^ 須擋下
-d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"' FAKE_SPCTL_PATHSPOOF=1; red "case11 RED(M6c): 路徑含 source=Notarized 子字串但真 source 非 Notarized → 錨定擋下" $?
-d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"'; green "case11 GREEN: validate + spctl accepted(source=Notarized)→ 0" $?
+# M6c:exit 0 且輸出含 'source=Notarized' 子字串於「被接受」行,但真 source 行是 Developer ID → exact 匹配須擋下
+d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"' FAKE_SPCTL_PATHSPOOF=1; red "case11 RED(M6c): 路徑含 source=Notarized 子字串但真 source 非 Notarized → exact 匹配擋下" $?
+# F3:exact source —— spctl exit 0 但 source 以 'Notarized' 開頭卻非恰為 'Notarized Developer ID'(NotarizedFake)→
+# 前綴比對(^source=Notarized)會虛綠;exact 比對(^source=Notarized Developer ID$)須 RED。
+d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"' FAKE_SPCTL_NOTARIZED_PREFIX=1; red "case11 RED(F3): source=NotarizedFake(非 exact)→ 須 RED" $?
+d="$(new_state)"; drive_notarize "$d" 'validate_ticket "'"$APP"'"'; green "case11 GREEN: validate + spctl accepted(source=Notarized Developer ID,exact)→ 0" $?
 
 # ---- case 14:A3 硬性 publish gate ── 任一不良狀態 → gate 擋下,gh release create 從未被呼叫 ----
 gated() { # <state> <mode> <signmode> <notary> <staple> <spctl>:模擬 release workflow 的 gated publish
