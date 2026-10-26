@@ -38,7 +38,7 @@ jobs:
   build-and-release:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Resolve canonical release version (fails before any build or publish)
         env:
@@ -124,7 +124,7 @@ jobs:
           shasum -a 256 "${ZIP_NAME}"
 
       - name: Upload artifact (always; the only output for workflow_dispatch)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: dist/${{ env.ZIP_NAME }}
