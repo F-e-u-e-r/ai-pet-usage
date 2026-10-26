@@ -32,6 +32,11 @@ RELEASE_TAG="${RELEASE_TAG:-}"
 SIGN_MODE="${SIGN_MODE:-adhoc}"
 DEVELOPER_ID_IDENTITY="${DEVELOPER_ID_IDENTITY:-}"
 ENTITLEMENTS="${ENTITLEMENTS:-}"
+# EXPECTED_TEAM_ID(Gate 1 / PR-C1A):developer-id 模式的「獨立」信任 Team ID 輸入。刻意「不」只從 DEVELOPER_ID_IDENTITY
+# 衍生 —— 衍生值(_expected_team_id)只能證明身分字串「自我一致」,擋不住「攻擊者換上另一個自我一致的身分(自己的
+# Team)」這類循環信任。故 verify 以此獨立值為信任根,比對實際簽出的 TeamIdentifier;衍生值降為一致性交叉檢查。
+# 非機密信任設定(可記錄);形狀 = 10 碼英數(Apple Team ID)。
+EXPECTED_TEAM_ID="${EXPECTED_TEAM_ID:-}"
 
 # ----------------------------------------------------------------------------------------------------------------
 # 簽名區塊抽成函式,讓 Scripts/test-signing-pipeline.sh 能以 fake 工具(codesign/security…)離線驅動(與
@@ -65,6 +70,26 @@ validate_signing_env() {
             # 「前」就檢查(而非等 verify 才失敗),省一次無謂建置;與 verify 的 Team ID 斷言保持一致。
             if [ -z "$(_expected_team_id)" ]; then
                 echo "build-app: DEVELOPER_ID_IDENTITY 缺可解析的 (TEAMID)(須為 'Name (TEAMID)' 形式):'$DEVELOPER_ID_IDENTITY'" >&2
+                return 1
+            fi
+            # Gate 1:EXPECTED_TEAM_ID 為「獨立」信任輸入(developer-id 模式 mandatory)。須為 10 碼英數的 Team-ID 形狀,
+            # 且必須與身分衍生的 Team 一致 —— 這是 pre-sign 一致性閘:攻擊者即便換上「另一個自我一致」的身分(其 (TEAMID)
+            # 與憑證相符),只要該 Team 不等於獨立設定的 EXPECTED_TEAM_ID,就在 Swift build / 簽名 / 公證 / 發佈「之前」被擋。
+            if [ -z "$EXPECTED_TEAM_ID" ]; then
+                echo "build-app: SIGN_MODE=developer-id 需要 EXPECTED_TEAM_ID(獨立信任 Team ID,未設定)— 中止,不產出 bundle" >&2
+                return 1
+            fi
+            case "$EXPECTED_TEAM_ID" in
+                *[!A-Za-z0-9]*) echo "build-app: EXPECTED_TEAM_ID 形狀不符(須全為英數):'$EXPECTED_TEAM_ID'" >&2; return 1 ;;
+            esac
+            if [ "${#EXPECTED_TEAM_ID}" -ne 10 ]; then
+                echo "build-app: EXPECTED_TEAM_ID 須為 10 碼(Apple Team ID 形狀):'$EXPECTED_TEAM_ID'" >&2
+                return 1
+            fi
+            local _derived_team
+            _derived_team="$(_expected_team_id)"
+            if [ "$_derived_team" != "$EXPECTED_TEAM_ID" ]; then
+                echo "build-app: 身分衍生的 Team($_derived_team)≠ EXPECTED_TEAM_ID($EXPECTED_TEAM_ID)— fail-closed(不接受自我一致但非預期團隊的身分)" >&2
                 return 1
             fi
             local _idout _rc _line _name _matches=0
@@ -175,14 +200,26 @@ verify_signature() {
     local app="$1"
     # 1) 封印完整性(遞迴);也是 A2 的仲裁者。
     codesign --verify --deep --strict "$app" || { echo "verify: --verify --deep --strict 失敗" >&2; return 1; }
-    # 2) 預期 Team ID 必須可從身分推導(developer-id 的 canonical 形式 "Name (TEAMID)")。推不出(例如給 SHA-1
-    #    hash 形式的身分選擇器)→ fail-closed:否則 team 斷言會被靜默跳過,錯誤團隊的簽章可能矇混過關。
-    local want_team
-    want_team="$(_expected_team_id)"
-    if [ -z "$want_team" ]; then
-        echo "verify: 無法從 DEVELOPER_ID_IDENTITY 推導預期 Team ID — 請用完整 'Name (TEAMID)' 形式" >&2
+    # 2) Team ID 信任根(Gate 1):以「獨立」的 EXPECTED_TEAM_ID 為權威,比對實際簽出的 TeamIdentifier。身分衍生的
+    #    Team(_expected_team_id)降為一致性交叉檢查 —— 單靠衍生值只證明身分「自我一致」,擋不住「換上另一個自我一致
+    #    身分」。三者皆須成立,否則 fail-closed:(a) EXPECTED_TEAM_ID 必填;(b) 身分可推導出 Team;(c) 衍生 Team 與
+    #    EXPECTED_TEAM_ID 一致。最終(步驟 3)以 EXPECTED_TEAM_ID 比對已簽二進位實際回報的 TeamIdentifier。
+    local want_team derived_team
+    if [ -z "$EXPECTED_TEAM_ID" ]; then
+        echo "verify: developer-id 需要 EXPECTED_TEAM_ID(獨立信任 Team ID)— 缺則 fail-closed" >&2
         return 1
     fi
+    derived_team="$(_expected_team_id)"
+    if [ -z "$derived_team" ]; then
+        echo "verify: 無法從 DEVELOPER_ID_IDENTITY 推導 Team ID — 請用完整 'Name (TEAMID)' 形式" >&2
+        return 1
+    fi
+    if [ "$derived_team" != "$EXPECTED_TEAM_ID" ]; then
+        echo "verify: 身分衍生的 Team($derived_team)≠ EXPECTED_TEAM_ID($EXPECTED_TEAM_ID)— fail-closed" >&2
+        return 1
+    fi
+    # 信任根 = 獨立的 EXPECTED_TEAM_ID(非身分衍生值)。移除此獨立比對 → 自我一致的錯誤團隊簽章會矇過(見 team-id 鑑別性測試)。
+    want_team="$EXPECTED_TEAM_ID"
     # 3) 對「每個 executable-code 項」(aipet + 外層)斷言:leaf Authority「精確」等於所請求的身分名稱(非只
     #    'Developer ID Application' 前綴 —— 否則同團隊的另一張 Developer ID 憑證也會通過)、TeamIdentifier 相符、
     #    Hardened Runtime flag 存在。以 herestring 餵 grep(非 printf | grep -q 管線)避免 pipefail + SIGPIPE 誤拒。
