@@ -6,10 +6,12 @@
 #    不發佈任何東西(本檔內「沒有」gh / publish 呼叫)。把這段邏輯接進 release workflow、提供真實憑證、以及真正的
 #    publish gate,都是 PR-C 的事(在另行核准的 fail-closed 遷移契約下)。
 #
-# 憑證(PR-C 由 release workflow 以 $RUNNER_TEMP 下的檔案提供;PR-B harness 用 fake):
-#   NOTARY_KEY_PATH   App Store Connect API key(.p8)的「檔案路徑」(永不以 inline 值傳遞)
-#   NOTARY_KEY_ID     Key ID
-#   NOTARY_ISSUER_ID  Issuer ID
+# 憑證介面(PR-C2 由 release workflow 以 $RUNNER_TEMP 下的檔案提供;PR-B/C1A harness 用 fake):
+#   NOTARY_KEY_PATH   App Store Connect API key(.p8)的「檔案路徑」(SECRET 檔;永不以 inline 值傳遞)
+#   NOTARY_KEY_ID     Key ID(非機密信任設定)
+#   NOTARY_ISSUER_ID  Issuer ID(非機密信任設定)
+# ⚠️ 未來 live 憑證「必須」是「Team」App Store Connect API key —— Apple 明載 Individual key「不可」用於 notarytool
+#    (notaryTool requires a team-scoped key)。本腳本不建立、不描述、不內嵌任何真實 key;key 由 PR-C2 以 secret 提供。
 # 秘密衛生(CI-CREDENTIAL-SECURITY):不得 set -x;不得 echo/cat 任何憑證;notarytool log 與 A4 驗證紀錄皆非秘密,可印。
 set -euo pipefail
 
@@ -17,10 +19,29 @@ NOTARY_KEY_PATH="${NOTARY_KEY_PATH:-}"
 NOTARY_KEY_ID="${NOTARY_KEY_ID:-}"
 NOTARY_ISSUER_ID="${NOTARY_ISSUER_ID:-}"
 
+# Gate 5(PR-C1A):公證環境 fail-closed preflight。三個必要值任一缺失,或 NOTARY_KEY_PATH 不是「存在、一般檔、非空、
+# 可讀」的 key 檔,即在「提交(xcrun notarytool submit)之前」非零退出 —— 避免以殘缺憑證打到 Apple(真實環境)或讓 fake
+# 提交被誤認成功(測試環境)。目錄、空檔(例如空 secret 被寫成空 .p8)、不可讀檔都不是 key material(F-C)。只檢查檔案
+# 形態,不解析 / 不驗證 .p8 內容(那是 Apple 端的事)。永不印任何值或路徑。
+# 顯式 `|| return`(不倚賴 set -e):本函式可能在 `if …` 等停用 errexit 的語境被呼叫。
+require_notary_env() {
+    local missing=0
+    [ -n "$NOTARY_KEY_PATH" ]  || { echo "notarize: 缺 NOTARY_KEY_PATH(ASC API key .p8 檔路徑)" >&2; missing=1; }
+    [ -n "$NOTARY_KEY_ID" ]    || { echo "notarize: 缺 NOTARY_KEY_ID" >&2; missing=1; }
+    [ -n "$NOTARY_ISSUER_ID" ] || { echo "notarize: 缺 NOTARY_ISSUER_ID" >&2; missing=1; }
+    [ "$missing" -eq 0 ] || return 1
+    if [ ! -f "$NOTARY_KEY_PATH" ] || [ ! -s "$NOTARY_KEY_PATH" ] || [ ! -r "$NOTARY_KEY_PATH" ]; then
+        echo "notarize: NOTARY_KEY_PATH 須指向存在、一般檔、非空且可讀的 key 檔(不存在 / 目錄 / 空檔 / 不可讀 皆拒絕)" >&2
+        return 1
+    fi
+    return 0
+}
+
 # step 7:提交公證並等待終態。印出 notarytool 的 JSON(供 check_status 解析);submit/auth 失敗即非零。
-# key 以「檔案路徑」傳遞(不是 inline 值),且不出現在 process listing 的可見位置以外。
+# key 以「檔案路徑」傳遞(不是 inline 值),且不出現在 process listing 的可見位置以外。提交前先跑 require_notary_env。
 notarize_submit_wait() {
     local submit_zip="$1"
+    require_notary_env || return 1
     xcrun notarytool submit "$submit_zip" \
         --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
         --wait --output-format json

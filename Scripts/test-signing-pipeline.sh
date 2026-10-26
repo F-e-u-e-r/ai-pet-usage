@@ -293,6 +293,9 @@ new_state() {
 }
 
 # 驅動 build-app.sh 的 validate_signing_env。$1=state ; $2… = VAR=val。rc=子行程退出碼。
+# PR-C1A:developer-id 的 EXPECTED_TEAM_ID 預設由本檔稍後的全域 `export EXPECTED_TEAM_ID=TEAM123456` 提供(= DEVID
+# 衍生值),使既有 developer-id 案在新 mandatory 契約下續綠;要測 mandatory/mismatch 的案在 "$@" 傳 EXPECTED_TEAM_ID=…
+# (env 的 assignment 覆寫繼承的環境值)。
 drive_validate() {
     local d="$1"; shift
     ( cd "$ROOT" && env "$@" FAKE_DIR="$d" PATH="$TMP/bin:$PATH" \
@@ -306,13 +309,20 @@ drive_sign() {
         _ "$BUILD" "$bundle" ) >"$d/out" 2>&1
 }
 # 驅動 notarize-app.sh:source 後 eval 一段 snippet。$1=state $2=snippet ; $3… = VAR=val。
+# PR-C1A:NOTARY_* 預設置於 "$@" 前(供 require_notary_env 缺值測試以 "$@" 覆寫成空值);建立「非空、明顯非真實 .p8」的
+# fake key 檔,讓 preflight 的 key material 檢查(存在、一般檔、非空、可讀)通過。
 drive_notarize() {
     local d="$1" snippet="$2"; shift 2
-    ( cd "$ROOT" && env "$@" FAKE_DIR="$d" PATH="$TMP/bin:$PATH" NOTARY_KEY_PATH="$d/key.p8" NOTARY_KEY_ID=KID NOTARY_ISSUER_ID=ISS \
+    printf 'FAKE-NOTARY-KEY-NOT-A-REAL-P8\n' > "$d/key.p8"
+    ( cd "$ROOT" && env NOTARY_KEY_PATH="$d/key.p8" NOTARY_KEY_ID=KID NOTARY_ISSUER_ID=ISS "$@" FAKE_DIR="$d" PATH="$TMP/bin:$PATH" \
         bash -c 'source "$1"; eval "$2"' _ "$NOTARIZE" "$snippet" ) >"$d/out" 2>&1
 }
 
 DEVID='Developer ID Application: AI Pet Usage Test (TEAM123456)'
+# PR-C1A:developer-id 現要求獨立的 EXPECTED_TEAM_ID(mandatory)。全域預設 = DEVID 衍生的 TEAM123456,使既有 developer-id
+# 案續綠且順帶行使「實際 TeamIdentifier vs EXPECTED_TEAM_ID」的獨立比對;export 讓所有 `env …` 子程序繼承,個別案可於
+# "$@" 以 EXPECTED_TEAM_ID=… 覆寫(含設為空字串測 mandatory)。adhoc 路徑忽略此值。
+export EXPECTED_TEAM_ID=TEAM123456
 
 # ================================================================ build-app.sh 簽名路徑(case 1–7, 15, 16)
 
@@ -706,6 +716,65 @@ if command -v ruby >/dev/null 2>&1; then
 else
     printf 'SKIP: ruby 不可用 — 跳過 YAML parse 檢查\n'
 fi
+
+# ================================================================ PR-C1A:獨立信任輸入(EXPECTED_TEAM_ID)+ 公證環境 preflight
+# 新增於既有 signing-pipeline 套件(Gate 8:不另建 workflow machinery;隨 required swift-tests 一起跑)。
+
+# ---- Gate 1:EXPECTED_TEAM_ID 獨立信任根(修正 PR-B 的循環信任)----
+EVID='Developer ID Application: Evil Co (EVILTEAM02)'   # 自我一致但「別團隊」的身分(derived=EVILTEAM02)
+# TI-1 mandatory:developer-id 缺 EXPECTED_TEAM_ID → validate RED(簽名前)
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID=""; red "TI-1 RED: developer-id 缺 EXPECTED_TEAM_ID → validate 非零(簽名前)" $?
+# TI-2 shape:非 10 碼 / 含非英數 → validate RED
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID=SHORT; red "TI-2 RED: EXPECTED_TEAM_ID 非 10 碼 → validate 非零" $?
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID='TEAM!23456'; red "TI-2 RED: EXPECTED_TEAM_ID 含非英數 → validate 非零" $?
+# 上兩案的 EXPECTED 也 ≠ 衍生值,故即使形狀閘被移除仍會被一致性比對擋下(遮蔽)。此案讓身分衍生 == EXPECTED == 非 10 碼
+# (ABC12),只有 10 碼形狀閘能擋 —— 移除長度檢查即 RED 轉綠。
+SHORTID='Developer ID Application: Short Co (ABC12)'
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$SHORTID" FAKE_IDENTITY_STRING="$SHORTID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID=ABC12; red "TI-2 RED: 自我一致但非 10 碼的 Team(衍生=EXPECTED=ABC12)→ validate 非零(形狀閘獨立把關)" $?
+# TI-3 differential:=T1(=身分衍生)→ proceed;=T2(≠衍生)→ 簽名前 fail-closed
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID=TEAM123456; green "TI-3 GREEN: EXPECTED_TEAM_ID=T1 → validate 0(可進行)" $?
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID=WRONG99999; red "TI-3 RED: EXPECTED_TEAM_ID=T2 → 簽名前 fail-closed" $?
+# TI-4 self-consistency bypass(check #5):別團隊的自我一致身分 + EXPECTED=T1 → RED(validate 與 verify 兩層)
+d="$(new_state)"; drive_validate "$d" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$EVID" FAKE_IDENTITY_STRING="$EVID" FAKE_IDENTITY_PRESENT=1 EXPECTED_TEAM_ID=TEAM123456; red "TI-4a RED: 別團隊自我一致身分 + EXPECTED=T1 → validate 非零" $?
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$EVID" FAKE_IDENTITY_STRING="$EVID" EXPECTED_TEAM_ID=TEAM123456; red "TI-4b RED: verify 以 EXPECTED 比對實際簽出 team(EVILTEAM02≠T1)→ 非零" $?
+# TI-5 final verify ACTUAL vs EXPECTED(check #4):身分衍生=T1、EXPECTED=T1,但實際簽出=第三團隊 → verify RED
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" EXPECTED_TEAM_ID=TEAM123456 FAKE_TEAM_ID=WRONG99999; red "TI-5 RED: 實際 TeamIdentifier(WRONG99999)≠ EXPECTED_TEAM_ID(T1)→ verify 非零" $?
+# TI-6 GREEN:EXPECTED=身分=實際=T1 → sign+verify 0(證明非恆 RED)
+d="$(new_state)"; drive_sign "$d" "$APP" SIGN_MODE=developer-id DEVELOPER_ID_IDENTITY="$DEVID" EXPECTED_TEAM_ID=TEAM123456 FAKE_TEAM_ID=TEAM123456; green "TI-6 GREEN: EXPECTED=身分=實際=T1 → verify 0" $?
+# TI-7 靜態:verify 的 team 信任根綁定 EXPECTED_TEAM_ID(非舊的衍生 want_team 循環寫法)
+check "TI-7 靜態: verify 以 EXPECTED_TEAM_ID 為 team 信任根" "$(grep -cF 'want_team="$EXPECTED_TEAM_ID"' "$BUILD")" 1
+
+# ---- Gate 5:notary 環境 fail-closed preflight(require_notary_env)----
+# 行為矩陣(含 F-C):每一種殘缺輸入 —— 三值任一缺失、key 路徑不存在 / 是目錄 / 是空檔 / 不可讀 —— 都須 (1) preflight
+# 非零、(2) main 非零、(3) notarytool submit 呼叫數 = 0(在提交前擋下,無任何 Apple 呼叫)。只斷言行為,不綁定實作的
+# 運算式寫法。fixture 一律是明顯的假 key 材料(非真實 .p8)。
+NEFX="$TMP/ne-fixtures"; mkdir -p "$NEFX/keydir"
+: > "$NEFX/empty.p8"
+printf 'FAKE-NOTARY-KEY-NOT-A-REAL-P8\n' > "$NEFX/unreadable.p8"; chmod 000 "$NEFX/unreadable.p8"
+# 在 $() 內捕捉 grep -c(0 匹配時 exit 1 但值仍為 "0";log 不存在 → 空 → 0),不用會印出雙 "0" 的 `|| echo 0` 寫法。
+xcrun_submit_count() { local n; n="$(grep -c 'notarytool submit' "$1/xcrun.log" 2>/dev/null)"; echo "${n:-0}"; }
+NE_CASES=("缺 NOTARY_KEY_PATH|NOTARY_KEY_PATH=" "缺 NOTARY_KEY_ID|NOTARY_KEY_ID=" "缺 NOTARY_ISSUER_ID|NOTARY_ISSUER_ID=" \
+    "key 路徑不存在|NOTARY_KEY_PATH=$NEFX/missing.p8" "key 路徑是目錄|NOTARY_KEY_PATH=$NEFX/keydir" "key 是空檔|NOTARY_KEY_PATH=$NEFX/empty.p8")
+# 不可讀檔:僅在可決定性測試的環境納入(0000 檔對目前使用者確實不可讀;root 例外),否則印 SKIP。
+if [ -r "$NEFX/unreadable.p8" ]; then
+    printf 'SKIP: 0000 權限檔對目前使用者仍可讀(可能為 root)— 跳過「key 檔不可讀」案\n'
+else
+    NE_CASES+=("key 檔不可讀|NOTARY_KEY_PATH=$NEFX/unreadable.p8")
+fi
+for ne_case in "${NE_CASES[@]}"; do
+    ne_name="${ne_case%%|*}"; ne_inj="${ne_case#*|}"
+    d="$(new_state)"; drive_notarize "$d" 'require_notary_env' "$ne_inj"; red "NE RED: $ne_name → preflight 非零" $?
+    d="$(new_state)"; drive_notarize "$d" 'main "'"$APP"'" "'"$d"'/submit.zip"' "$ne_inj"; red "NE RED: $ne_name → main 非零(提交前)" $?
+    check "NE: $ne_name 時 notarytool submit 呼叫數 = 0" "$(xcrun_submit_count "$d")" 0
+done
+# 配對 GREEN:三值齊備 + 非空、可讀的一般 fake key 檔 → preflight 0、main 走完、submit 恰 1 次(證明矩陣非恆 RED)
+d="$(new_state)"; drive_notarize "$d" 'require_notary_env'; green "NE GREEN: 三值齊備 + 非空可讀 fake key 檔 → preflight 0" $?
+d="$(new_state)"; drive_notarize "$d" 'main "'"$APP"'" "'"$d"'/submit.zip"'; green "NE GREEN: 有效 fake 憑證 → main 0" $?
+check "NE GREEN: notarytool submit 恰呼叫 1 次" "$(xcrun_submit_count "$d")" 1
+
+# ---- Gate 7:PR-C1A 範圍守則(release-app.yml 仍未接線 EXPECTED_TEAM_ID / 公證憑證介面 = PR-C2)----
+check "scope: release-app.yml 尚無 EXPECTED_TEAM_ID(PR-C2)" "$(grep -cF 'EXPECTED_TEAM_ID' "$WF")" 0
+check "scope: release-app.yml 尚無 NOTARY_* 公證憑證介面(PR-C2)" "$(grep -cF 'NOTARY_' "$WF")" 0
 
 # ---------------------------------------------------------------- summary
 total=$((pass + fail))
