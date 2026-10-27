@@ -24,6 +24,9 @@ on:
       - 'Scripts/build-app.sh'
       - 'Scripts/notarize-app.sh'
       - 'Scripts/test-signing-pipeline.sh'
+      # K1-NATIVE:thin shell adapter + 原生 context 工具(k1ctx)及其單元測試(由 test-signing-pipeline.sh 建置並執行)。
+      - 'Scripts/keychain-bootstrap.sh'
+      - 'Scripts/k1-native/**'
 
 jobs:
   tests:
