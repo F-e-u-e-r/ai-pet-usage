@@ -315,25 +315,24 @@
     "providerId": "antigravity",
     "modelId": "gemma-3-4b-it",
     "displayName": "Gemma 3 4B",
-    "inputPerMillion": 0.04,
-    "outputPerMillion": 0.05,
+    "inputPerMillion": 0.05,
+    "outputPerMillion": 0.1,
     "currency": "USD",
-    "effectiveFrom": "2026-10-20",
-    "source": "openrouter.ai/api/v1/models (generated 2026-10-20)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.02
+    "effectiveFrom": "2026-10-28",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-28)",
+    "userOverride": false
   },
   {
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.0675,
-    "outputPerMillion": 0.225,
+    "inputPerMillion": 0.09,
+    "outputPerMillion": 0.3,
     "currency": "USD",
-    "effectiveFrom": "2026-10-24",
-    "source": "openrouter.ai/api/v1/models (generated 2026-10-24)",
+    "effectiveFrom": "2026-10-28",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-28)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.0375
+    "cacheReadPerMillion": 0.05
   },
   {
     "providerId": "antigravity",
@@ -631,10 +630,10 @@
     "inputPerMillion": 0.1,
     "outputPerMillion": 0.4,
     "currency": "USD",
-    "effectiveFrom": "2026-08-31",
-    "source": "openrouter.ai/api/v1/models (generated 2026-08-31)",
+    "effectiveFrom": "2026-10-26",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-26)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.025
+    "cacheReadPerMillion": 0.03
   },
   {
     "providerId": "codex",
@@ -1148,6 +1147,32 @@
     "userOverride": false,
     "cacheReadPerMillion": 0.1,
     "cacheWrite5mPerMillion": 2.5
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6.1-terra",
+    "displayName": "GPT-6.1 Terra",
+    "inputPerMillion": 1.0,
+    "outputPerMillion": 5.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-10-27",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-27)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.05,
+    "cacheWrite5mPerMillion": 1.25
+  },
+  {
+    "providerId": "codex",
+    "modelId": "gpt-6.1-terra-pro",
+    "displayName": "GPT-6.1 Terra Pro",
+    "inputPerMillion": 1.0,
+    "outputPerMillion": 5.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-10-27",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-27)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.05,
+    "cacheWrite5mPerMillion": 1.25
   },
   {
     "providerId": "codex",
