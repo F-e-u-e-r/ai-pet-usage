@@ -4,9 +4,11 @@
 #
 # 簽名模式 SIGN_MODE(新的顯式軸,與 BUILD_CHANNEL / 版號不變式正交):
 #   adhoc(預設)   本機 / source 建置;行為與歷來完全相同(STRICT_SIGN=1 仍受支援)。不觸發任何信任發行意涵。
-#   developer-id   公開發行用:Developer ID + Hardened Runtime + secure timestamp,fail-closed。需 DEVELOPER_ID_IDENTITY;
-#                  身分缺失/不可解析即在 Swift build 前非零退出、不產出 bundle、永不回退 ad-hoc。本腳本只「簽」——
-#                  不公證、不 staple、不發佈(那是 release workflow 與 notarize-app.sh 的事)。
+#   developer-id   公開發行用:Developer ID + Hardened Runtime + secure timestamp,fail-closed。需 DEVELOPER_ID_IDENTITY、
+#                  EXPECTED_TEAM_ID、DEVELOPER_ID_KEYCHAIN(顯式簽名 keychain;無隱式 fallback)與
+#                  EXPECTED_DEVELOPER_ID_CERT_SHA256(K1);身分缺失/不可解析即在 Swift build 前非零退出、不產出 bundle、
+#                  永不回退 ad-hoc。本腳本只「簽」—— 不公證、不 staple、不發佈(那是 release workflow 與 notarize-app.sh
+#                  的事);臨時 keychain 的建立 / 清理在 Scripts/keychain-bootstrap.sh(PR-C2 才接線)。
 # 設計依據:PR-B 契約 + SIGNING-ARCHITECTURE。A1:預設不帶 --entitlements(本 app 非 sandbox、目前行為調查無任何
 # Hardened Runtime 例外),僅在 ENTITLEMENTS 經實證必要時才帶。A2:資源 bundle 是否需自己的簽名由 --verify 仲裁。
 #
@@ -37,6 +39,20 @@ ENTITLEMENTS="${ENTITLEMENTS:-}"
 # Team)」這類循環信任。故 verify 以此獨立值為信任根,比對實際簽出的 TeamIdentifier;衍生值降為一致性交叉檢查。
 # 非機密信任設定(可記錄);形狀 = 10 碼英數(Apple Team ID)。
 EXPECTED_TEAM_ID="${EXPECTED_TEAM_ID:-}"
+# DEVELOPER_ID_KEYCHAIN(K5):developer-id 模式「必填」的顯式簽名 keychain 檔(絕對正規路徑、一般檔、非 symlink —— 物件形狀由
+# kc_identity_preflight 經 k1ctx check-keychain-path 判定,shell 不做 metadata 檢視;developer-id 模式因此也需要 K1CTX_BIN
+# 指向以 Scripts/k1-native/build.sh 建置的 k1ctx)。沒有任何
+# 隱式 fallback —— 身分 preflight 與每個 Developer-ID codesign 都只在這個檔裡找簽名身分,絕不退回 user 的 keychain
+# search list / default keychain。可以是 K1 臨時 keychain(Scripts/keychain-bootstrap.sh 的 <context>/signing.keychain-db),
+# 或本機非發行用途時「顯式」指定的 login / file keychain;未來 PR-C2 的信任發行必須是「本次 run」的 K1 臨時 keychain
+# (由 PR-C2 接線保證,本腳本無從證明)。注意 man codesign(SIGNING IDENTITIES):簽名身分所在的 keychain 也必須在 user 的
+# keychain search list 上 —— K1 臨時 keychain 由 Apple create-keychain 的副作用加入(LIVE-REHEARSAL 驗證);本腳本不改
+# search list。
+DEVELOPER_ID_KEYCHAIN="${DEVELOPER_ID_KEYCHAIN:-}"
+# EXPECTED_DEVELOPER_ID_CERT_SHA256(K6):developer-id 模式「必填」的獨立 leaf 憑證 SHA-256 信任輸入(非機密)。形狀 =
+# 恰 64 個十六進位字元,比較前正規化為小寫(kc_normalize_sha256);前綴、冒號、空白、截短值、SHA-1 一律拒絕。它只「釘選」
+# 預期的 leaf 憑證,不取代憑證鏈 / 信任驗證(--verify --deep --strict、公證、Gatekeeper)。
+EXPECTED_DEVELOPER_ID_CERT_SHA256="${EXPECTED_DEVELOPER_ID_CERT_SHA256:-}"
 
 # ----------------------------------------------------------------------------------------------------------------
 # 簽名區塊抽成函式,讓 Scripts/test-signing-pipeline.sh 能以 fake 工具(codesign/security…)離線驅動(與
@@ -44,8 +60,8 @@ EXPECTED_TEAM_ID="${EXPECTED_TEAM_ID:-}"
 # 不執行建置(harness 用);被直接執行時照常跑完整建置。
 # ----------------------------------------------------------------------------------------------------------------
 
-# developer-id 模式:驗證簽名身分存在且可被 codesign 解析;缺失/不可解析即 fail-closed(呼叫端須在 Swift build
-# 前呼叫,見 main)。adhoc 模式:no-op(本機 ad-hoc 不需任何身分)。未知模式:拒絕。
+# developer-id 模式:驗證簽名身分存在於「顯式」DEVELOPER_ID_KEYCHAIN 且符合 K7 綁定;缺失/不可解析/不符即 fail-closed
+# (呼叫端須在 Swift build 前呼叫,見 main)。adhoc 模式:no-op(本機 ad-hoc 不需任何身分)。未知模式:拒絕。
 validate_signing_env() {
     case "$SIGN_MODE" in
         adhoc) return 0 ;;
@@ -54,12 +70,12 @@ validate_signing_env() {
                 echo "build-app: SIGN_MODE=developer-id 需要 DEVELOPER_ID_IDENTITY(未設定)— 中止,不產出 bundle" >&2
                 return 1
             fi
-            # 身分必須「精確」等於 find-identity 某一「編號身分列」(  N) <40-hex> "NAME")引號內的完整 NAME。
-            # 刻意只接受完整名稱形式、不接受裸 hash:verify 需從 "Name (TEAMID)" 推導預期 Team ID,若接受 hash 會造成
-            # preflight 通過但 verify 必敗的不一致(release workflow 本就用完整名稱)。子字串比對會 fail-open
-            # ('valid'/'found' 撞摘要行、'1)' 撞行首),故逐列、以參數展開精確比對 NAME,不經 grep -q 管線
-            # (避免 pipefail + SIGPIPE 在大型 keychain 誤拒)。並「顯式檢查 security 退出碼」:在 `|| ` 語境 set -e
-            # 會被停用,security 部分失敗(如某 keychain 損壞)卻印出一列匹配時不可誤判通過 → fail-closed。
+            # 身分必須是完整名稱 'Developer ID Application: Name (TEAMID)'(不接受裸 hash):verify 需從中推導預期
+            # Team ID,若接受 hash 會造成 preflight 通過但 verify 必敗的不一致(release workflow 本就用完整名稱)。
+            # find-identity 編號身分列(  N) <40-hex> "NAME")的「精確」名稱比對(非子字串:'valid'/'found' 不會撞摘要行、
+            # '1)' 不會撞行首)、恰好一個、顯式檢查 security 退出碼(部分失敗卻印出匹配列時不可誤判通過)—— 這些規則現由
+            # kc_identity_preflight(Scripts/keychain-bootstrap.sh,與 kc_bootstrap 共用同一實作)只對顯式 keychain 執行,
+            # 見下方 K7。
             # 類別:信任發行「只」接受 'Developer ID Application: …' 憑證 —— Apple Development / Mac Developer 等雖也通過
             # -p codesigning,但不可公證/發行;若不檢查,verify 會拿同一個(錯類別的)字串比對自己而放行。
             case "$DEVELOPER_ID_IDENTITY" in
@@ -92,31 +108,21 @@ validate_signing_env() {
                 echo "build-app: 身分衍生的 Team($_derived_team)≠ EXPECTED_TEAM_ID($EXPECTED_TEAM_ID)— fail-closed(不接受自我一致但非預期團隊的身分)" >&2
                 return 1
             fi
-            local _idout _rc _line _name _matches=0
-            _idout="$(security find-identity -v -p codesigning 2>/dev/null)"; _rc=$?
-            if [ "$_rc" -ne 0 ]; then
-                echo "build-app: security find-identity 失敗(exit $_rc)— fail-closed,不產出 bundle" >&2
+            # K5:顯式簽名 keychain 為必填。developer-id 模式「沒有」隱式 keychain fallback:未給就在 Swift build 前
+            # fail-closed,絕不退回 user 的 keychain search list / default keychain 去找身分。
+            if [ -z "$DEVELOPER_ID_KEYCHAIN" ]; then
+                echo "build-app: SIGN_MODE=developer-id 需要 DEVELOPER_ID_KEYCHAIN(顯式簽名 keychain,未設定;無隱式 fallback)— 中止,不產出 bundle" >&2
                 return 1
             fi
-            while IFS= read -r _line || [ -n "$_line" ]; do
-                case "$_line" in
-                    *[0-9]\)\ [0-9A-Fa-f][0-9A-Fa-f]*\ \"*\") ;;   # 「  N) <hex-hash> "NAME"」;摘要行不匹配
-                    *) continue ;;
-                esac
-                _name="${_line#*\"}"; _name="${_name%\"*}"   # 首尾雙引號之間 = 完整身分名稱
-                [ "$DEVELOPER_ID_IDENTITY" = "$_name" ] && _matches=$((_matches + 1))
-            done <<EOF
-$_idout
-EOF
-            # 須「恰好一個」相符:零個=不可解析;多個(如續期的同名憑證)=歧義,codesign 可能選到非預期的憑證 → fail-closed。
-            if [ "$_matches" -eq 0 ]; then
-                echo "build-app: Developer ID 身分不可解析(須精確等於某身分的完整名稱 'Name (TEAMID)'):'$DEVELOPER_ID_IDENTITY'" >&2
+            # K6:獨立 leaf 憑證 SHA-256 為必填(形狀由 kc_normalize_sha256 判定)。
+            if [ -z "$EXPECTED_DEVELOPER_ID_CERT_SHA256" ]; then
+                echo "build-app: SIGN_MODE=developer-id 需要 EXPECTED_DEVELOPER_ID_CERT_SHA256(獨立 leaf 憑證 SHA-256,未設定)— 中止,不產出 bundle" >&2
                 return 1
             fi
-            if [ "$_matches" -gt 1 ]; then
-                echo "build-app: Developer ID 身分有 $_matches 個同名相符(歧義,codesign 可能選錯)— fail-closed:'$DEVELOPER_ID_IDENTITY'" >&2
-                return 1
-            fi
+            # K7:身分 preflight「只」查 DEVELOPER_ID_KEYCHAIN(精確身分恰一個、Team == EXPECTED_TEAM_ID、leaf SHA-256 ==
+            # EXPECTED_DEVELOPER_ID_CERT_SHA256、對應私鑰存在)。login / default keychain 有相符身分也不能讓它通過。
+            # derived selector 在此丟棄(簽名前 sign_app_bundle 會再驗一次並取用)。
+            _devid_identity_preflight >/dev/null || return 1
             return 0
             ;;
         *)
@@ -131,15 +137,41 @@ _expected_team_id() {
     printf '%s\n' "$DEVELOPER_ID_IDENTITY" | sed -n 's/.*(\([A-Za-z0-9]\{1,\}\))[[:space:]]*$/\1/p'
 }
 
+# K7 身分 preflight —— 單一實作在 Scripts/keychain-bootstrap.sh 的 kc_identity_preflight(kc_bootstrap 用同一份 = 同一
+# 套規則),只對顯式 DEVELOPER_ID_KEYCHAIN 查詢:(1) 存在 Developer ID Application 身分、(2) 恰一個且精確等於所請求
+# 身分、(3) Team == 獨立 EXPECTED_TEAM_ID、(4) leaf 憑證 SHA-256 == 獨立 EXPECTED_DEVELOPER_ID_CERT_SHA256、(5) 對應
+# 私鑰存在。成功時 stdout 只輸出 derived selector(該憑證的 SHA-1)。只在 developer-id 路徑載入 helper(adhoc 不依賴它);
+# 每次都重新 source(只重新定義函式),不沿用環境中可能已存在的同名函式。
+_devid_identity_preflight() {
+    # shellcheck source=keychain-bootstrap.sh
+    . "$ROOT/Scripts/keychain-bootstrap.sh" || { echo "build-app: 無法載入 Scripts/keychain-bootstrap.sh — fail-closed" >&2; return 1; }
+    kc_identity_preflight "$DEVELOPER_ID_KEYCHAIN" "$DEVELOPER_ID_IDENTITY" "$EXPECTED_TEAM_ID" "$EXPECTED_DEVELOPER_ID_CERT_SHA256"
+}
+
 # 以 Developer ID 簽單一項目:Hardened Runtime(--options runtime)+ secure timestamp(--timestamp)。
 # A1:預設「不帶」--entitlements —— 本 app 非 sandbox、行為調查無任何 Hardened Runtime 例外;僅在 ENTITLEMENTS
 # 經實證必要時才對需要的項目加上。永不用 --deep 簽(--deep 會掩蓋漏簽的巢狀項;--deep 只在 verify 時用)。
+# K8:每個 Developer-ID codesign 都帶顯式 --keychain "$DEVELOPER_ID_KEYCHAIN"(只在該檔找簽名身分);缺 keychain 或
+# selector 不是 40 個十六進位字元 → 拒絕執行。不存在「省略 --keychain、退回 keychain search list」的 Developer-ID 簽名
+# 路徑 —— 日後新增的任何 Developer-ID 簽名項目都必須經過本函式。$2 = kc_identity_preflight 的 derived selector
+# (DERIVED SELECTOR — NOT TRUSTED INPUT;只當 codesign 的執行選擇器)。
 _sign_item_developer_id() {
-    local item="$1"
+    local item="$1" sel="${2:-}"
+    if [ -z "$DEVELOPER_ID_KEYCHAIN" ]; then
+        echo "build-app: Developer-ID codesign 需要顯式 DEVELOPER_ID_KEYCHAIN — 拒絕簽名(不退回 keychain search list):$item" >&2
+        return 1
+    fi
+    case "$sel" in
+        '' | *[!0123456789ABCDEF]*) echo "build-app: Developer-ID codesign 的 selector 須為 40 個大寫十六進位字元(kc_identity_preflight 輸出)— 拒絕簽名:$item" >&2; return 1 ;;
+    esac
+    if [ "${#sel}" -ne 40 ]; then
+        echo "build-app: Developer-ID codesign 的 selector 須為 40 個十六進位字元 — 拒絕簽名:$item" >&2
+        return 1
+    fi
     if [ -n "$ENTITLEMENTS" ]; then
-        codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$DEVELOPER_ID_IDENTITY" "$item"
+        codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --keychain "$DEVELOPER_ID_KEYCHAIN" --sign "$sel" "$item"
     else
-        codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_IDENTITY" "$item"
+        codesign --force --options runtime --timestamp --keychain "$DEVELOPER_ID_KEYCHAIN" --sign "$sel" "$item"
     fi
 }
 
@@ -153,14 +185,20 @@ sign_app_bundle() {
             # AIPetUsage 隨外層一起被簽。資源 bundle(AIPetUsage_UsageCore.bundle,無 Mach-O 可執行碼)預設「不」
             # 另簽;僅當 --verify --deep --strict 指出它需要自己的簽名時(A2)才簽它(inside-out 最先),再重簽外層
             # 並複驗。是否需簽由 verify 仲裁,不因副檔名是 .bundle 就假設要簽。永不用 --deep 簽。
-            _sign_item_developer_id "$app/Contents/MacOS/aipet" || return 1
-            _sign_item_developer_id "$app" || return 1
+            # K7/K8:簽名「前」立即在顯式 keychain 重新執行身分 preflight(validate 在 Swift build 前驗過一次;此處再驗,
+            # 避免 build 期間 keychain 變動),並取得 derived selector —— 通過全部受信任檢查的那張憑證的 SHA-1,只當
+            # codesign 的執行選擇器(40 hex = 憑證 SHA-1、不看名稱,也不經 identity preference 的間接;名稱選擇是子字串
+            # 比對)。信任綁定仍是 Team 與 SHA-256,簽後再由 verify_signature 對成品複驗。
+            local sel
+            sel="$(_devid_identity_preflight)" || return 1
+            _sign_item_developer_id "$app/Contents/MacOS/aipet" "$sel" || return 1
+            _sign_item_developer_id "$app" "$sel" || return 1
             local verr
             if ! verr="$(codesign --verify --deep --strict "$app" 2>&1)"; then
                 if grep -qF 'AIPetUsage_UsageCore.bundle' <<<"$verr"; then
                     # A2:資源 bundle 需要自己的簽名 —— 簽它(inside-out 最先),重簽外層(重新密封),複驗。
-                    _sign_item_developer_id "$app/Contents/Resources/AIPetUsage_UsageCore.bundle" || return 1
-                    _sign_item_developer_id "$app" || return 1
+                    _sign_item_developer_id "$app/Contents/Resources/AIPetUsage_UsageCore.bundle" "$sel" || return 1
+                    _sign_item_developer_id "$app" "$sel" || return 1
                     codesign --verify --deep --strict "$app" || return 1
                 else
                     printf '%s\n' "$verr" >&2
@@ -192,10 +230,40 @@ sign_app_bundle() {
     esac
 }
 
+# K9:成品的 leaf 憑證 SHA-256 綁定。以 `codesign -d --extract-certificates=<前綴>` 取出簽章內嵌的憑證鏈(man codesign:
+# 檔名 = 前綴 + 0..n-1,0 = leaf(簽名)憑證,DER),計算 leaf 的 SHA-256 與 $2(已正規化的預期值)比較。抽取一律寫進
+# 本函式自己以 mktemp -d 建立、位於 TMPDIR 的暫存區(顯式絕對前綴;絕不用 codesign 預設的「目前目錄 codesign0..N」),
+# 並在每條返回路徑上移除抽出的檔與暫存區 —— repo / workspace 不留任何憑證產物。--extract-certificates 是「可選值」選項,
+# 必須用 '=' 形式(man codesign:'--name value' 對可選值選項不會如預期運作)。SHA-256 只「釘選」預期 leaf,不取代憑證鏈
+# 驗證。$1 = 已簽項目。
+_leaf_sha256_matches() {
+    local item="$1" want="$2" work got rc=1
+    work="$(mktemp -d "${TMPDIR:-/tmp}/aipet-leafcert.XXXXXXXX")" || { echo "verify: 無法建立憑證抽取暫存區" >&2; return 1; }
+    if [ -z "$work" ] || [ ! -d "$work" ]; then echo "verify: 憑證抽取暫存區無效" >&2; return 1; fi
+    if codesign -d --extract-certificates="$work/leaf." "$item" >/dev/null 2>&1 \
+        && [ -f "$work/leaf.0" ] && [ ! -L "$work/leaf.0" ]; then
+        if got="$(shasum -a 256 "$work/leaf.0")"; then
+            got="${got%% *}"
+            [ -n "$want" ] && [ "$got" = "$want" ] && rc=0
+        fi
+    fi
+    # 逐一刪除 codesign 寫出的 leaf.0 … leaf.(n-1)(不用 glob:呼叫端的 GLOBIGNORE / nullglob 等不得讓刪除漏掉憑證檔)。
+    local i=0
+    while [ -e "$work/leaf.$i" ] || [ -L "$work/leaf.$i" ]; do
+        rm -f "$work/leaf.$i"
+        i=$((i + 1))
+    done
+    if ! rmdir "$work"; then
+        echo "verify: 無法移除憑證抽取暫存區:$work" >&2
+        rc=1
+    fi
+    return "$rc"
+}
+
 # developer-id 最終權威驗證(fail-closed):封印完整性 + 對「每個 executable-code 項」(aipet + 外層)斷言
-# Developer ID 權威 + Team ID + Hardened Runtime flag + 安全時間戳,再斷言無 app-sandbox / 無 cs.* 例外(A1;對已簽二進位
-# dump,非對 committed 檔)。spctl 不在此驗(它是 post-staple 檢查,此時尚未公證,spctl 會正確地拒絕)。
-# 每個檢查皆顯式 return(不倚賴 set -e)。
+# Developer ID 權威 + Team ID + leaf 憑證 SHA-256(K9)+ Hardened Runtime flag + 安全時間戳,再斷言無 app-sandbox / 無 cs.*
+# 例外(A1;對已簽二進位 dump,非對 committed 檔)。spctl 不在此驗(它是 post-staple 檢查,此時尚未公證,spctl 會正確地
+# 拒絕)。每個檢查皆顯式 return(不倚賴 set -e)。
 verify_signature() {
     local app="$1"
     # 1) 封印完整性(遞迴);也是 A2 的仲裁者。
@@ -220,6 +288,16 @@ verify_signature() {
     fi
     # 信任根 = 獨立的 EXPECTED_TEAM_ID(非身分衍生值)。移除此獨立比對 → 自我一致的錯誤團隊簽章會矇過(見 team-id 鑑別性測試)。
     want_team="$EXPECTED_TEAM_ID"
+    # K9 信任根 = 獨立的 EXPECTED_DEVELOPER_ID_CERT_SHA256(必填;K6 形狀,正規化為小寫)。
+    local want_sha
+    if [ -z "$EXPECTED_DEVELOPER_ID_CERT_SHA256" ]; then
+        echo "verify: developer-id 需要 EXPECTED_DEVELOPER_ID_CERT_SHA256(獨立 leaf 憑證 SHA-256)— 缺則 fail-closed" >&2
+        return 1
+    fi
+    # shellcheck source=keychain-bootstrap.sh
+    . "$ROOT/Scripts/keychain-bootstrap.sh" || { echo "verify: 無法載入 Scripts/keychain-bootstrap.sh — fail-closed" >&2; return 1; }
+    want_sha="$(kc_normalize_sha256 "$EXPECTED_DEVELOPER_ID_CERT_SHA256")" \
+        || { echo "verify: EXPECTED_DEVELOPER_ID_CERT_SHA256 須恰為 64 個十六進位字元 — fail-closed" >&2; return 1; }
     # 3) 對「每個 executable-code 項」(aipet + 外層)斷言:leaf Authority「精確」等於所請求的身分名稱(非只
     #    'Developer ID Application' 前綴 —— 否則同團隊的另一張 Developer ID 憑證也會通過)、TeamIdentifier 相符、
     #    Hardened Runtime flag 存在。以 herestring 餵 grep(非 printf | grep -q 管線)避免 pipefail + SIGPIPE 誤拒。
@@ -230,6 +308,10 @@ verify_signature() {
             || { echo "verify: $item 的 leaf Authority 不等於所請求身分:$DEVELOPER_ID_IDENTITY" >&2; return 1; }
         grep -qxF "TeamIdentifier=$want_team" <<<"$dv" \
             || { echo "verify: $item TeamIdentifier 不符預期($want_team)" >&2; return 1; }
+        # K9:成品簽章內嵌的 leaf 憑證 SHA-256 == 獨立 EXPECTED_DEVELOPER_ID_CERT_SHA256(移除此比對 → 名稱 / Team 相符但
+        # 不是預期那張憑證的簽章會矇過;見 SHA-256 綁定鑑別性測試)。
+        _leaf_sha256_matches "$item" "$want_sha" \
+            || { echo "verify: $item 的 leaf 憑證 SHA-256 ≠ EXPECTED_DEVELOPER_ID_CERT_SHA256($want_sha)" >&2; return 1; }
         grep -Eq 'flags=.*runtime' <<<"$dv" \
             || { echo "verify: $item 缺 Hardened Runtime(runtime)flag" >&2; return 1; }
         # F1:斷言「安全時間戳」確實存在於結果簽章的 metadata。codesign -dvvv 對帶 TSA 安全時間戳的簽章印出獨立的
