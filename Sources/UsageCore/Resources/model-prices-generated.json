@@ -590,17 +590,6 @@
   },
   {
     "providerId": "codex",
-    "modelId": "gpt-4-turbo",
-    "displayName": "GPT-4 Turbo",
-    "inputPerMillion": 10.0,
-    "outputPerMillion": 30.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
     "modelId": "gpt-4.1",
     "displayName": "GPT-4.1",
     "inputPerMillion": 2.0,
@@ -1246,29 +1235,6 @@
   },
   {
     "providerId": "codex",
-    "modelId": "o1",
-    "displayName": "o1",
-    "inputPerMillion": 15.0,
-    "outputPerMillion": 60.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 7.5
-  },
-  {
-    "providerId": "codex",
-    "modelId": "o1-pro",
-    "displayName": "o1-pro",
-    "inputPerMillion": 150.0,
-    "outputPerMillion": 600.0,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false
-  },
-  {
-    "providerId": "codex",
     "modelId": "o3",
     "displayName": "o3",
     "inputPerMillion": 2.0,
@@ -1281,30 +1247,6 @@
   },
   {
     "providerId": "codex",
-    "modelId": "o3-mini",
-    "displayName": "o3 Mini",
-    "inputPerMillion": 1.1,
-    "outputPerMillion": 4.4,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.55
-  },
-  {
-    "providerId": "codex",
-    "modelId": "o3-mini-high",
-    "displayName": "o3 Mini High",
-    "inputPerMillion": 1.1,
-    "outputPerMillion": 4.4,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.55
-  },
-  {
-    "providerId": "codex",
     "modelId": "o3-pro",
     "displayName": "o3 Pro",
     "inputPerMillion": 20.0,
@@ -1313,30 +1255,6 @@
     "effectiveFrom": "2026-07-25",
     "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
     "userOverride": false
-  },
-  {
-    "providerId": "codex",
-    "modelId": "o4-mini",
-    "displayName": "o4 Mini",
-    "inputPerMillion": 1.1,
-    "outputPerMillion": 4.4,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.275
-  },
-  {
-    "providerId": "codex",
-    "modelId": "o4-mini-high",
-    "displayName": "o4 Mini High",
-    "inputPerMillion": 1.1,
-    "outputPerMillion": 4.4,
-    "currency": "USD",
-    "effectiveFrom": "2026-07-25",
-    "source": "openrouter.ai/api/v1/models (generated 2026-07-25)",
-    "userOverride": false,
-    "cacheReadPerMillion": 0.275
   },
   {
     "providerId": "grok-code",
