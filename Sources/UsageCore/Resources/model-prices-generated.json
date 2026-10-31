@@ -326,13 +326,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.09,
-    "outputPerMillion": 0.3,
+    "inputPerMillion": 0.0675,
+    "outputPerMillion": 0.225,
     "currency": "USD",
-    "effectiveFrom": "2026-10-28",
-    "source": "openrouter.ai/api/v1/models (generated 2026-10-28)",
+    "effectiveFrom": "2026-10-31",
+    "source": "openrouter.ai/api/v1/models (generated 2026-10-31)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "cacheReadPerMillion": 0.0375
   },
   {
     "providerId": "antigravity",
