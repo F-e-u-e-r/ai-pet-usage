@@ -326,10 +326,10 @@
     "modelId": "gemma-3-27b-it",
     "displayName": "Gemma 3 27B",
     "inputPerMillion": 0.08,
-    "outputPerMillion": 0.35,
+    "outputPerMillion": 0.45,
     "currency": "USD",
-    "effectiveFrom": "2026-10-18",
-    "source": "openrouter.ai/api/v1/models (generated 2026-10-18)",
+    "effectiveFrom": "2026-11-09",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-09)",
     "userOverride": false,
     "cacheReadPerMillion": 0.04
   },
@@ -348,13 +348,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.0675,
-    "outputPerMillion": 0.225,
+    "inputPerMillion": 0.09,
+    "outputPerMillion": 0.3,
     "currency": "USD",
-    "effectiveFrom": "2026-11-08",
-    "source": "openrouter.ai/api/v1/models (generated 2026-11-08)",
+    "effectiveFrom": "2026-11-09",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-09)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.0375
+    "cacheReadPerMillion": 0.05
   },
   {
     "providerId": "antigravity",
