@@ -279,6 +279,28 @@
   },
   {
     "providerId": "antigravity",
+    "modelId": "gemini-omni-1.1-flash",
+    "displayName": "Gemini Omni 1.1 Flash",
+    "inputPerMillion": 1.5,
+    "outputPerMillion": 9.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-11-08",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-08)",
+    "userOverride": false
+  },
+  {
+    "providerId": "antigravity",
+    "modelId": "gemini-omni-1.2-flash",
+    "displayName": "Gemini Omni 1.2 Flash",
+    "inputPerMillion": 1.5,
+    "outputPerMillion": 9.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-11-08",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-08)",
+    "userOverride": false
+  },
+  {
+    "providerId": "antigravity",
     "modelId": "gemma-2-27b-it",
     "displayName": "Gemma 2 27B",
     "inputPerMillion": 0.65,
@@ -326,13 +348,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.094,
-    "outputPerMillion": 0.283,
+    "inputPerMillion": 0.0675,
+    "outputPerMillion": 0.225,
     "currency": "USD",
-    "effectiveFrom": "2026-11-04",
-    "source": "openrouter.ai/api/v1/models (generated 2026-11-04)",
+    "effectiveFrom": "2026-11-08",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-08)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.047
+    "cacheReadPerMillion": 0.0375
   },
   {
     "providerId": "antigravity",
