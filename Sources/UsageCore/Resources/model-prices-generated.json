@@ -348,13 +348,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.09,
-    "outputPerMillion": 0.3,
+    "inputPerMillion": 0.08,
+    "outputPerMillion": 0.1,
     "currency": "USD",
-    "effectiveFrom": "2026-11-09",
-    "source": "openrouter.ai/api/v1/models (generated 2026-11-09)",
+    "effectiveFrom": "2026-11-10",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-10)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "cacheReadPerMillion": 0.046
   },
   {
     "providerId": "antigravity",
@@ -394,6 +394,20 @@
     "cacheReadPerMillion": 0.25,
     "cacheWrite5mPerMillion": 12.5,
     "cacheWrite1hPerMillion": 20.0
+  },
+  {
+    "providerId": "claude-code",
+    "modelId": "claude-fable-5-2*",
+    "displayName": "Claude Fable 5.2",
+    "inputPerMillion": 8.0,
+    "outputPerMillion": 40.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-11-10",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-10)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.2,
+    "cacheWrite5mPerMillion": 10.0,
+    "cacheWrite1hPerMillion": 16.0
   },
   {
     "providerId": "claude-code",
