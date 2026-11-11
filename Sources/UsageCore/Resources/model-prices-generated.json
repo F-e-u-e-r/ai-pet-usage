@@ -268,6 +268,19 @@
   },
   {
     "providerId": "antigravity",
+    "modelId": "gemini-4-carbon",
+    "displayName": "Gemini 4 Carbon",
+    "inputPerMillion": 2.0,
+    "outputPerMillion": 10.0,
+    "currency": "USD",
+    "effectiveFrom": "2026-11-11",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-11)",
+    "userOverride": false,
+    "cacheReadPerMillion": 0.1,
+    "cacheWrite5mPerMillion": 0.1875
+  },
+  {
+    "providerId": "antigravity",
     "modelId": "gemini-nano-banana-2.1",
     "displayName": "Nano Banana 2.1",
     "inputPerMillion": 1.5,
