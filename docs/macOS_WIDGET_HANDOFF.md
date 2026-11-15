@@ -9,7 +9,7 @@ This document is for **whoever merges and ships** the widget (ideally with a **p
 | Snapshot model + I/O | `Sources/UsageCore/WidgetSnapshot.swift` |
 | App publish hook | `Sources/AIPetUsage/WidgetSnapshotPublisher.swift` → `AppModel.publishWidgetSnapshot()` after refresh |
 | WidgetKit UI | `Extensions/AIPetUsageWidget/` |
-| Xcode extension target | `macOS/AIPetUsageWidget.xcodeproj` (embeds appex via `Scripts/build-app.sh`) |
+| Xcode extension target | `macOS/AIPetUsageWidget.xcodeproj` (tracked in git; `.gitignore` waives `*.xcodeproj` only for this path) |
 | Install + PlugInKit | `Scripts/install-local-app.sh`, `Scripts/register-widget.sh` |
 | Golden gate | `checks/widget-golden/` |
 | Entitlements (prod) | `Extensions/AIPetUsageWidget/AIPetUsageWidget.entitlements` — **sandbox + App Group** |
