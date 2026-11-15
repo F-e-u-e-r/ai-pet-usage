@@ -106,11 +106,13 @@ final class InstallHookTests: XCTestCase {
         assertRefused(planOf(#"{"statusLine":{"type":"static"}}"#), contains: "not \"command\"")
         assertRefused(planOf(#"{"statusLine":{"type":5,"command":"x"}}"#), contains: "type is not a string")
         assertRefused(planOf(#"{"statusLine":{"command":[1]}}"#), contains: "command is not a string")
-        assertRefused(planOf(#"{"statusLine":{"type":"command","command":"/bin/bash /repo/Scripts/claude-statusline-hook.sh"}}"#),
-                      contains: "not managed by this installer")
-        // 大小寫變體的 hook 引用也要拒絕(case-insensitive FS;grok code-r10)
-        assertRefused(planOf(#"{"statusLine":{"type":"command","command":"/x/CLAUDE-STATUSLINE-HOOK.SH"}}"#),
-                      contains: "not managed by this installer")
+        // 手動 repo 路徑(僅 hook、無 wrap)→ 改接 canonical,不再硬拒絕
+        let repoHook = planOf(#"{"statusLine":{"type":"command","command":"/bin/bash /repo/Scripts/claude-statusline-hook.sh"}}"#)
+        XCTAssertEqual(repoHook.action, .installFresh)
+        XCTAssertEqual(repoHook.newCommand, prefix)
+        // 大小寫變體的 hook 引用也可救回 fresh
+        let caseHook = planOf(#"{"statusLine":{"type":"command","command":"/x/CLAUDE-STATUSLINE-HOOK.SH"}}"#)
+        XCTAssertEqual(caseHook.action, .installFresh)
     }
 
     // MARK: planner — 只包裹單一 script 路徑;其餘拒絕
@@ -177,11 +179,22 @@ final class InstallHookTests: XCTestCase {
                       contains: "single script file")
     }
 
-    func testCommandPointingAtHookRefused() throws {
-        // 指向 hook 本身 → 因含 hook 檔名,由「not managed」守衛拒絕(絕不包裹我方 hook)
-        assertRefused(planOf(#"{"statusLine":{"type":"command","command":"\#(hookPath)"}}"#,
-                             regular: { _ in true }, exec: { _ in true }),
-                      contains: "not managed by this installer")
+    func testCommandPointingAtHookCanonicalizesToFresh() throws {
+        // 單獨指向 hook 檔(非 canonical 字串但仍是我方腳本)→ fresh 重接
+        let p = planOf(#"{"statusLine":{"type":"command","command":"\#(hookPath)"}}"#,
+                       regular: { _ in true }, exec: { _ in true })
+        XCTAssertEqual(p.action, .installFresh)
+        XCTAssertEqual(p.newCommand, prefix)
+    }
+
+    func testSalvageManualHookWithClaudeDesktopWrap() throws {
+        let desktop = "/Users/t/.claude/claude-desktop/statusline.sh"
+        let manual = "/bin/bash '/repo/Scripts/claude-statusline-hook.sh' --wrap /bin/bash -- '\(desktop)'"
+        let json = try String(data: JSONSerialization.data(withJSONObject:
+            ["statusLine": ["type": "command", "command": manual]]), encoding: .utf8)!
+        let plan = planOf(json)
+        XCTAssertEqual(plan.action, .wrapBashDashDash(desktop))
+        XCTAssertEqual(plan.newCommand, "\(prefix) --wrap /bin/bash -- '\(desktop)'")
     }
 
     // MARK: planner — canonical 冪等
@@ -211,13 +224,18 @@ final class InstallHookTests: XCTestCase {
 
     func testCanonicalIsByteExactNoTrim() throws {
         // 前後空白的 F1 不是 canonical(byte-exact)→ 不得被當成 alreadyInstalled
-        // (含 hook 檔名 → 由 "not managed" 守衛拒絕;重點是「非 alreadyInstalled」)
-        for cmd in [" \(prefix) ", "\(prefix) --wrap 'rel/path.sh'"] {
-            let plan = planOf(#"{"statusLine":{"type":"command","command":"\#(cmd)"}}"#)
-            if case .alreadyInstalled = plan.action {
-                XCTAssertTrue(false, "byte-exact:不得把「\(cmd)」當成 alreadyInstalled")
-            }
-            XCTAssertNil(plan.newSettingsJSON, "\(cmd) 應為 refuse,無 payload")
+        let spaced = planOf(#"{"statusLine":{"type":"command","command":" \#(prefix) "}}"#)
+        if case .alreadyInstalled = spaced.action {
+            XCTAssertTrue(false, "byte-exact:不得把含空白 variant 當成 alreadyInstalled")
+        }
+        XCTAssertEqual(spaced.action, .installFresh, "手動 hook 路徑可救回 canonical fresh")
+        // 相對 wrap target 仍無法 salvage
+        let rel = planOf(#"{"statusLine":{"type":"command","command":"\#(prefix) --wrap 'rel/path.sh'"}}"#)
+        if case .alreadyInstalled = rel.action {
+            XCTAssertTrue(false)
+        }
+        if case .refuse = rel.action {} else {
+            XCTAssertTrue(false, "相對 wrap target 應 refuse, got \(rel.action)")
         }
     }
 
