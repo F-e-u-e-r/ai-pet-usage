@@ -578,7 +578,7 @@ struct PetView: View {
             GeometryReader { geo in
                 ZStack {
                     // 用量環:每家 provider 一圈,identity 色(R2 B2)。
-                    UsageRing(limits: model.orderedLimitStates, petSize: size)
+                    UsageRing(limits: model.petRingLimitStates, petSize: size)
                         .frame(width: capD, height: capD)
 
                     // inner:sprite + mood 徽章 + confetti(既有語彙原封)。
@@ -696,13 +696,22 @@ struct PetView: View {
             ? model.orCredits.status.presentation(now: Date()) : nil
         switch page {
         case 0:
-            let providerLines = model.orderedLimitStates.map { st -> String in
+            let providerLines = model.orderedChromeLimitStates.map { st -> String in
                 let code = shortProviderCode(st.providerId)
                 if st.fiveHour.idle { return "\(code) idle 5h" }
-                guard let p = st.fiveHour.usedPercent else { return "\(code) — no data" }
-                var line = "\(code) \(Int(p.rounded()))% 5h"
-                if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }
-                return line
+                if let p = st.fiveHour.usedPercent {
+                    var line = "\(code) \(Int(p.rounded()))% 5h"
+                    if let w = st.weekly.usedPercent { line += " · \(Int(w.rounded()))% wk" }
+                    if let fab = st.modelScopedWeekly?.first(where: { $0.displayName.lowercased().contains("fable") }) {
+                        line += " · Fable \(Int(fab.usedPercent.rounded()))%"
+                    }
+                    if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }
+                    return line
+                }
+                if let act = st.todayActivityPercent {
+                    return "\(code) \(Int(act.rounded()))% today"
+                }
+                return "\(code) — no data"
             }
             let lines = BubblePages.compose(providerLines: providerLines,
                                             extraLine: orPresentation?.bubbleUsageLine)
@@ -716,7 +725,7 @@ struct PetView: View {
                 + "\(model.treatsAvailable) treats · \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
         default:
             let refreshed = timeAgo(model.dashboard.lastRefreshAt)
-            let flags = model.orderedLimitStates.map { st in
+            let flags = model.orderedChromeLimitStates.map { st in
                 "\(shortProviderCode(st.providerId)) \(confidenceWord(st.fiveHour.confidence))"
             }
             // flags 預算恆為 3:加上 refreshed 行,資料頁**任何狀態**都 ≤4 行
@@ -845,8 +854,8 @@ struct UsageRing: View {
                 }
             }
         }
-        .help(helpText(entries))
-        .accessibilityLabel(helpText(entries))
+        .help(helpText(entries, limits: limits))
+        .accessibilityLabel(helpText(entries, limits: limits))
         .allowsHitTesting(false)
     }
 
@@ -872,11 +881,16 @@ struct UsageRing: View {
                      blue: Double(brand.dotColor & 0xFF) / 255)
     }
 
-    private func helpText(_ entries: [UsageRingModel.Entry]) -> String {
-        guard !entries.isEmpty else { return "No 5h limit data" }
+    private func helpText(_ entries: [UsageRingModel.Entry], limits: [ProviderLimitState]) -> String {
+        guard !entries.isEmpty else { return "No usage ring data" }
+        let byId = Dictionary(uniqueKeysWithValues: limits.map { ($0.providerId, $0) })
         return entries.map { e in
-            "\(ProviderBrands.brand(for: e.providerId).displayName) \(Int(e.percent.rounded()))%"
-        }.joined(separator: " · ") + " (5h)"
+            let name = ProviderBrands.brand(for: e.providerId).displayName
+            if byId[e.providerId]?.fiveHour.usedPercent != nil {
+                return "\(name) \(Int(e.percent.rounded()))% (5h limit)"
+            }
+            return "\(name) \(Int(e.percent.rounded()))% today"
+        }.joined(separator: " · ")
     }
 }
 

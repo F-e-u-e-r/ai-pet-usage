@@ -8,23 +8,30 @@ final class GrokQuotaTests: XCTestCase {
 
     private func body(_ json: String) -> Data { json.data(using: .utf8)! }
 
-    // MARK: decoder(F3 hotfix 分類;Track A:creditUsagePercent 已撤除為 weekly-quota source)
+    // MARK: decoder — creditUsagePercent = weekly subscription meter (unified.jsonl + billing API)
 
-    func testValidEnvelopeNeverRendersCreditUsagePercentAsQuota() {
-        // Track A 核心 + owner 要求的 regression:creditUsagePercent(Track B 已證 ≠ Grok weekly quota)
-        // 無論何值/在否,一律 → .noUsageData(honestly unavailable),**絕不** render 成 Grok quota N%。
-        for pct in ["100.0", "41.5", "0", "1", "true", "\"41%\"", "-3", "null"] {
+    func testCreditUsagePercentParsesAsWeeklyQuota() {
+        for (pct, expected) in [("30.0", 30.0), ("100.0", 100.0), ("41.5", 41.5), ("0", 0.0), ("1", 1.0), ("-3", 0.0)] {
+            let outcome = GrokQuotaEngine.parseResponse(statusCode: 200,
+                data: body("{\"config\": {\"creditUsagePercent\": \(pct)}}"), now: now)
+            if case .success(let snap) = outcome {
+                XCTAssertEqual(snap.usedPercent, expected, accuracy: 0.001)
+            } else {
+                XCTAssertEqual(outcome, .success(GrokQuotaSnapshot(usedPercent: expected, periodStart: nil,
+                                                                   periodEnd: nil, planName: nil, fetchedAt: now)),
+                             "creditUsagePercent=\(pct)")
+            }
+        }
+        for pct in ["true", "\"41%\"", "null"] {
             XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
                 data: body("{\"config\": {\"creditUsagePercent\": \(pct)}}"), now: now), .noUsageData,
-                "creditUsagePercent=\(pct)(有效 config envelope)→ .noUsageData,不得 render 為 quota")
+                "non-numeric creditUsagePercent=\(pct) → .noUsageData")
         }
-        // 缺 creditUsagePercent 的真實 200(currentPeriod/billing 欄在)→ 一樣 .noUsageData(非 kill)
         let realAbsent = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-08-06T13:58:47.849415+00:00", "end": "2026-08-13T13:58:47.849415+00:00"}, "onDemandCap": {"val": 0}, "prepaidBalance": {"val": 0}, "billingPeriodEnd": "2026-08-13T13:58:47.849415+00:00"}}"#
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(realAbsent), now: now), .noUsageData)
-        // additive:未知頂層/巢狀欄位不改變分類
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
             data: body(#"{"config": {"creditUsagePercent": 42, "future": {"x": 1}}, "unknownTop": true}"#), now: now),
-            .noUsageData)
+            .success(GrokQuotaSnapshot(usedPercent: 42, periodStart: nil, periodEnd: nil, planName: nil, fetchedAt: now)))
     }
 
     func testEnvelopeClassification() {
@@ -287,6 +294,31 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertTrue(gate.shouldAttempt(currentStat: fileGone),
                       "檔案消失 = 身分變更(呼叫端會轉 notLoggedIn,不會真外呼)")
         gate.clear()
-        XCTAssertTrue(gate.shouldAttempt(currentStat: statA), "成功後門檻解除")
+        XCTAssertTrue(gate.shouldAttempt(currentStat: statA), "成功後門限解除")
+    }
+
+    func testGrokChromeWeeklyOnly() {
+        let base = ProviderLimitState(
+            providerId: "grok-code",
+            fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .unknown),
+            todayActivityPercent: 33)
+        let snap = GrokQuotaSnapshot(usedPercent: 12, periodStart: nil, periodEnd: now,
+                                      planName: "SuperGrok", fetchedAt: now)
+        let merged = GrokChromeDisplay.normalizeLimitState(base, officialQuota: snap)
+        XCTAssertNil(merged.fiveHour.usedPercent)
+        XCTAssertEqual(merged.weekly.usedPercent, 12)
+        XCTAssertNil(merged.todayActivityPercent)
+        let logsOnly = GrokChromeDisplay.normalizeLimitState(base, officialQuota: nil)
+        XCTAssertEqual(logsOnly.weekly.usedPercent, 33)
+        XCTAssertNil(logsOnly.todayActivityPercent)
+        let fromUnified = ProviderLimitState(
+            providerId: "grok-code",
+            fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
+            weekly: LimitWindowState(usedPercent: 30, windowMinutes: 10_080, confidence: .high),
+            todayActivityPercent: 88)
+        let unifiedNorm = GrokChromeDisplay.normalizeLimitState(fromUnified, officialQuota: nil)
+        XCTAssertEqual(unifiedNorm.weekly.usedPercent, 30)
+        XCTAssertNil(unifiedNorm.todayActivityPercent)
     }
 }

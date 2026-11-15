@@ -106,12 +106,58 @@ runSuite("GrokCodeAdapterTests", [
     ("testGeneratedPricesNeverAutoPriceGrok", grok.testGeneratedPricesNeverAutoPriceGrok),
     ("testCuratedEntryDeliberatelyPricesGrok", grok.testCuratedEntryDeliberatelyPricesGrok),
     ("testBillingTierParsedFromLogTail", grok.testBillingTierParsedFromLogTail),
+    ("testWeeklyCreditsPercentFromLogTail", grok.testWeeklyCreditsPercentFromLogTail),
     ("testPlanOnlyReadingEmittedThroughRefresh", grok.testPlanOnlyReadingEmittedThroughRefresh),
+    ("testWeeklyReadingEmittedThroughRefresh", grok.testWeeklyReadingEmittedThroughRefresh),
+])
+
+let cursorIde = CursorIdeAdapterTests()
+runSuite("CursorIdeAdapterTests", [
+    ("testParsesDeltaTokensModelAndProject", cursorIde.testParsesDeltaTokensModelAndProject),
+    ("testRegressionResetsWithoutNegativeEvent", cursorIde.testRegressionResetsWithoutNegativeEvent),
+    ("testIncrementalEmitsOnlyNewLines", cursorIde.testIncrementalEmitsOnlyNewLines),
+    ("testAvailabilityFollowsRootExistence", cursorIde.testAvailabilityFollowsRootExistence),
+    ("testCursorEnabledInDefaultSettings", cursorIde.testCursorEnabledInDefaultSettings),
+])
+
+let antigravityDisplay = AntigravityQuotaDisplayTests()
+runSuite("AntigravityQuotaDisplayTests", [
+    ("testExpandLimitStatesIntoThreeBuckets", antigravityDisplay.testExpandLimitStatesIntoThreeBuckets),
+    ("testCollapseForPetRingsKeepsOneAntigravityRow", antigravityDisplay.testCollapseForPetRingsKeepsOneAntigravityRow),
+    ("testOrderedGroupsPutsGeminiBeforeClaudeBeforeArgon", antigravityDisplay.testOrderedGroupsPutsGeminiBeforeClaudeBeforeArgon),
+    ("testAntigravityMenuSegmentsGroupBuckets", antigravityDisplay.testAntigravityMenuSegmentsGroupBuckets),
+])
+
+let cursorQuota = CursorQuotaTests()
+runSuite("CursorQuotaTests", [
+    ("testParseCurrentPeriodUsageJSON", cursorQuota.testParseCurrentPeriodUsageJSON),
+    ("testExpandLimitStatesSplitsCursorIde", cursorQuota.testExpandLimitStatesSplitsCursorIde),
+    ("testHTTP401MapsToKeyRejected", cursorQuota.testHTTP401MapsToKeyRejected),
+    ("testPartitionAndMenuSegmentsGroupCursorMeters", cursorQuota.testPartitionAndMenuSegmentsGroupCursorMeters),
+])
+
+let antigravityQuota = AntigravityQuotaFetcherTests()
+runSuite("AntigravityQuotaFetcherTests", [
+    ("testParseUsageJSONAndGeminiRateLimit", antigravityQuota.testParseUsageJSONAndGeminiRateLimit),
+])
+
+let agy = AgyAdapterTests()
+runSuite("AgyAdapterTests", [
+    ("testParsesTokensModelAndProject", agy.testParsesTokensModelAndProject),
+    ("testSkipsZeroTokenLines", agy.testSkipsZeroTokenLines),
+    ("testIncrementalEmitsOnlyNewLines", agy.testIncrementalEmitsOnlyNewLines),
+    ("testPrivacySentinelNeverLeaks", agy.testPrivacySentinelNeverLeaks),
+    ("testAvailabilityFollowsRootExistence", agy.testAvailabilityFollowsRootExistence),
+    ("testOfficialQuotaFetchOptIn", agy.testOfficialQuotaFetchOptIn),
+    ("testListsTranscriptsUnderHiddenSystemGenerated", agy.testListsTranscriptsUnderHiddenSystemGenerated),
+    ("testCacheReadTokensUseDeltasNotCumulativeSum", agy.testCacheReadTokensUseDeltasNotCumulativeSum),
+    ("testIgnoresChunkTranscripts", agy.testIgnoresChunkTranscripts),
 ])
 
 let ledger = LedgerTests()
 runSuite("LedgerTests", [
     ("testDedupeAndPersistence", ledger.testDedupeAndPersistence),
+    ("testLegacyAgyProviderIdCanonicalizesOnLoad", ledger.testLegacyAgyProviderIdCanonicalizesOnLoad),
     ("testQueries", ledger.testQueries),
     ("testForEachParityAndHalfOpenInterval", ledger.testForEachParityAndHalfOpenInterval),
     ("testMissingThenRestoredLedgerReloads", ledger.testMissingThenRestoredLedgerReloads),
@@ -161,7 +207,7 @@ runSuite("TrustWiringTests", [
 
 let grokQuota = GrokQuotaTests()
 runSuite("GrokQuotaTests", [
-    ("testValidEnvelopeNeverRendersCreditUsagePercentAsQuota", grokQuota.testValidEnvelopeNeverRendersCreditUsagePercentAsQuota),
+    ("testCreditUsagePercentParsesAsWeeklyQuota", grokQuota.testCreditUsagePercentParsesAsWeeklyQuota),
     ("testEnvelopeClassification", grokQuota.testEnvelopeClassification),
     ("testHTTPStatusAndOversizedMapping", grokQuota.testHTTPStatusAndOversizedMapping),
     ("testObservationEventMappingAndMachineIntegration", grokQuota.testObservationEventMappingAndMachineIntegration),
@@ -175,6 +221,7 @@ runSuite("GrokQuotaTests", [
     ("testExpiresAtFractionalSecondsUsedInSelection", grokQuota.testExpiresAtFractionalSecondsUsedInSelection),
     ("testPolicyZeroEgressWhenDisabledAndFull401Cycle", grokQuota.testPolicyZeroEgressWhenDisabledAndFull401Cycle),
     ("testCredentialChangeGate", grokQuota.testCredentialChangeGate),
+    ("testGrokChromeWeeklyOnly", grokQuota.testGrokChromeWeeklyOnly),
 ])
 
 let trustPlanLabel = TrustPlanLabelTests()
@@ -456,6 +503,7 @@ runSuite("PixelAnimatorTests", [
 
 let brandTests = ProviderBrandTests()
 runSuite("ProviderBrandTests", [
+    ("testTodayActivityPercentShowsWhenNoQuotaWindows", brandTests.testTodayActivityPercentShowsWhenNoQuotaWindows),
     ("testBadgesAlphabeticalOmitMissingAndSeverity", brandTests.testBadgesAlphabeticalOmitMissingAndSeverity),
     ("testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData", brandTests.testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData),
     ("testCompactShowsProviderWhenOnlyWeeklyWarns", brandTests.testCompactShowsProviderWhenOnlyWeeklyWarns),
@@ -1332,6 +1380,13 @@ let reportPricingDisplay = ReportPricingDisplayTests()
 runSuite("ReportPricingDisplayTests", [
     ("testOverlappingPrefixDisplaysLongestMatch_shortPrefixFirst", reportPricingDisplay.testOverlappingPrefixDisplaysLongestMatch_shortPrefixFirst),
     ("testOverlappingPrefixDisplayOrderIndependent_longPrefixFirst", reportPricingDisplay.testOverlappingPrefixDisplayOrderIndependent_longPrefixFirst),
+])
+
+let widgetSnapshot = WidgetSnapshotTests()
+runSuite("WidgetSnapshotTests", [
+    ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
+    ("testWidgetExtensionReadPrefersSupportBeforeShared", widgetSnapshot.testWidgetExtensionReadPrefersSupportBeforeShared),
+    ("testStoreRoundTripInSupportPath", widgetSnapshot.testStoreRoundTripInSupportPath),
 ])
 
 finishTestRun()

@@ -1030,8 +1030,12 @@ public func shortProviderCode(_ providerId: String) -> String {
     case "claude-code": return "CC"
     case "codex": return "CX"
     case "antigravity": return "AG"
+    case "antigravity-gemini": return "Gm"
+    case "antigravity-claude-gpt": return "3P"
+    case "antigravity-argon": return "Ar"
     case "grok-code": return "GK"
     case "opencode": return "OC"
+    case "cursor-ide": return "CU"
     default: return String(providerId.prefix(2)).uppercased()
     }
 }

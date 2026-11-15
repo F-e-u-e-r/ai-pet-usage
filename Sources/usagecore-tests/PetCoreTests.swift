@@ -620,12 +620,13 @@ final class CoordinatorIntegrationTests: XCTestCase {
 // MARK: - UsageRingModel(R2 B1/B2 幾何與過濾契約)
 
 final class UsageRingModelTests: XCTestCase {
-    private func limit(_ id: String, fiveHour: Double?) -> ProviderLimitState {
+    private func limit(_ id: String, fiveHour: Double?, todayActivityPercent: Double? = nil) -> ProviderLimitState {
         ProviderLimitState(
             providerId: id,
             fiveHour: LimitWindowState(usedPercent: fiveHour, windowMinutes: 300,
                                        confidence: fiveHour == nil ? .unknown : .high),
-            weekly: LimitWindowState(windowMinutes: 10080, confidence: .unknown)
+            weekly: LimitWindowState(windowMinutes: 10080, confidence: .unknown),
+            todayActivityPercent: todayActivityPercent
         )
     }
 
@@ -634,15 +635,19 @@ final class UsageRingModelTests: XCTestCase {
         let entries = UsageRingModel.entries(from: [
             limit("claude-code", fiveHour: 41),
             limit("codex", fiveHour: 4),
-            limit("grok-code", fiveHour: nil),
+            limit("grok-code", fiveHour: nil, todayActivityPercent: 35),
         ])
-        XCTAssertEqual(entries.map(\.providerId), ["claude-code", "codex"])
-        XCTAssertEqual(entries.map(\.percent), [41, 4])
+        XCTAssertEqual(entries.map(\.providerId), ["claude-code", "codex", "grok-code"])
+        XCTAssertEqual(entries.map(\.percent), [41, 4, 35])
 
         let five = (0..<6).map { limit("p\($0)", fiveHour: Double($0)) }
         XCTAssertEqual(UsageRingModel.entries(from: five).count, UsageRingModel.capacity)
 
         XCTAssertTrue(UsageRingModel.entries(from: [limit("grok-code", fiveHour: nil)]).isEmpty)
+
+        let ag = UsageRingModel.entries(from: [limit("antigravity", fiveHour: nil, todayActivityPercent: 20)])
+        XCTAssertEqual(ag.map(\.providerId), ["antigravity"])
+        XCTAssertEqual(ag[0].percent, 20)
     }
 
     /// 幾何:自 sprite 淨空向外疊(第一家最外),絕不向內縮;最內環 = base。
@@ -665,8 +670,9 @@ final class UsageRingModelTests: XCTestCase {
 
     /// 面板尺寸下限:容量外徑 + 邊距(64pt 全範圍不裁;數值對齊計畫 v3)。
     func testCapacityOuterDiameterAcrossSizes() {
-        XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 64), 64 * 1.75 + 39)
-        XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 160), 160 * 1.75 + 39)
+        let step = UsageRingModel.ringStep * CGFloat(UsageRingModel.capacity - 1)
+        XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 64), CGFloat(64 * 1.75) + step)
+        XCTAssertEqual(UsageRingModel.capacityOuterDiameter(petSize: 160), CGFloat(160 * 1.75) + step)
     }
 }
 
