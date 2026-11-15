@@ -75,6 +75,38 @@ struct MenuBarPanel: View {
     }
 }
 
+// MARK: - Panel typography helpers
+
+/// 5h / wk 窗欄字體與 MenuPanelMetrics.measuredWindowCellWidth 對齊。
+private struct PanelWindowCell: View {
+    let label: String
+    let value: String
+    var valueColor: Color?
+    var overflowIcon: Bool = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .font(Theme.FontScale.panelWindowLabel)
+                .foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.85)
+            HStack(spacing: 2) {
+                if overflowIcon {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(Theme.FontScale.panelWindowLabel)
+                        .foregroundStyle(.orange)
+                        .help("Provider reported a value above 100% — shown clamped")
+                }
+                Text(value)
+                    .font(Theme.FontScale.panelWindowValue)
+                    .monospacedDigit()
+                    .foregroundStyle(valueColor ?? .primary)
+                    .lineLimit(1).minimumScaleFactor(0.85)
+            }
+        }
+    }
+}
+
 // MARK: - Header
 
 /// 面板狀態 header:不是灰字選單項,而是全彩自訂視圖(spec §8)。
@@ -86,28 +118,28 @@ private struct PanelHeader: View {
             HStack(spacing: 6) {
                 Text(model.menuBarPetEmoji).font(.system(size: 15))
                 Text(model.settings.appMode == .full ? model.speciesDisplayName : "AI Pet Usage")
-                    .font(.headline)
+                    .font(Theme.FontScale.panelHeaderTitle)
                 Spacer()
                 if model.settings.appMode == .full {
                     Text("Lv.\(model.petState.level)")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(Theme.FontScale.panelHeaderMeta).foregroundStyle(.secondary)
                 }
             }
 
             // 倒數需要走時鐘;面板開著時每 30s 重算一次即可
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 VStack(alignment: .leading, spacing: 5) {
-                    ForEach(model.orderedLimitStates) { state in
+                    ForEach(model.panelLimitStates) { state in
                         ProviderStatusRow(state: state, now: context.date)
                     }
-                    if model.orderedLimitStates.isEmpty {
+                    if model.panelLimitStates.isEmpty {
                         Text("No providers enabled")
-                            .font(.callout).foregroundStyle(.secondary)
+                            .font(Theme.FontScale.panelProviderName).foregroundStyle(.secondary)
                     }
                     if model.settings.openRouterCreditsEnabled {
                         OpenRouterCreditsRow(status: model.orCredits.status, now: context.date)
                     }
-                    if model.settings.grokQuotaEnabled {
+                    if model.showsStandaloneGrokQuotaRow {
                         GrokQuotaRow(status: model.grokQuota.status, now: context.date)
                     }
                     if let alert = model.alertSummary {
@@ -142,7 +174,7 @@ private struct ProviderStatusRow: View {
         HStack(spacing: 8) {
             ProviderDot(brand: brand, size: 8)
             Text(brand.shortName)   // A2:面板用中短名(Claude/Codex/Grok);全名在 .help / a11y。
-                .font(.callout.weight(.medium))
+                .font(Theme.FontScale.panelProviderName)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
             windowText("5h", state.fiveHour)
@@ -150,7 +182,7 @@ private struct ProviderStatusRow: View {
             windowText("wk", state.weekly)
                 .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
             Text(resetLabel)
-                .font(.caption).monospacedDigit()
+                .font(Theme.FontScale.panelReset).monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.85)
                 .frame(width: MenuPanelMetrics.resetColumnWidth, alignment: .trailing)
@@ -165,16 +197,9 @@ private struct ProviderStatusRow: View {
         let severity = UsageSeverity.of(percent: percent,
                                         warn: model.settings.core.warnThresholdPercent,
                                         danger: model.settings.core.dangerThresholdPercent)
-        // 字體規格與 MenuPanelMetrics.measuredWindowCellWidth 一一對應(改這裡要同步那裡)。
-        // lineLimit(1)+minScale:欄寬已按 worst-case 實測,此為最後保險 —— 寧可微縮不可折行/截字。
-        return HStack(spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-                .lineLimit(1).minimumScaleFactor(0.85)
-            Text(window.idle ? "idle" : (percent.map { "\(Int($0.rounded()))%" } ?? "—"))
-                .font(.callout.weight(.semibold)).monospacedDigit()
-                .foregroundStyle(window.idle ? Color.secondary : (severityColor(severity) ?? .primary))
-                .lineLimit(1).minimumScaleFactor(0.85)
-        }
+        let value = window.idle ? "idle" : (percent.map { "\(Int($0.rounded()))%" } ?? "—")
+        let color: Color? = window.idle ? .secondary : severityColor(severity)
+        return PanelWindowCell(label: label, value: value, valueColor: color)
     }
 
     private var resetLabel: String {
@@ -208,38 +233,44 @@ private struct GrokQuotaRow: View {
     var body: some View {
         Group {
             if let snap = status.snapshot {
-                HStack(spacing: 8) {
-                    Circle().fill(Self.dot).frame(width: 8, height: 8)
-                    Text("Grok quota")
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1).truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        HStack(spacing: 4) {
-                            if snap.reportedPercentOverflow {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .font(.caption2).foregroundStyle(.orange)
-                                    .help("Provider reported a value above 100% — shown clamped")
-                            }
-                            Text("\(Int(snap.usedPercent))% used")
-                                .font(.callout.weight(.semibold)).monospacedDigit()
-                        }
-                        Text(subline(snap))
-                            .font(.caption2).monospacedDigit()
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Circle().fill(Self.dot).frame(width: 8, height: 8)
+                        Text("Grok")
+                            .font(Theme.FontScale.panelProviderName)
+                            .lineLimit(1).truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        PanelWindowCell(label: "5h", value: "—", valueColor: .secondary)
+                            .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+                        PanelWindowCell(
+                            label: "wk",
+                            value: "\(Int(snap.usedPercent))%",
+                            valueColor: snap.reportedPercentOverflow ? .orange : nil,
+                            overflowIcon: snap.reportedPercentOverflow
+                        )
+                        .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+                        Text(compactReset(snap))
+                            .font(Theme.FontScale.panelReset).monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.85)
+                            .frame(width: MenuPanelMetrics.resetColumnWidth, alignment: .trailing)
                     }
+                    Text("as of \(timeAgo(snap.fetchedAt, now: now))")
+                        .font(Theme.FontScale.panelMeta).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 16)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Circle().fill(Self.dot).frame(width: 8, height: 8)
-                        Text("Grok quota")
-                            .font(.callout.weight(.medium))
+                        Text("Grok")
+                            .font(Theme.FontScale.panelProviderName)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Text(status.health == .schemaKilled ? "provider changed format"
                          : (status.lastOutcome?.stateLine ?? "connecting…"))
-                        .font(.caption)
+                        .font(Theme.FontScale.panelStatus)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 16)
@@ -248,20 +279,11 @@ private struct GrokQuotaRow: View {
         }
     }
 
-    private func subline(_ snap: GrokQuotaSnapshot) -> String {
-        var parts: [String] = []
-        if let end = snap.periodEnd { parts.append("resets \(timeAgoOrIn(end))") }
-        parts.append("as of \(timeAgo(snap.fetchedAt))")
-        return parts.joined(separator: " · ")
+    private func compactReset(_ snap: GrokQuotaSnapshot) -> String {
+        guard let end = snap.periodEnd else { return "—" }
+        return ResetLabel.compact(fiveHourResetAt: nil, weeklyResetAt: end, now: now)
     }
 
-    private func timeAgoOrIn(_ d: Date) -> String {
-        guard d > now else { return timeAgo(d) }
-        let mins = Int(d.timeIntervalSince(now) / 60)
-        if mins >= 48 * 60 { return "in \(mins / (24 * 60))d" }
-        if mins >= 60 { return "in \(mins / 60)h" }
-        return "in \(max(1, mins))m"
-    }
 }
 
 /// 對預付餘額套配額警戒色是未經證成的 urgency 語意);teal 只是本列的識別色,
@@ -284,16 +306,16 @@ private struct OpenRouterCreditsRow: View {
                     HStack(spacing: 8) {
                         Circle().fill(Self.teal).frame(width: 8, height: 8)
                         Text("OpenRouter")
-                            .font(.callout.weight(.medium))
+                            .font(Theme.FontScale.panelProviderName)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if let age = p.age {
                             Text(age)
-                                .font(.caption).monospacedDigit()
+                                .font(Theme.FontScale.panelReset).monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
                     }
                     Text(p.detail.map { "\(p.primary) · \($0)" } ?? p.primary)
-                        .font(.caption)
+                        .font(Theme.FontScale.panelStatus)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 16)   // 對齊 dot 後的文字欄
@@ -302,13 +324,13 @@ private struct OpenRouterCreditsRow: View {
                 HStack(spacing: 8) {
                     Circle().fill(Self.teal).frame(width: 8, height: 8)
                     Text("OpenRouter")
-                        .font(.callout.weight(.medium))
+                        .font(Theme.FontScale.panelProviderName)
                         .lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .trailing, spacing: 1) {
                         HStack(spacing: 5) {
                             Text(p.primary)
-                                .font(.callout.weight(.semibold)).monospacedDigit()
+                                .font(Theme.FontScale.panelWindowValue).monospacedDigit()
                                 .lineLimit(1).minimumScaleFactor(0.85)
                             if let fraction = p.barFraction {
                                 CreditsRemainingBar(fraction: fraction, tint: Self.teal)
@@ -318,13 +340,13 @@ private struct OpenRouterCreditsRow: View {
                             // 「· stale」只補在成功形式(of $…)上;失敗形式的 detail 已是
                             // 「last $X · 2h」,再疊 stale 是重複標示(R2 grok P3-6)。
                             Text(p.stale ? "\(detail) · stale" : detail)
-                                .font(.caption2).monospacedDigit()
+                                .font(Theme.FontScale.panelMeta).monospacedDigit()
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1).minimumScaleFactor(0.85)
                         }
                     }
                     Text(p.age.map { "\($0)" } ?? "")
-                        .font(.caption).monospacedDigit()
+                        .font(Theme.FontScale.panelReset).monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 34, alignment: .trailing)
                 }

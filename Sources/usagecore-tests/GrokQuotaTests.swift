@@ -8,23 +8,45 @@ final class GrokQuotaTests: XCTestCase {
 
     private func body(_ json: String) -> Data { json.data(using: .utf8)! }
 
-    // MARK: decoder(F3 hotfix 分類;Track A:creditUsagePercent 已撤除為 weekly-quota source)
+    // MARK: decoder(billing config → snapshot)
 
-    func testValidEnvelopeNeverRendersCreditUsagePercentAsQuota() {
-        // Track A 核心 + owner 要求的 regression:creditUsagePercent(Track B 已證 ≠ Grok weekly quota)
-        // 無論何值/在否,一律 → .noUsageData(honestly unavailable),**絕不** render 成 Grok quota N%。
-        for pct in ["100.0", "41.5", "0", "1", "true", "\"41%\"", "-3", "null"] {
+    func testBillingConfigParsesProductUsageAndFallback() {
+        let end = "2026-11-21T15:57:32.752488+00:00"
+        let start = "2026-11-14T15:57:32.752488+00:00"
+        let liveShape = #"""
+        {"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(start)", "end": "\#(end)"},
+        "creditUsagePercent": 30.0, "productUsage": [{"product": "GrokBuild", "usagePercent": 30.0}],
+        "billingPeriodStart": "\#(start)", "billingPeriodEnd": "\#(end)"}}
+        """#
+        guard case .success(let snap) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(liveShape), now: now)
+        else { return XCTAssertTrue(false, "live billing shape → success") }
+        XCTAssertEqual(snap.usedPercent, 30)
+        XCTAssertEqual(snap.planName, "GrokBuild")
+        XCTAssertNotNil(snap.periodEnd)
+        XCTAssertFalse(snap.reportedPercentOverflow)
+
+        guard case .success(let fallback) = GrokQuotaEngine.parseResponse(statusCode: 200,
+            data: body(#"{"config": {"creditUsagePercent": 41.5}}"#), now: now) else {
+            return XCTAssertTrue(false, "numeric creditUsagePercent → success")
+        }
+        XCTAssertEqual(fallback.usedPercent, 41.5)
+
+        // 壞型別不造數
+        for pct in ["true", "\"41%\"", "null"] {
             XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
                 data: body("{\"config\": {\"creditUsagePercent\": \(pct)}}"), now: now), .noUsageData,
-                "creditUsagePercent=\(pct)(有效 config envelope)→ .noUsageData,不得 render 為 quota")
+                "creditUsagePercent=\(pct) → noUsageData")
         }
-        // 缺 creditUsagePercent 的真實 200(currentPeriod/billing 欄在)→ 一樣 .noUsageData(非 kill)
+
         let realAbsent = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-08-06T13:58:47.849415+00:00", "end": "2026-08-13T13:58:47.849415+00:00"}, "onDemandCap": {"val": 0}, "prepaidBalance": {"val": 0}, "billingPeriodEnd": "2026-08-13T13:58:47.849415+00:00"}}"#
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(realAbsent), now: now), .noUsageData)
-        // additive:未知頂層/巢狀欄位不改變分類
-        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-            data: body(#"{"config": {"creditUsagePercent": 42, "future": {"x": 1}}, "unknownTop": true}"#), now: now),
-            .noUsageData)
+
+        guard case .success(let hi) = GrokQuotaEngine.parseResponse(statusCode: 200,
+            data: body(#"{"config": {"creditUsagePercent": 130.0}}"#), now: now) else {
+            return XCTAssertTrue(false, "overflow → success with flag")
+        }
+        XCTAssertEqual(hi.usedPercent, 100)
+        XCTAssertTrue(hi.reportedPercentOverflow)
     }
 
     func testEnvelopeClassification() {

@@ -245,51 +245,27 @@ struct UsageHeatmap: View {
     @State private var gridCursor: CGPoint = .zero
     @State private var gridOriginInArea: CGPoint = .zero
 
+    private var byDay: [Date: DayBucket] {
+        Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private var maxV: Int { daily.map(\.tokens).max() ?? 0 }
+
+    private var weeks: [[Date?]] { weekColumns() }
+
     var body: some View {
-        let byDay = Dictionary(daily.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
-        let maxV = daily.map(\.tokens).max() ?? 0
-        let weeks = weekColumns()
         // R4(使用者反悔 R3 右卡「不直覺」):回到**游標跟隨、恆在指標右側**。
         // R3 失敗根因 = tooltip 被夾在 ~75pt 寬的格網容器 → 這次 tooltip 渲染在
         // **區塊級全寬 overlay**(named space 座標轉換;雙審 P1),內容不換行動態寬。
         ZStack(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: gap) {
-                        ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                            VStack(spacing: gap) {
-                                ForEach(0..<7, id: \.self) { row in
-                                    cellView(week[row], byDay: byDay, maxV: maxV)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.vertical, 2)
-                    // 命中沿用格網座標(捲動下仍準);同步記錄格網在區塊空間的原點,
-                    // 供 tooltip 座標轉換(grid 點 + 原點 = 區塊點)。
-                    .background(GeometryReader { geo in
-                        Color.clear
-                            .onAppear { gridOriginInArea = geo.frame(in: .named("heatmapArea")).origin }
-                            .onChange(of: geo.frame(in: .named("heatmapArea")).origin) { _, o in
-                                gridOriginInArea = o
-                            }
-                    })
-                    .overlay {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onContinuousHover(coordinateSpace: .local) { phase in
-                                switch phase {
-                                case .active(let p):
-                                    gridCursor = p
-                                    // 游標跟隨模式:gap/補齊格直接清空(codex R4 P2 —
-                                    // tooltip 跟著游標卻顯示舊日期是錯誤資訊;keep-last
-                                    // 只適用 R3 的固定卡,已隨卡一起退役)。
-                                    hoveredDay = day(at: p, weeks: weeks)
-                                case .ended:
-                                    hoveredDay = nil
-                                }
-                            }
-                    }
+                    InteractiveGrid(
+                        weeks: weeks, byDay: byDay, maxV: maxV, cell: cell, gap: gap,
+                        gridOriginInArea: $gridOriginInArea,
+                        gridCursor: $gridCursor,
+                        hoveredDay: $hoveredDay
+                    )
                 }
                 legend()
             }
@@ -312,21 +288,6 @@ struct UsageHeatmap: View {
                 .allowsHitTesting(false)
             }
         }
-    }
-
-    /// heatmap 座標 → 日(欄 = 週、列 = 週幾)。floor + 餘數判定:負座標與 gap 區
-    /// 都回 nil(Int() 對負小數朝 0 截斷會把上緣 padding 誤算成 row 0;codex P3)。
-    private func day(at p: CGPoint, weeks: [[Date?]]) -> Date? {
-        let stride = cell + gap
-        let localX = p.x
-        let localY = p.y - 2   // 上緣 padding 2
-        guard localX >= 0, localY >= 0 else { return nil }
-        let col = Int((localX / stride).rounded(.down))
-        let row = Int((localY / stride).rounded(.down))
-        guard col >= 0, col < weeks.count, row >= 0, row < 7 else { return nil }
-        // gap 區不算命中(餘數超過 cell 寬)。
-        guard localX - CGFloat(col) * stride < cell, localY - CGFloat(row) * stride < cell else { return nil }
-        return weeks[col][row]
     }
 
     private func cellView(_ day: Date?, byDay: [Date: DayBucket], maxV: Int) -> some View {
@@ -384,6 +345,82 @@ struct UsageHeatmap: View {
             weeks.append(current)
         }
         return weeks
+    }
+
+    /// 子視圖持有 `@Binding` 突變,避免 release 下在 `body` 巢狀 closure 直接寫 `@State`(immutable self)。
+    private struct InteractiveGrid: View {
+        let weeks: [[Date?]]
+        let byDay: [Date: DayBucket]
+        let maxV: Int
+        let cell: CGFloat
+        let gap: CGFloat
+        @Binding var gridOriginInArea: CGPoint
+        @Binding var gridCursor: CGPoint
+        @Binding var hoveredDay: Date?
+
+        var body: some View {
+            HStack(alignment: .top, spacing: gap) {
+                ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                    VStack(spacing: gap) {
+                        ForEach(0..<7, id: \.self) { row in
+                            cellView(week[row], byDay: byDay, maxV: maxV)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+            .background(GeometryReader { geo in
+                Color.clear
+                    .onAppear { gridOriginInArea = geo.frame(in: .named("heatmapArea")).origin }
+                    .onChange(of: geo.frame(in: .named("heatmapArea")).origin) { _, o in
+                        gridOriginInArea = o
+                    }
+            })
+            .overlay {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onContinuousHover(coordinateSpace: .local) { phase in
+                        switch phase {
+                        case .active(let p):
+                            gridCursor = p
+                            hoveredDay = day(at: p)
+                        case .ended:
+                            hoveredDay = nil
+                        }
+                    }
+            }
+        }
+
+        private func day(at p: CGPoint) -> Date? {
+            let stride = cell + gap
+            let localX = p.x
+            let localY = p.y - 2
+            guard localX >= 0, localY >= 0 else { return nil }
+            let col = Int((localX / stride).rounded(.down))
+            let row = Int((localY / stride).rounded(.down))
+            guard col >= 0, col < weeks.count, row >= 0, row < 7 else { return nil }
+            guard localX - CGFloat(col) * stride < cell, localY - CGFloat(row) * stride < cell else { return nil }
+            return weeks[col][row]
+        }
+
+        private func cellView(_ day: Date?, byDay: [Date: DayBucket], maxV: Int) -> some View {
+            let bucket = day.flatMap { byDay[$0] }
+            let tokens = bucket?.tokens ?? 0
+            let level = day == nil ? -1 : heatLevel(tokens, maxV: maxV)
+            return RoundedRectangle(cornerRadius: 2)
+                .fill(UsageHeatmap.color(for: level))
+                .frame(width: cell, height: cell)
+                .accessibilityLabel(day.map { dayTooltip(day: $0, bucket: bucket) } ?? "")
+        }
+
+        private func heatLevel(_ tokens: Int, maxV: Int) -> Int {
+            guard tokens > 0, maxV > 0 else { return 0 }
+            let ratio = Double(tokens) / Double(maxV)
+            if ratio > 0.66 { return 4 }
+            if ratio > 0.33 { return 3 }
+            if ratio > 0.10 { return 2 }
+            return 1
+        }
     }
 }
 
