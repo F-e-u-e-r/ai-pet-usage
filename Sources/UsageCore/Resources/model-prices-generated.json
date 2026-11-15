@@ -374,13 +374,13 @@
     "providerId": "antigravity",
     "modelId": "gemma-4-26b-a4b-it",
     "displayName": "Gemma 4 26B A4B ",
-    "inputPerMillion": 0.09,
-    "outputPerMillion": 0.3,
+    "inputPerMillion": 0.0675,
+    "outputPerMillion": 0.225,
     "currency": "USD",
-    "effectiveFrom": "2026-11-13",
-    "source": "openrouter.ai/api/v1/models (generated 2026-11-13)",
+    "effectiveFrom": "2026-11-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-14)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.05
+    "cacheReadPerMillion": 0.0375
   },
   {
     "providerId": "antigravity",
@@ -1047,14 +1047,14 @@
     "providerId": "codex",
     "modelId": "gpt-5.6-sol",
     "displayName": "GPT-5.6 Sol",
-    "inputPerMillion": 4.4,
-    "outputPerMillion": 22.0,
+    "inputPerMillion": 4.0,
+    "outputPerMillion": 20.0,
     "currency": "USD",
-    "effectiveFrom": "2026-11-12",
-    "source": "openrouter.ai/api/v1/models (generated 2026-11-12)",
+    "effectiveFrom": "2026-11-14",
+    "source": "openrouter.ai/api/v1/models (generated 2026-11-14)",
     "userOverride": false,
-    "cacheReadPerMillion": 0.44,
-    "cacheWrite5mPerMillion": 5.5
+    "cacheReadPerMillion": 0.4,
+    "cacheWrite5mPerMillion": 5.0
   },
   {
     "providerId": "codex",
