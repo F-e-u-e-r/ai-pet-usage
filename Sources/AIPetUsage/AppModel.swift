@@ -72,6 +72,11 @@ final class AppModel {
     /// stop() 後 fence:進行中的背景抓取(Task.detached 不受父 cancel 影響)完成時,據此不得再
     /// setCodexOfficialReadings / refreshNow(避免 teardown 後復活一次刷新)。
     private var codexStopped = false
+    /// Claude `/usage` 探針(statusline 陳舊時的備援;desktop session 不呼叫 statusLine)。
+    /// 單流 + 5 分鐘最小間隔(含手動);只在所有 Claude 讀數都陳舊時才真的 spawn。
+    private var claudeProbeGate = CodexAppServerLimits.FetchGate(minInterval: ClaudeUsageProbe.minInterval)
+    private var claudeProbeHandle: ClaudeUsageProbe.ProbeHandle?
+    private var claudeProbeTask: Task<Void, Never>?
 
     init() {
         dataDir = AppPaths.dataDirectory()
@@ -160,6 +165,8 @@ final class AppModel {
         settingsPushTask?.cancel()
         codexStopped = true           // fence:in-flight 抓取完成後不得再 apply/refresh
         codexFetchTask?.cancel()      // Source B:停止背景抓取(ProcessTransport 以 bounded timeout + teardown 自清)
+        claudeProbeTask?.cancel()     // 同 codexStopped fence
+        claudeProbeHandle?.cancel()   // 同步 SIGKILL 探針整個程序群組(detached 擷取不吃 task 取消;quit 不留孤兒)
         orCredits.setEnabled(false)
         grokQuota.setEnabled(false)   // r1 三鏡:stop 漏停 grok 會讓輪詢在 teardown 後殘留
         cursorQuota.setEnabled(false)
@@ -266,7 +273,49 @@ final class AppModel {
         await refreshNow()                          // 經既有單一權威把 B 併入顯示(此輪 min-interval 自然跳過)
     }
 
+    // MARK: - Claude `/usage` 探針(statusline 陳舊時的備援)
+
+    /// 請求一次探針。claude-code 未啟用 / 已 stop / 閘擋下 → 不做事。實際判斷是否陳舊與 spawn 都在背景。
+    func requestClaudeUsageProbe() {
+        guard !codexStopped, settings.core.enabledProviders.contains("claude-code") else { return }
+        guard claudeProbeGate.decide(now: ProcessInfo.processInfo.systemUptime) == .proceed else { return }
+        claudeProbeGate.begin()
+        claudeProbeTask = Task { [weak self] in await self?.performClaudeUsageProbe() }
+    }
+
+    private func performClaudeUsageProbe() async {
+        let dataDir = self.dataDir
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let handle = ClaudeUsageProbe.ProbeHandle()
+        claudeProbeHandle = handle
+        if codexStopped { handle.cancel() }          // stop() 早於本 task 開跑 → 不 spawn
+        defer { if claudeProbeHandle === handle { claudeProbeHandle = nil } }
+        // nil = 讀數仍新鮮,沒跑;false = 跑了但失敗(fail-soft,不寫檔);true = 寫入新落地檔。
+        let outcome: Bool? = await Task.detached(priority: .utility) {
+            // 與 adapter 預設 statuslineFiles 同一組來源(含第三方 ~/.claude/usage-status.json,缺 captured_at 退 mtime)。
+            let stamps = ClaudeUsageProbe.freshnessStamps(of: [
+                dataDir.appendingPathComponent("claude-statusline.json"),
+                home.appendingPathComponent(".claude/usage-status.json"),
+                dataDir.appendingPathComponent(ClaudeUsageProbe.landingFileName),
+            ])
+            guard ClaudeUsageProbe.shouldProbe(capturedAts: stamps, now: Date()) else { return nil }
+            guard let binary = ClaudeUsageProbe.discoverClaudeBinary() else { return false }
+            return ClaudeUsageProbe.runOnce(binary: binary,
+                                            landing: dataDir.appendingPathComponent(ClaudeUsageProbe.landingFileName),
+                                            handle: handle)
+        }.value
+        if outcome == nil {
+            // 沒 spawn → 不佔用完整最小間隔,但 30s 內不再重讀檔(FSEvents 觸發的 refresh 很頻繁)。
+            claudeProbeGate.finish(at: ProcessInfo.processInfo.systemUptime - ClaudeUsageProbe.minInterval + 30)
+        } else {
+            claudeProbeGate.finish(at: ProcessInfo.processInfo.systemUptime)
+        }
+        guard outcome == true, !codexStopped else { return }
+        await refreshNow()                             // 併入顯示(此輪閘的最小間隔自然跳過)
+    }
+
     func refreshNow() async {
+        requestClaudeUsageProbe()
         // Codex Source B hybrid(owner 2026-10-09):startup / FSEvents / 300s safety-net 全部匯流到此,
         // 故在此請求一次 off-hot-path 的 app-server 抓取(gate 做 single-flight + 60s 最小間隔,防 spawn
         // storm;抓取結束後自身會再呼叫一次 refreshNow 把 fresh B 併入顯示,屆時 min-interval 自然跳過)。

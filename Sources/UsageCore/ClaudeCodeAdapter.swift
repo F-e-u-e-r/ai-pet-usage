@@ -50,6 +50,9 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                 AppPaths.dataDirectory().appendingPathComponent("claude-statusline.json"),
                 // 其他 statusline 工具常見的落地位置(同為官方 payload 原文)
                 home.appendingPathComponent(".claude/usage-status.json"),
+                // `/usage` 探針(ClaudeUsageProbe)的落地檔,同 schema;desktop-only 時的備援來源。
+                // 必須排在最後:diagnosticSources() 以 zip 對前兩個候選配專屬 id。
+                AppPaths.dataDirectory().appendingPathComponent(ClaudeUsageProbe.landingFileName),
             ]
         }
     }
@@ -84,7 +87,7 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     }
 
     public func explainDataSources() -> String {
-        "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times; optional model_scoped weekly windows such as Fable) when a statusline hook saves it locally, and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never extracted, retained, or emitted."
+        "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times; optional model_scoped weekly windows such as Fable) when a statusline hook saves it locally; when that reading is stale it runs `claude /usage` in a hidden terminal (no credentials read) and keeps only the displayed used percents and reset times; and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never extracted, retained, or emitted."
     }
 
     public func explainRequiredPermissions() -> String {
@@ -210,12 +213,12 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     // MARK: - Model-scoped weekly limits (e.g. Fable)
 
   /// Reads `model_scoped` (and legacy `seven_day_overage_included` mapped to Fable) from statusline landing files.
+    /// 多檔(hook 落地檔 / `/usage` 探針落地檔)**逐項**取該項自己 observedAt 最新者:
+    /// hook 會把舊 Fable 項帶著原始 `observed_at` 沿用進新檔(檔案 captured_at 很新),
+    /// 以「整檔 captured_at」挑檔會讓這份舊值蓋過探針剛讀到的 Fable。
     public static func readModelScopedLimits(from urls: [URL]) -> [ModelScopedLimitWindow] {
-        struct Candidate {
-            var items: [ModelScopedLimitWindow]
-            var observedAt: Date
-        }
-        var best: Candidate?
+        var best: [String: ModelScopedLimitWindow] = [:]
+        var order: [String] = []
         for url in urls {
             guard let data = try? Data(contentsOf: url),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject else { continue }
@@ -223,13 +226,17 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                 .flatMap { $0 } ?? Date()
             let captured = (obj["captured_at"] as? String).flatMap { ISO8601.parse($0) }
             let observedAt = captured ?? mtime
-            let items = parseModelScopedPayload(obj, observedAt: observedAt)
-            guard !items.isEmpty else { continue }
-            if best.map({ observedAt > $0.observedAt }) ?? true {
-                best = Candidate(items: items, observedAt: observedAt)
+            for item in parseModelScopedPayload(obj, observedAt: observedAt) {
+                let key = item.displayName.lowercased()
+                if let cur = best[key] {
+                    if item.observedAt > cur.observedAt { best[key] = item }
+                } else {
+                    best[key] = item
+                    order.append(key)
+                }
             }
         }
-        return best?.items ?? []
+        return order.compactMap { best[$0] }
     }
 
     private static func parseModelScopedPayload(_ obj: JSONObject, observedAt: Date) -> [ModelScopedLimitWindow] {

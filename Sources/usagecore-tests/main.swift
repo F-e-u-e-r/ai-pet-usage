@@ -1408,4 +1408,29 @@ runSuite("ClaudeStatuslineStalenessTests", [
     ("testWidgetRowMarksOnlyStaleClaudeWeekly", claudeStaleness.testWidgetRowMarksOnlyStaleClaudeWeekly),
 ])
 
+let claudeProbe = ClaudeUsageProbeTests()
+runSuite("ClaudeUsageProbeTests", [
+    ("testRenderTextTurnsCursorMovesIntoSpaces", claudeProbe.testRenderTextTurnsCursorMovesIntoSpaces),
+    ("testParseRealScreenLimits", claudeProbe.testParseRealScreenLimits),
+    ("testParseUsesLastFrameNotCachedFirstFrame", claudeProbe.testParseUsesLastFrameNotCachedFirstFrame),
+    ("testParseSessionWithNoUsageHasNoReset", claudeProbe.testParseSessionWithNoUsageHasNoReset),
+    ("testParseNeverFabricates", claudeProbe.testParseNeverFabricates),
+    ("testParseResetFormats", claudeProbe.testParseResetFormats),
+    ("testShouldProbeOnlyWhenEverySourceIsStale", claudeProbe.testShouldProbeOnlyWhenEverySourceIsStale),
+    ("testProbeLandingMergesIntoAdapterAndBeatsCarriedFable", claudeProbe.testProbeLandingMergesIntoAdapterAndBeatsCarriedFable),
+    ("testDefaultStatuslineFilesKeepDiagnosticIds", claudeProbe.testDefaultStatuslineFilesKeepDiagnosticIds),
+    ("testParseIgnoresLinesFromUnknownSections", claudeProbe.testParseIgnoresLinesFromUnknownSections),
+    ("testUsedPercentRejectsSeparatedNumbers", claudeProbe.testUsedPercentRejectsSeparatedNumbers),
+    ("testParseResetEdgeDates", claudeProbe.testParseResetEdgeDates),
+    ("testRenderTextBreaksLinesOnRowMoves", claudeProbe.testRenderTextBreaksLinesOnRowMoves),
+    ("testProbeEnvironmentKeepsOnlyClaudeConfigDir", claudeProbe.testProbeEnvironmentKeepsOnlyClaudeConfigDir),
+    ("testFreshnessStampsUseCapturedAtThenMtime", claudeProbe.testFreshnessStampsUseCapturedAtThenMtime),
+    ("testCaptureWaitsForRefreshToFinish", claudeProbe.testCaptureWaitsForRefreshToFinish),
+    ("testCaptureGivesUpWhileStillRefreshing", claudeProbe.testCaptureGivesUpWhileStillRefreshing),
+    ("testCaptureTeardownKillsStubbornDescendants", claudeProbe.testCaptureTeardownKillsStubbornDescendants),
+    ("testCancelKillsProbeGroupAndWritesNothing", claudeProbe.testCancelKillsProbeGroupAndWritesNothing),
+    ("testCaptureRejectsQuietFragmentOfRefreshingPage", claudeProbe.testCaptureRejectsQuietFragmentOfRefreshingPage),
+    ("testParseResetRepeatedDSTHour", claudeProbe.testParseResetRepeatedDSTHour),
+])
+
 finishTestRun()
