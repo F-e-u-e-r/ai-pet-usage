@@ -242,11 +242,14 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
     public var corrected: Bool
     public var correctedAt: Date?
     public var correctedReason: CorrectionReason?
+    /// 官方讀數的觀測時間(provider 回報值才有;帳本估算為 nil)。UI 據此標示年齡(StatuslineAge)。
+    public var observedAt: Date?
 
     public init(usedPercent: Double? = nil, usedTokens: Int? = nil, budgetTokens: Int? = nil,
                 resetAt: Date? = nil, windowMinutes: Int, confidence: Confidence, idle: Bool = false,
                 corrected: Bool = false,
-                correctedAt: Date? = nil, correctedReason: CorrectionReason? = nil) {
+                correctedAt: Date? = nil, correctedReason: CorrectionReason? = nil,
+                observedAt: Date? = nil) {
         // 使用率天花板 100%:官方讀值或預算估算(tokens/budget×100)可能回報 >100,
         // 對外一律夾到 [0, 100],避免 UI 出現 101% / 103%。
         self.usedPercent = usedPercent.map { min(100, max(0, $0)) }
@@ -259,6 +262,7 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
         self.corrected = corrected
         self.correctedAt = correctedAt
         self.correctedReason = correctedReason
+        self.observedAt = observedAt
     }
 }
 

@@ -1606,8 +1606,9 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertEqual(back.fiveHour.confidence, .high)
     }
 
-    func testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback() {
-        // 剛過期的官方讀值仍代表最近狀態;只有 24h 內都沒有新讀值時才交回預算後備。
+    func testClaudeExpiredFiveHourFallsBackToEstimateRightAfterReset() {
+        // 5h reset 已過、沒有新讀值 → 官方值不再可信(帳本看不到 claude.ai 等共用額度的用量,
+        // 「recovered 0%」是捏造),立即交回估算路徑;舊的「24h 內 hold 0%」規則已撤銷。
         var s = settings
         s.claudeFiveHourTokenBudget = 1000
         let engine = LimitEngine(stateURL: nil)
@@ -1626,9 +1627,10 @@ final class LimitEngineTests: XCTestCase {
                                   tokens: TokenBreakdown(input: 800), sourceKind: "test")])
         let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: s,
                                       now: date("2026-01-15T11:00:00Z"))
-        XCTAssertEqual(state.fiveHour.usedPercent, 0)
+        XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "reset 已過 → 預算估算,不 hold 0%")
         XCTAssertEqual(state.fiveHour.confidence, .estimated)
-        XCTAssertNil(state.fiveHour.budgetTokens, "24h 內的過期官方讀值不得立刻啟用預算後備")
+        XCTAssertEqual(state.fiveHour.budgetTokens, 1000)
+        XCTAssertEqual(state.fiveHourOfficial, .expiredUnusable)
     }
 
     func testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated() {
@@ -1702,9 +1704,9 @@ final class LimitEngineTests: XCTestCase {
         XCTAssertEqual(back.fiveHour.confidence, .high)
     }
 
-    func testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset() {
-        // reset 邊界競態:活動只領先官方檔 30 秒(≤ 容差)→ 仍信任官方「已恢復」狀態,
-        // 避免 hook 正常運作時在 reset 當下閃爍成估算值。
+    func testClaudeExpiredFiveHourDoesNotHoldRecoveredZeroAtResetBoundary() {
+        // reset 邊界:即使活動只領先官方檔 30 秒(≤ 容差),reset 已過的官方讀值也不再顯示
+        // 「已恢復 0%」—— 下一筆 hook 讀數到來前一律交回估算(無 budget 時為未知)。
         var s = settings
         s.claudeFiveHourTokenBudget = 1000
         let engine = LimitEngine(stateURL: nil)
@@ -1723,9 +1725,9 @@ final class LimitEngineTests: XCTestCase {
                                   tokens: TokenBreakdown(input: 800), sourceKind: "test")])
         let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: s,
                                       now: date("2026-01-15T10:31:00Z"))
-        XCTAssertEqual(state.fiveHour.usedPercent, 0, "容差內的競態不應觸發估算後備")
+        XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "reset 已過 → 估算,不 hold 0%")
         XCTAssertEqual(state.fiveHour.confidence, .estimated)
-        XCTAssertNil(state.fiveHour.budgetTokens)
+        XCTAssertEqual(state.fiveHour.budgetTokens, 1000)
     }
 
     /// M1(D6/D47):`fiveHourOfficial` / `weeklyOfficial` 逐窗口鏡射既有仲裁(persisted && useOfficial → usable、
@@ -1787,8 +1789,8 @@ final class LimitEngineTests: XCTestCase {
             XCTAssertNil(ReportedLimitText.render(field: r.fiveHour, cue: r.cue, now: date("2026-01-15T11:00:00Z")).gaugePercent)
         }
 
-        // (c) row (iv) expired-hold 形狀 = testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback:
-        //     5h persisted-usable(過期但 24h 內、無活動反證)+ weekly nil → usable/absent;weeklyOfficial 直接釘 .absent(D47)。
+        // (c) 過期 5h 形狀 = testClaudeExpiredFiveHourFallsBackToEstimateRightAfterReset:
+        //     5h reset 已過(無活動反證亦然)→ expiredUnusable;weekly nil → absent(D47)。
         do {
             let engine = LimitEngine(stateURL: nil)
             _ = engine.ingestTransitions(readings: [RateLimitReading(
@@ -1798,17 +1800,17 @@ final class LimitEngineTests: XCTestCase {
             let ledger = UsageLedger(fileURL: nil)
             ledger.append([claudeEvent("2026-01-15T10:07:00Z")])
             let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-15T11:00:00Z"))
-            XCTAssertEqual(state.fiveHour.usedPercent, 0, "(c) 既有仲裁不變:hold 0%")
-            XCTAssertEqual(state.fiveHourOfficial, .usable, "(c) 5h hold 仍是 usable")
+            XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "(c) reset 已過 → 估算,不 hold 0%")
+            XCTAssertEqual(state.fiveHourOfficial, .expiredUnusable, "(c) 5h reset 已過 → 不可用")
             XCTAssertEqual(state.weeklyOfficial, .absent, "(c) D47:weekly slot nil → absent(不從 mixed return 反推)")
             let r = carrier(state)
-            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading), "(c) 規則 6(usable ∧ estimated)")
+            XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading), "(c)")
             XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet), "(c) 規則 7")
-            XCTAssertFalse(r.fiveHourEstimateActive, "(c) hold 中 5h 估算列 inactive")
+            XCTAssertTrue(r.fiveHourEstimateActive, "(c) 5h 估算列 active")
             XCTAssertTrue(r.weeklyEstimateActive, "(c) weekly absent → 估算列 active")
         }
 
-        // (d) row (iv) scan-race 形狀 = testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset。
+        // (d) reset 邊界形狀 = testClaudeExpiredFiveHourDoesNotHoldRecoveredZeroAtResetBoundary。
         do {
             let engine = LimitEngine(stateURL: nil)
             _ = engine.ingestTransitions(readings: [RateLimitReading(
@@ -1818,13 +1820,13 @@ final class LimitEngineTests: XCTestCase {
             let ledger = UsageLedger(fileURL: nil)
             ledger.append([claudeEvent("2026-01-15T10:30:20Z")])
             let state = engine.limitState(providerId: "claude-code", ledger: ledger, settings: budgeted, now: date("2026-01-15T10:31:00Z"))
-            XCTAssertEqual(state.fiveHour.usedPercent, 0, "(d) 既有仲裁不變")
-            XCTAssertEqual(state.fiveHourOfficial, .usable, "(d)")
+            XCTAssertEqual(state.fiveHour.usedPercent!, 80, accuracy: 0.01, "(d) reset 已過 → 估算")
+            XCTAssertEqual(state.fiveHourOfficial, .expiredUnusable, "(d)")
             XCTAssertEqual(state.weeklyOfficial, .absent, "(d) D47")
             let r = carrier(state)
             XCTAssertEqual(r.fiveHour, .temporarilyUnavailable(.awaitingFreshReading))
             XCTAssertEqual(r.weekly, .temporarilyUnavailable(.noReadingYet))
-            XCTAssertFalse(r.fiveHourEstimateActive)
+            XCTAssertTrue(r.fiveHourEstimateActive)
             XCTAssertTrue(r.weeklyEstimateActive)
         }
 

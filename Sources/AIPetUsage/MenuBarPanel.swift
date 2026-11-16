@@ -238,7 +238,14 @@ private struct ProviderStatusRow: View {
                   .help("Provider reported a value above 100% — shown clamped")
           }
           let lbl = CursorChromeDisplay.usesMonthlyOnlyMeter(state.providerId) ? "mo" : "wk"
-          windowText(lbl, state.weekly)
+          if let asOf = StatuslineAge.weeklyAsOfLabel(for: state, now: now) {
+              // 舊讀數:保留數值但淡化,年齡見 tooltip / a11y(欄寬已實測,不在格內加字)
+              windowText(lbl, state.weekly)
+                  .opacity(0.55)
+                  .help("Weekly \(asOf) — Claude Code statusline has not refreshed since")
+          } else {
+              windowText(lbl, state.weekly)
+          }
       }
       .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
   }
@@ -272,7 +279,8 @@ private struct ProviderStatusRow: View {
         func win(_ w: LimitWindowState) -> String {
             w.idle ? "idle" : (w.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")
         }
-        return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly)). "
+        let weeklyAge = StatuslineAge.weeklyAsOfLabel(for: state, now: now).map { " (\($0))" } ?? ""
+        return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly))\(weeklyAge). "
             + ResetLabel.accessibility(fiveHourResetAt: state.fiveHour.resetAt,
                                        weeklyResetAt: state.weekly.resetAt, now: now)
     }

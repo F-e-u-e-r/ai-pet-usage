@@ -164,8 +164,11 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject,
                   let limits = obj.obj("rate_limits") else { continue } // 半寫入/壞 JSON → 跳過該檔
 
-            let observedAt = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
+            // observedAt = hook 寫入的 captured_at(讀數真正的時間);缺鍵(舊 hook / 第三方落地)才退 mtime。
+            // 只看 mtime 時,複製/touch/備份還原檔案都會讓數小時前的讀數看起來是剛剛的。
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
                 .flatMap { $0 } ?? Date()
+            let observedAt = (obj["captured_at"] as? String).flatMap { ISO8601.parse($0) } ?? mtime
 
             func window(_ key: String, minutes: Int) -> RateLimitWindowReading? {
                 guard let w = limits.obj(key),
@@ -233,12 +236,12 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         var out: [ModelScopedLimitWindow] = []
         var seen = Set<String>()
 
-        func add(name: String, percent: Double, resetsAt: Date?) {
+        func add(name: String, percent: Double, resetsAt: Date?, entryObservedAt: Date? = nil) {
             let key = name.lowercased()
             guard !key.isEmpty, !seen.contains(key) else { return }
             seen.insert(key)
             out.append(ModelScopedLimitWindow(displayName: name, usedPercent: percent, resetsAt: resetsAt,
-                                            observedAt: observedAt))
+                                            observedAt: entryObservedAt ?? observedAt))
         }
 
         func ingestScopedList(_ scoped: [Any]) {
@@ -247,7 +250,9 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                       !name.isEmpty else { continue }
                 guard let percent = scopedPercent(item) else { continue }
                 let resets = resetsAt(from: item)
-                add(name: name, percent: percent, resetsAt: resets)
+                // hook 沿用上一份檔的項目時會帶 `observed_at`(該項原始讀取時間),不得借用新檔的 captured_at。
+                let entryObservedAt = (item["observed_at"] as? String).flatMap { ISO8601.parse($0) }
+                add(name: name, percent: percent, resetsAt: resets, entryObservedAt: entryObservedAt)
             }
         }
         if let scoped = obj["model_scoped"] as? [Any] {

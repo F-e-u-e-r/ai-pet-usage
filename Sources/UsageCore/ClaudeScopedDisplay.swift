@@ -1,5 +1,29 @@
 import Foundation
 
+/// 「as of …」年齡標籤:provider 回報值(Claude statusline 週窗 / model-scoped)超過門檻仍保留數值,
+/// 但必須標出讀數年齡 —— desktop(Code tab)session 不呼叫 statusline hook,讀數可能停更數小時。
+public enum StatuslineAge {
+    /// 30 分鐘:hook 在 terminal session 活躍時每次刷新都寫檔,半小時沒更新已足以代表「不是即時值」,
+    /// 又不會在正常的短暫閒置中頻繁閃現標籤。
+    public static let labelThreshold: TimeInterval = 30 * 60
+
+    /// 年齡 ≤ 門檻、無觀測時間 → nil;否則 "as of 45m ago" / "as of 10h ago" / "as of 2d ago"。
+    public static func asOfLabel(observedAt: Date?, now: Date) -> String? {
+        guard let observedAt else { return nil }
+        let age = now.timeIntervalSince(observedAt)
+        guard age > labelThreshold else { return nil }
+        if age < 3600 { return "as of \(Int(age / 60))m ago" }
+        if age < 86400 { return "as of \(Int(age / 3600))h ago" }
+        return "as of \(Int(age / 86400))d ago"
+    }
+
+    /// 只對 Claude 帳戶列與 model-scoped 列的週窗標示(其他 provider 有各自的陳舊度呈現)。
+    public static func weeklyAsOfLabel(for state: ProviderLimitState, now: Date) -> String? {
+        guard ClaudeScopedDisplay.isClaudeChromeId(state.providerId), state.weekly.usedPercent != nil else { return nil }
+        return asOfLabel(observedAt: state.weekly.observedAt, now: now)
+    }
+}
+
 /// Splits Claude Code account limits vs model-scoped weekly buckets (e.g. Fable) for chrome surfaces.
 public enum ClaudeScopedDisplay {
     public static let fableId = "claude-code-fable"
@@ -80,7 +104,8 @@ public enum ClaudeScopedDisplay {
             resetAt: row.resetsAt,
             windowMinutes: 10_080,
             confidence: .high,
-            idle: false)
+            idle: false,
+            observedAt: row.observedAt)
         let five = LimitWindowState(windowMinutes: 300, confidence: .high, idle: true)
         return ProviderLimitState(
             providerId: providerId,

@@ -276,10 +276,10 @@ runSuite("LimitEngineTests", [
     ("testExpiredWindowShowsRecoveredAndSweepEmitsReset", limits.testExpiredWindowShowsRecoveredAndSweepEmitsReset),
     ("testClaudeOfficialReadingsBeatBudgetEstimation", limits.testClaudeOfficialReadingsBeatBudgetEstimation),
     ("testClaudeStaleReadingsFallBackToBudget", limits.testClaudeStaleReadingsFallBackToBudget),
-    ("testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback", limits.testClaudeExpiredReadingsWaitTwentyFourHoursBeforeBudgetFallback),
+    ("testClaudeExpiredFiveHourFallsBackToEstimateRightAfterReset", limits.testClaudeExpiredFiveHourFallsBackToEstimateRightAfterReset),
     ("testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated", limits.testClaudeFiveHourFallsBackEvenWhenWeeklyReadingIsStillFutureDated),
     ("testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity", limits.testClaudeExpiredFiveHourFallsBackImmediatelyWhenLedgerShowsPostResetActivity),
-    ("testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset", limits.testClaudeExpiredFiveHourToleratesScanRaceRightAfterReset),
+    ("testClaudeExpiredFiveHourDoesNotHoldRecoveredZeroAtResetBoundary", limits.testClaudeExpiredFiveHourDoesNotHoldRecoveredZeroAtResetBoundary),
     ("testClaudeFiveHourBlocks", limits.testClaudeFiveHourBlocks),
     ("testClaudeIdleFiveHourShowsIdleNotFakePercent", limits.testClaudeIdleFiveHourShowsIdleNotFakePercent),
     ("testClaudeBudgetPercentAndEstimatedReset", limits.testClaudeBudgetPercentAndEstimatedReset),
@@ -1393,6 +1393,19 @@ runSuite("WidgetSnapshotTests", [
     ("testReadNewestEmptySnapshotClearsStaleData", widgetSnapshot.testReadNewestEmptySnapshotClearsStaleData),
     ("testWidgetExtensionReadPrefersSupportBeforeShared", widgetSnapshot.testWidgetExtensionReadPrefersSupportBeforeShared),
     ("testStoreRoundTripInSupportPath", widgetSnapshot.testStoreRoundTripInSupportPath),
+])
+
+let claudeStaleness = ClaudeStatuslineStalenessTests()
+runSuite("ClaudeStatuslineStalenessTests", [
+    ("testFiveHourPastResetIsUnknownNotRecoveredZero", claudeStaleness.testFiveHourPastResetIsUnknownNotRecoveredZero),
+    ("testFiveHourWithoutResetIsUnknownOnceOlderThanFiveHours", claudeStaleness.testFiveHourWithoutResetIsUnknownOnceOlderThanFiveHours),
+    ("testRateLimitObservedAtUsesCapturedAtNotMtime", claudeStaleness.testRateLimitObservedAtUsesCapturedAtNotMtime),
+    ("testCarriedModelScopedEntryKeepsItsOwnObservedAt", claudeStaleness.testCarriedModelScopedEntryKeepsItsOwnObservedAt),
+    ("testHookCarriesModelScopedWithOriginalTimestamp", claudeStaleness.testHookCarriesModelScopedWithOriginalTimestamp),
+    ("testHookPayloadWithoutRateLimitsKeepsPreviousFile", claudeStaleness.testHookPayloadWithoutRateLimitsKeepsPreviousFile),
+    ("testAsOfLabelThreshold", claudeStaleness.testAsOfLabelThreshold),
+    ("testWeeklyAndScopedValuesKeepValueButCarryAge", claudeStaleness.testWeeklyAndScopedValuesKeepValueButCarryAge),
+    ("testWidgetRowMarksOnlyStaleClaudeWeekly", claudeStaleness.testWidgetRowMarksOnlyStaleClaudeWeekly),
 ])
 
 finishTestRun()

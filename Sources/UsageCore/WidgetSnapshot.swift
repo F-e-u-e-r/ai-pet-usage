@@ -41,6 +41,9 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
     public var fiveHourPercent: Int?
     public var weeklyPercent: Int?
     public var idle: Bool
+    /// 週窗值的讀數時間 —— 僅在讀數已超過 `StatuslineAge.labelThreshold` 時設定(Claude 列),
+    /// widget 據此顯示「as of …」;nil = 即時值或非 Claude 列。
+    public var weeklyAsOf: Date?
 
     public var id: String { providerId }
 
@@ -51,7 +54,8 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         dotColor: UInt32,
         fiveHourPercent: Int?,
         weeklyPercent: Int?,
-        idle: Bool
+        idle: Bool,
+        weeklyAsOf: Date? = nil
     ) {
         self.providerId = providerId
         self.shortName = shortName
@@ -60,6 +64,7 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         self.fiveHourPercent = fiveHourPercent
         self.weeklyPercent = weeklyPercent
         self.idle = idle
+        self.weeklyAsOf = weeklyAsOf
     }
 }
 
@@ -229,7 +234,9 @@ public enum WidgetSnapshotBuilder {
                 dotColor: meta.dotColor,
                 fiveHourPercent: five,
                 weeklyPercent: week,
-                idle: idle
+                idle: idle,
+                weeklyAsOf: StatuslineAge.weeklyAsOfLabel(for: st, now: dashboard.generatedAt) != nil
+                    ? st.weekly.observedAt : nil
             ))
         }
 

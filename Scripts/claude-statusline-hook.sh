@@ -12,8 +12,10 @@
 #    "model":{"id":<str|null>,"display_name":<str|null>} 或 null,
 #    "rate_limits":{"five_hour":{"used_percentage":<num>[,"resets_at":<num>]},
 #                   "seven_day":{...}},
-#    "model_scoped":[{"display_name":<str>,"used_percentage":<num>[,"resets_at":<num>]}…]}
-#   (optional; includes Fable when Claude Code sends model_scoped or seven_day_overage_included)
+#    "model_scoped":[{"display_name":<str>,"used_percentage":<num>[,"resets_at":<num>]
+#                     [,"observed_at":"<UTC ISO8601>"]}…]}
+#   (optional; includes Fable when Claude Code sends model_scoped or seven_day_overage_included;
+#    entries carried over from the previous file keep their original observed_at)
 # 只在至少一個窗口「可用」(used_percentage 為有限數值;bool/NaN/Inf 不算)時才寫檔;
 # payload 缺 rate_limits 或全窗不可用時**保留上一份好檔**(新鮮度由 app 依 mtime 判定)。
 #
@@ -221,15 +223,38 @@ if isinstance(m, dict):
 
 tmp_path = sys.argv[1] if len(sys.argv) > 1 else ""
 dest_path = sys.argv[2] if len(sys.argv) > 2 else ""
-if not model_scoped_out and dest_path and os.path.isfile(dest_path):
+# payload 沒帶 model_scoped 時沿用上一份檔的項目,但每項保留**自己的原始讀取時間**
+# (observed_at;首次沿用取上一份檔的 captured_at),app 據此標示年齡 —— 不得被新檔的
+# captured_at 洗成「剛剛」。丟棄會讓 Fable 列在 payload 間歇缺欄時閃爍消失,故選保留+時間戳。
+# 時間戳不可考(非字串或格式不符)的項目直接丟掉:無法誠實標示年齡就不沿用。
+# 只在本次確有帳戶窗(rl)要落地時才沿用:單靠沿用項不得觸發寫檔,否則會以空
+# rate_limits + 新 captured_at 覆蓋上一份好檔。
+def iso_utc(v):
+    v = safe_str(v)
+    if v is None:
+        return None
+    try:
+        datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    return v
+
+if rl and not model_scoped_out and dest_path and os.path.isfile(dest_path):
     try:
         with open(dest_path, encoding="utf-8") as prev_f:
             prev = json.load(prev_f)
         prev_scoped = prev.get("model_scoped")
-        if isinstance(prev_scoped, list) and prev_scoped:
-            model_scoped_out = [e for e in prev_scoped if isinstance(e, dict)]
+        prev_captured = iso_utc(prev.get("captured_at"))
+        if isinstance(prev_scoped, list):
+            for item in prev_scoped:
+                e = scoped_entry(item)
+                seen_at = iso_utc(item.get("observed_at")) if isinstance(item, dict) else None
+                seen_at = seen_at or prev_captured
+                if e is not None and seen_at is not None:
+                    e["observed_at"] = seen_at
+                    model_scoped_out.append(e)
     except Exception:
-        pass
+        model_scoped_out = []
 
 if (rl or model_scoped_out) and tmp_path:
     out = {"schema_version": 1,
