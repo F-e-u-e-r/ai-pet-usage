@@ -13,7 +13,8 @@ struct UsageTimelineProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
-        completion(UsageEntry(date: Date(), snapshot: WidgetSnapshotStore.read(from: .widgetExtension) ?? .preview))
+        let snap = WidgetSnapshotStore.read(from: .widgetExtension) ?? .empty
+        completion(UsageEntry(date: Date(), snapshot: snap))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
@@ -34,7 +35,7 @@ extension WidgetSnapshot {
             WidgetSnapshotRow(providerId: "codex", shortName: "Codex", code: "CX", dotColor: 0x3B82F6,
                               fiveHourPercent: 42, weeklyPercent: 61, idle: false),
             WidgetSnapshotRow(providerId: "grok-code", shortName: "Grok", code: "GK", dotColor: 0x2E3138,
-                              fiveHourPercent: 18, weeklyPercent: nil, idle: false),
+                              fiveHourPercent: nil, weeklyPercent: 18, idle: false),
             WidgetSnapshotRow(providerId: "opencode", shortName: "OpenCode", code: "OC", dotColor: 0xCA8A04,
                               fiveHourPercent: nil, weeklyPercent: 33, idle: false),
         ]

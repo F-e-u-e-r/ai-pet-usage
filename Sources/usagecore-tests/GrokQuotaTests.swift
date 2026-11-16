@@ -27,6 +27,11 @@ final class GrokQuotaTests: XCTestCase {
                 data: body("{\"config\": {\"creditUsagePercent\": \(pct)}}"), now: now), .noUsageData,
                 "non-numeric creditUsagePercent=\(pct) → .noUsageData")
         }
+        for bad in ["NaN", "Infinity", "-Infinity"] {
+            XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
+                data: body("{\"config\": {\"creditUsagePercent\": \(bad)}}"), now: now), .invalidBody,
+                "non-JSON-safe creditUsagePercent=\(bad)")
+        }
         let realAbsent = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-08-06T13:58:47.849415+00:00", "end": "2026-08-13T13:58:47.849415+00:00"}, "onDemandCap": {"val": 0}, "prepaidBalance": {"val": 0}, "billingPeriodEnd": "2026-08-13T13:58:47.849415+00:00"}}"#
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(realAbsent), now: now), .noUsageData)
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
@@ -310,8 +315,8 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertEqual(merged.weekly.usedPercent, 12)
         XCTAssertNil(merged.todayActivityPercent)
         let logsOnly = GrokChromeDisplay.normalizeLimitState(base, officialQuota: nil)
-        XCTAssertEqual(logsOnly.weekly.usedPercent, 33)
-        XCTAssertNil(logsOnly.todayActivityPercent)
+        XCTAssertNil(logsOnly.weekly.usedPercent)
+        XCTAssertEqual(logsOnly.todayActivityPercent, 33)
         let fromUnified = ProviderLimitState(
             providerId: "grok-code",
             fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
@@ -320,5 +325,17 @@ final class GrokQuotaTests: XCTestCase {
         let unifiedNorm = GrokChromeDisplay.normalizeLimitState(fromUnified, officialQuota: nil)
         XCTAssertEqual(unifiedNorm.weekly.usedPercent, 30)
         XCTAssertNil(unifiedNorm.todayActivityPercent)
+
+        // 契約:Grok 無 5h 配額 —— 無官方 credits 時 logs 帶來的 18% 也必須清空。
+        let logsWithFiveHour = ProviderLimitState(
+            providerId: "grok-code",
+            fiveHour: LimitWindowState(usedPercent: 18, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(usedPercent: 30, windowMinutes: 10_080, confidence: .high),
+            todayActivityPercent: nil)
+        let noFiveHour = GrokChromeDisplay.normalizeLimitState(logsWithFiveHour, officialQuota: nil)
+        XCTAssertNil(noFiveHour.fiveHour.usedPercent, "officialQuota == nil 時 5h % 仍須清空")
+        XCTAssertEqual(noFiveHour.fiveHour.windowMinutes, 300)
+        XCTAssertEqual(noFiveHour.fiveHour.confidence, .unknown)
+        XCTAssertEqual(noFiveHour.weekly.usedPercent, 30)
     }
 }

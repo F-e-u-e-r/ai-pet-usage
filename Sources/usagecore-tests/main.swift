@@ -1385,6 +1385,12 @@ runSuite("ReportPricingDisplayTests", [
 let widgetSnapshot = WidgetSnapshotTests()
 runSuite("WidgetSnapshotTests", [
     ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
+    ("testBuilderIgnoresNonFinitePercents", widgetSnapshot.testBuilderIgnoresNonFinitePercents),
+    ("testIsPopulatedRejectsEmptyPreviewShapedSnapshot", widgetSnapshot.testIsPopulatedRejectsEmptyPreviewShapedSnapshot),
+    ("testOverrideMirrorRootIsNeverChmodded", widgetSnapshot.testOverrideMirrorRootIsNeverChmodded),
+    ("testSharedMirrorRejectsSymlinkedUIDDirectory", widgetSnapshot.testSharedMirrorRejectsSymlinkedUIDDirectory),
+    ("testReadPrefersNewestPopulatedSnapshotAcrossLocations", widgetSnapshot.testReadPrefersNewestPopulatedSnapshotAcrossLocations),
+    ("testReadNewestEmptySnapshotClearsStaleData", widgetSnapshot.testReadNewestEmptySnapshotClearsStaleData),
     ("testWidgetExtensionReadPrefersSupportBeforeShared", widgetSnapshot.testWidgetExtensionReadPrefersSupportBeforeShared),
     ("testStoreRoundTripInSupportPath", widgetSnapshot.testStoreRoundTripInSupportPath),
 ])

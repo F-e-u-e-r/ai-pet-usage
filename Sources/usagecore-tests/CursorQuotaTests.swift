@@ -43,7 +43,7 @@ final class CursorQuotaTests: XCTestCase {
 
     func testPartitionAndMenuSegmentsGroupCursorMeters() {
         let base = ProviderLimitState(
-            providerId: "codex",
+            providerId: "cursor-ide",
             fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
             weekly: LimitWindowState(windowMinutes: 10_080, confidence: .unknown),
             burnRateTokensPerHour: 0,

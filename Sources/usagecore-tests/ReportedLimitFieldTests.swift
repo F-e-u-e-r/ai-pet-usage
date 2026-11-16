@@ -673,7 +673,11 @@ final class ReportedLimitFieldTests: XCTestCase {
                     switch capability {
                     case .notProvided:
                         XCTAssertEqual(out, .notProvidedBySource, "\(providerId) \(kind) \(name)")
-                    case .provides:
+                    case .provides(let windows):
+                        if !windows.contains(kind) {
+                            XCTAssertEqual(out, .notProvidedBySource, "\(providerId) \(kind) \(name)")
+                            continue
+                        }
                         XCTAssertFalse(out == .notProvidedBySource, "\(providerId) \(kind) \(name)")
                         XCTAssertFalse(out == .unknownCapability, "\(providerId) \(kind) \(name)")
                     }

@@ -660,7 +660,7 @@ final class UsageRingModelTests: XCTestCase {
         XCTAssertEqual(UsageRingModel.diameter(index: 1, count: 2, petSize: s), base)
         // 單家 = base;四家最外 = base+39 = 容量外徑。
         XCTAssertEqual(UsageRingModel.diameter(index: 0, count: 1, petSize: s), base)
-        XCTAssertEqual(UsageRingModel.diameter(index: 0, count: 4, petSize: s),
+        XCTAssertEqual(UsageRingModel.diameter(index: 0, count: UsageRingModel.capacity, petSize: s),
                        UsageRingModel.capacityOuterDiameter(petSize: s))
         // 最內環永不小於 base(不回蓋 sprite;codex P1 的幾何釘)。
         for n in 1...4 {

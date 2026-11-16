@@ -301,7 +301,9 @@ final class ProviderBrandTests: XCTestCase {
     }
 
     func testIdentityDotsAreStableAndDistinct() {
-        let dots = ProviderBrands.known.map(\.dotColor)
+        // Chrome-split ids (AG/Cursor buckets) intentionally share parent identity colors.
+        let primaryIds = ["antigravity", "claude-code", "codex", "grok-code", "opencode", "cursor-ide"]
+        let dots = primaryIds.map { ProviderBrands.brand(for: $0).dotColor }
         XCTAssertEqual(Set(dots).count, dots.count, "各 provider 身分色必須互異")
         XCTAssertTrue(ProviderBrands.brand(for: "grok-code").needsOutline, "GK 深色 dot 需描邊")
         XCTAssertEqual(ProviderBrands.brand(for: "unknown-x", displayName: "Unknown X").code, "UN")

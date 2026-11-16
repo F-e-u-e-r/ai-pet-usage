@@ -6,8 +6,8 @@
     <true/>
     <key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
     <array>
+        <!-- Directory exception covers `<uid>/widget-snapshot.json` beneath this prefix. -->
         <string>/Users/Shared/AIPetUsage/</string>
-        <string>/Users/Shared/AIPetUsage/widget-snapshot.json</string>
     </array>
 </dict>
 </plist>

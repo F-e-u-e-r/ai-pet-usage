@@ -7,8 +7,62 @@ DST="/Applications/AI Pet Usage.app"
 
 [ -d "$SRC" ] || { echo "Run Scripts/build-app.sh first." >&2; exit 1; }
 
-mkdir -p "/Users/Shared/AIPetUsage"
-chmod 1777 "/Users/Shared/AIPetUsage" 2>/dev/null || chmod 755 "/Users/Shared/AIPetUsage"
+SHARED_ROOT="/Users/Shared/AIPetUsage"
+UID_DIR="${SHARED_ROOT}/$(id -u)"
+ME="$(id -u)"
+
+shared_mirror_reject_symlink() {
+  local path="$1"
+  if [ -L "$path" ]; then
+    echo "Refusing: $path is a symlink (create a real directory first)." >&2
+    exit 1
+  fi
+}
+
+if [ -e "$SHARED_ROOT" ]; then
+  shared_mirror_reject_symlink "$SHARED_ROOT"
+  [ -d "$SHARED_ROOT" ] || {
+    echo "Refusing: $SHARED_ROOT exists but is not a directory." >&2
+    exit 1
+  }
+else
+  mkdir -p "$SHARED_ROOT"
+  shared_mirror_reject_symlink "$SHARED_ROOT"
+fi
+
+ROOT_OWNER="$(stat -f '%u' "$SHARED_ROOT" 2>/dev/null || echo "")"
+if [ -n "$ROOT_OWNER" ] && [ "$ROOT_OWNER" != "$ME" ] && [ "$ROOT_OWNER" != "0" ]; then
+  echo "Refusing: $SHARED_ROOT is owned by uid $ROOT_OWNER." >&2
+  echo "For another macOS user, fix once as admin:" >&2
+  echo "  sudo chown root:wheel \"$SHARED_ROOT\" && sudo chmod 1777 \"$SHARED_ROOT\"" >&2
+  exit 1
+fi
+if [ "$ROOT_OWNER" = "$ME" ] || [ "$ROOT_OWNER" = "0" ]; then
+  chmod -h 1777 "$SHARED_ROOT" 2>/dev/null || {
+    echo "Warning: could not set sticky mode on $SHARED_ROOT; ad-hoc widget mirror may not write." >&2
+  }
+fi
+legacy_flat="${SHARED_ROOT}/widget-snapshot.json"
+if [ -f "$legacy_flat" ] && [ ! -L "$legacy_flat" ]; then
+  rm -f "$legacy_flat" 2>/dev/null || true
+fi
+
+if [ -e "$UID_DIR" ]; then
+  shared_mirror_reject_symlink "$UID_DIR"
+  [ -d "$UID_DIR" ] || {
+    echo "Refusing: $UID_DIR exists but is not a directory." >&2
+    exit 1
+  }
+  UID_OWNER="$(stat -f '%u' "$UID_DIR" 2>/dev/null || echo "")"
+  if [ -n "$UID_OWNER" ] && [ "$UID_OWNER" != "$ME" ]; then
+    echo "Refusing: $UID_DIR is owned by uid $UID_OWNER." >&2
+    exit 1
+  fi
+else
+  mkdir -p "$UID_DIR"
+  shared_mirror_reject_symlink "$UID_DIR"
+fi
+chmod 700 "$UID_DIR" 2>/dev/null || true
 
 echo "Installing to $DST ..."
 rm -rf "$DST"

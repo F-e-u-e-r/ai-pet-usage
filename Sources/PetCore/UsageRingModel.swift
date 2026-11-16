@@ -47,7 +47,6 @@ public enum UsageRingModel {
     /// multiple menu badges — they must not be truncated by `.prefix(capacity)`.
     public static func entries(from limits: [ProviderLimitState]) -> [Entry] {
         let limits = AntigravityQuotaDisplay.collapseForPetRings(limits)
-        let tokenOnly = TokenActivityRing.providersWithTokenOnlyMeters
         var official: [Entry] = []
         var activity: [Entry] = []
         for st in limits {

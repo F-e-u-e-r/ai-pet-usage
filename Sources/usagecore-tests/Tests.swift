@@ -809,11 +809,12 @@ final class LedgerTests: XCTestCase {
         let dir = makeTempDir()
         let file = dir.appendingPathComponent("ledger.jsonl")
         let legacy = """
-        {"id":"ag:legacy:1","providerId":"agy","timestamp":"2026-01-15T10:00:00Z","tokens":{"input":50,"output":10},"sourceKind":"agy-transcript"}
+        {"id":"ag:legacy:1","providerId":"agy","timestamp":"2026-01-15T10:00:00Z","tokens":{"input":50,"output":10,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"agy-transcript"}
         """
         try legacy.write(to: file, atomically: true, encoding: .utf8)
         let ledger = UsageLedger(fileURL: file)
         XCTAssertEqual(ledger.events.count, 1)
+        guard ledger.events.count == 1 else { return }
         XCTAssertEqual(ledger.events[0].providerId, "antigravity")
         XCTAssertEqual(ledger.totals(in: DateInterval(start: .distantPast, end: .distantFuture),
                                        providerId: "antigravity").total, 60)

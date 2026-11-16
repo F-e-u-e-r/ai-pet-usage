@@ -221,11 +221,21 @@ public enum GrokQuotaEngine {
 
     private static func snapshot(fromBillingConfig config: [String: Any], now: Date) -> GrokQuotaSnapshot? {
         let raw: Double?
-        if let d = config["creditUsagePercent"] as? Double { raw = d }
-        else if let n = config["creditUsagePercent"] as? NSNumber { raw = n.doubleValue }
-        else if let s = config["creditUsagePercent"] as? String, let d = Double(s) { raw = d }
-        else { raw = nil }
-        guard let pct = raw else { return nil }
+        if let n = config["creditUsagePercent"] as? NSNumber {
+            // JSON `true`/`false` are CFBoolean; integral percents (0/1/…) are CFNumber (also `is Bool` in Swift).
+            if CFGetTypeID(n as CFTypeRef) == CFBooleanGetTypeID() {
+                raw = nil
+            } else {
+                raw = n.doubleValue
+            }
+        } else if let d = config["creditUsagePercent"] as? Double {
+            raw = d
+        } else if let s = config["creditUsagePercent"] as? String, let d = Double(s) {
+            raw = d
+        } else {
+            raw = nil
+        }
+        guard let pct = raw, pct.isFinite else { return nil }
         let overflow = pct > 100
         let used = min(100, max(0, pct))
         var endStr = config["billingPeriodEnd"] as? String
@@ -374,22 +384,19 @@ public enum GrokChromeDisplay {
                                          officialQuota: GrokQuotaSnapshot?) -> ProviderLimitState {
         guard state.providerId == providerId else { return state }
         var s = state
+        // Grok 無 5h 配額:不論有無官方 credits,5h 一律清空(契約:永不發佈 5h %)
+        s.fiveHour = LimitWindowState(windowMinutes: 300, confidence: .unknown)
         if let q = officialQuota {
+            // Billing credits (`creditUsagePercent`) — not Grok's 5h/weekly rate-limit windows (Track A memo 2026-08-10).
+            // Rendered on the weekly chrome column as a billing-period meter (docs/DATA_SOURCES.md); always estimated.
             s.weekly = LimitWindowState(usedPercent: q.usedPercent,
                                         resetAt: q.periodEnd,
                                         windowMinutes: 10_080,
-                                        confidence: .high)
-            s.fiveHour = LimitWindowState(windowMinutes: 300, confidence: .unknown)
+                                        confidence: .estimated)
             s.todayActivityPercent = nil
             return s
         }
         if state.weekly.usedPercent != nil, state.weekly.confidence == .high {
-            s.todayActivityPercent = nil
-            return s
-        }
-        if let act = state.todayActivityPercent {
-            s.weekly = LimitWindowState(usedPercent: act, windowMinutes: 10_080, confidence: .estimated)
-            s.fiveHour = LimitWindowState(windowMinutes: 300, confidence: .unknown)
             s.todayActivityPercent = nil
         }
         return s

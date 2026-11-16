@@ -23,7 +23,7 @@ This document is for **whoever merges and ships** the widget (ideally with a **p
 1. Main app builds `WidgetSnapshot` from dashboard + `ProviderLimitState` (`WidgetSnapshotBuilder`).
 2. Writes **`widget-snapshot.json`** to:
    - `~/Library/Application Support/AIPetUsage/` (always)
-   - `/Users/Shared/AIPetUsage/` (mirror for sandboxed appex on ad‑hoc)
+   - `/Users/Shared/AIPetUsage/<uid>/widget-snapshot.json` (0600 mirror for sandboxed ad‑hoc appex)
    - App Group container when `containerURL(forSecurityApplicationGroupIdentifier:)` works
 3. Calls `WidgetCenter.shared.reloadTimelines(ofKind: "ProviderUsageWidget")`.
 
@@ -33,7 +33,7 @@ This document is for **whoever merges and ships** the widget (ideally with a **p
 
 | Environment | Widget entitlements | Snapshot source | PlugInKit |
 |-------------|---------------------|-----------------|-----------|
-| **Ad‑hoc** (`DEVELOPMENT_TEAM` unset) | `AIPetUsageWidget.adhoc.entitlements` | **`/Users/Shared/AIPetUsage/widget-snapshot.json`** | `pluginkit -a` after install to `/Applications` |
+| **Ad‑hoc** (`DEVELOPMENT_TEAM` unset) | `AIPetUsageWidget.adhoc.entitlements` | **`/Users/Shared/AIPetUsage/<uid>/widget-snapshot.json`** | `pluginkit -a` after install to `/Applications` |
 | **Personal Team / Dev ID** | `AIPetUsageWidget.entitlements` + same team on app | **App Group** `group.dev.aipetusage.app` | Normal discovery once app is signed |
 
 ```bash
@@ -73,8 +73,6 @@ Official `agy /usage` quota is **off by default** (`AppSettings.antigravityQuota
 
 - `Sources/usagecore-tests/WidgetSnapshotTests.swift` (+ suite in `main.swift`)
 - `checks/widget-golden/cases.jsonl` — row filter / provider order
-
-**Note:** full `usagecore-tests` may still crash in `LedgerTests.testLegacyAgyProviderIdCanonicalizesOnLoad` (pre-existing); widget gates do not require full suite for compile sanity.
 
 ## Acceptance checklist (maintainer)
 

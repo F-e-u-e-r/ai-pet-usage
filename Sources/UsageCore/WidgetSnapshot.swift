@@ -80,14 +80,25 @@ public enum WidgetSnapshotPaths {
         AppPaths.dataDirectory().appendingPathComponent(fileName, isDirectory: false)
     }
 
-    /// Personal / ad-hoc builds: sandboxed widget can read this (see widget appex entitlements).
-    public static func sharedFileURL() -> URL {
-        URL(fileURLWithPath: "/Users/Shared/AIPetUsage/\(fileName)")
+    /// Ad-hoc builds: per-UID mirror so multi-user Macs do not clobber each other's snapshots.
+    public static func sharedMirrorDirectoryURL() -> URL {
+        URL(fileURLWithPath: SharedMirrorGate.uidDirectoryPath(), isDirectory: true)
     }
 
-    /// Best-effort `0644` so a sandboxed widget (or another user) can read the shared mirror.
-    public static func makeWorldReadableIfPossible(_ url: URL) {
-        try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o644)], ofItemAtPath: url.path)
+    /// Refuse symlinks / wrong-owner paths under the shared mirror root.
+    static func sharedPathOwnedByCurrentUser(_ url: URL) -> Bool {
+        SharedMirrorGate.sharedPathOwnedByCurrentUser(url)
+    }
+
+    /// Personal / ad-hoc builds: sandboxed widget can read this (see widget appex entitlements).
+    public static func sharedFileURL() -> URL {
+        URL(fileURLWithPath: SharedMirrorGate.snapshotFilePath(), isDirectory: false)
+    }
+
+    static func writeSharedMirror(_ snapshot: WidgetSnapshot) {
+        guard let ctx = SharedMirrorGate.prepareWriteContext(),
+              let data = try? AtomicJSON.encoder().encode(snapshot) else { return }
+        _ = SharedMirrorGate.writeSnapshotJSON(data, dirPath: ctx.uidDirPath, dirIdentity: ctx.dirIdentity)
     }
 }
 
@@ -96,16 +107,14 @@ public enum WidgetSnapshotStore {
     static var widgetExtensionRunsInSandbox: Bool {
         ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
     }
-    /// Write to App Support, `/Users/Shared/…`, and App Group (when the container exists).
+    /// Write to App Support; App Group when available; `/Users/Shared/…` only when App Group is absent.
     public static func write(_ snapshot: WidgetSnapshot) {
-        let sharedDir = WidgetSnapshotPaths.sharedFileURL().deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: sharedDir, withIntermediateDirectories: true)
-        var urls = [WidgetSnapshotPaths.supportFileURL(), WidgetSnapshotPaths.sharedFileURL()]
-        if let group = WidgetSnapshotPaths.appGroupFileURL() { urls.append(group) }
-        for url in urls {
-            try? AtomicJSON.write(snapshot, to: url)
-            WidgetSnapshotPaths.makeWorldReadableIfPossible(url)
+        try? AtomicJSON.write(snapshot, to: WidgetSnapshotPaths.supportFileURL())
+        if let group = WidgetSnapshotPaths.appGroupFileURL() {
+            try? AtomicJSON.write(snapshot, to: group)
         }
+        // Ad-hoc widget builds lack App Group; keep Shared mirror even when the host has a group container.
+        WidgetSnapshotPaths.writeSharedMirror(snapshot)
     }
 
     public static func read() -> WidgetSnapshot? {
@@ -140,14 +149,28 @@ public enum WidgetSnapshotStore {
     }
 
     public static func read(from context: WidgetReadContext) -> WidgetSnapshot? {
+        var best: WidgetSnapshot?
         for url in context.candidateURLs {
-            if let snap = AtomicJSON.read(WidgetSnapshot.self, from: url) { return snap }
+            guard let snap = decodeSnapshot(at: url) else { continue }
+            if let best, snap.generatedAt <= best.generatedAt { continue }
+            best = snap
         }
-        return nil
+        return best
+    }
+
+    private static func decodeSnapshot(at url: URL) -> WidgetSnapshot? {
+        let isShared = url.path.hasPrefix(SharedMirrorGate.rootPath + "/")
+        if isShared {
+            guard WidgetSnapshotPaths.sharedPathOwnedByCurrentUser(url.deletingLastPathComponent()),
+                  url.path == SharedMirrorGate.snapshotFilePath(),
+                  let data = SharedMirrorGate.readSnapshotJSON() else { return nil }
+            return try? AtomicJSON.decoder().decode(WidgetSnapshot.self, from: data)
+        }
+        return AtomicJSON.read(WidgetSnapshot.self, from: url)
     }
 
     public static func isPopulated(_ snap: WidgetSnapshot) -> Bool {
-        snap.generatedAt != .distantPast
+        snap.generatedAt != .distantPast && (!snap.rows.isEmpty || snap.todayTokens > 0)
     }
 }
 
@@ -171,8 +194,11 @@ public enum WidgetSnapshotBuilder {
         enabledProviders: Set<String>,
         maxRows: Int = 8
     ) -> WidgetSnapshot {
-        let names = Dictionary(uniqueKeysWithValues:
-            dashboard.snapshots.map { ($0.providerId, $0.displayName) })
+        let rowCap = max(0, maxRows)
+        let names = Dictionary(
+            dashboard.snapshots.map { ($0.providerId, $0.displayName) },
+            uniquingKeysWith: { _, latest in latest }
+        )
 
         let states = limitStates.filter { st in
             let root = rootProviderId(st.providerId)
@@ -180,13 +206,18 @@ public enum WidgetSnapshotBuilder {
         }
 
         func intPercent(_ p: Double?) -> Int? {
-            p.map { Int($0.rounded()) }
+            guard let p, p.isFinite else { return nil }
+            let clamped = min(100, max(0, p))
+            return Int(clamped.rounded(.toNearestOrAwayFromZero))
         }
 
         var rows: [WidgetSnapshotRow] = []
         for st in states {
             let display = names[st.providerId] ?? st.providerId
-            let five = intPercent(st.fiveHour.usedPercent)
+            // Grok 只用 weekly 欄(credits → weekly,confidence .estimated);5h 永不發佈。
+            let five: Int? = GrokChromeDisplay.usesWeeklyOnlyMeter(st.providerId)
+                ? nil
+                : intPercent(st.fiveHour.usedPercent)
             let week = intPercent(st.weekly.usedPercent)
             let idle = st.fiveHour.idle && five == nil && week == nil
             if five == nil, week == nil, !idle { continue }
@@ -202,9 +233,14 @@ public enum WidgetSnapshotBuilder {
             ))
         }
 
-        rows.sort { orderIndex(preferredProviderOrder, $0.providerId) < orderIndex(preferredProviderOrder, $1.providerId) }
-        if rows.count > maxRows {
-            rows = Array(rows.prefix(maxRows))
+        rows.sort {
+            let ai = orderIndex(preferredProviderOrder, $0.providerId)
+            let bi = orderIndex(preferredProviderOrder, $1.providerId)
+            if ai != bi { return ai < bi }
+            return $0.providerId < $1.providerId
+        }
+        if rows.count > rowCap {
+            rows = Array(rows.prefix(rowCap))
         }
 
         let cost = dashboard.todayCost
@@ -225,8 +261,7 @@ public enum WidgetSnapshotBuilder {
     }
 
     private static func orderIndex(_ order: [String], _ id: String) -> Int {
-        if let i = order.firstIndex(of: id) { return i }
-        return order.count + id.hashValue
+        order.firstIndex(of: id) ?? order.count
     }
 }
 
