@@ -699,6 +699,10 @@ public actor UsageCoordinator {
         adapters[idx] = AgyAdapter(enableOfficialQuotaFetch: enabled)
     }
 
+    private var antigravityOfficialQuotaEnabled: Bool {
+        (adapters.first { $0.providerId == "antigravity" } as? AgyAdapter)?.officialQuotaFetchEnabled ?? false
+    }
+
     public func currentSettings() -> CoreSettings { settings }
 
     public func adapterInfos() -> [(providerId: String, displayName: String, availability: ProviderAvailability, dataSources: String, permissions: String)] {
@@ -1529,7 +1533,9 @@ public actor UsageCoordinator {
             models: ledger.modelSummaries(in: today, pricing: pricing),
             dataQuality: quality,
             lastRefreshAt: lastRefreshAt,
-            antigravityQuota: AntigravityQuotaStore.load(dataDir: dataDir)
+            // Only while `agy /usage` is actually being fetched: with the opt-in off, the file on disk is a
+            // frozen past reading and must not be presented as the live official quota.
+            antigravityQuota: antigravityOfficialQuotaEnabled ? AntigravityQuotaStore.load(dataDir: dataDir) : nil
         )
     }
 

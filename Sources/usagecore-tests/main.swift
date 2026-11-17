@@ -154,6 +154,18 @@ runSuite("AgyAdapterTests", [
     ("testIgnoresChunkTranscripts", agy.testIgnoresChunkTranscripts),
 ])
 
+let agyStale = AntigravityStaleQuotaTests()
+runSuite("AntigravityStaleQuotaTests", [
+    ("testPersistedSnapshotHiddenWhenOfficialFetchDisabled", agyStale.testPersistedSnapshotHiddenWhenOfficialFetchDisabled),
+    ("testPersistedSnapshotShownWhenOfficialFetchEnabled", agyStale.testPersistedSnapshotShownWhenOfficialFetchEnabled),
+    ("testSetAntigravityOfficialQuotaEnabledTogglesSnapshotVisibility", agyStale.testSetAntigravityOfficialQuotaEnabledTogglesSnapshotVisibility),
+    ("testFreshSnapshotIsLiveWithoutAgeLabel", agyStale.testFreshSnapshotIsLiveWithoutAgeLabel),
+    ("testSnapshotAtThresholdIsNotYetStale", agyStale.testSnapshotAtThresholdIsNotYetStale),
+    ("testOldSnapshotMarkedStaleAndLabelled", agyStale.testOldSnapshotMarkedStaleAndLabelled),
+    ("testWindowsPastResetDropTheirOldValue", agyStale.testWindowsPastResetDropTheirOldValue),
+    ("testFiveHourWithoutResetExpiresAfterItsWindow", agyStale.testFiveHourWithoutResetExpiresAfterItsWindow),
+])
+
 let ledger = LedgerTests()
 runSuite("LedgerTests", [
     ("testDedupeAndPersistence", ledger.testDedupeAndPersistence),

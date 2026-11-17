@@ -70,23 +70,31 @@ public enum AntigravityQuotaDisplay {
 
   /// One `ProviderLimitState` per Antigravity quota group (official used % + reset).
     public static func syntheticLimitStates(from quota: AntigravityQuotaSnapshot,
-                                            base: ProviderLimitState?) -> [ProviderLimitState] {
+                                            base: ProviderLimitState?,
+                                            now: Date = Date()) -> [ProviderLimitState] {
         orderedGroups(quota.groups).compactMap { group in
             guard let pid = groupId(forGroupName: group.name) else { return nil }
             let five = group.buckets.first { $0.windowMinutes == 300 }
             let week = group.buckets.first { $0.windowMinutes == 10_080 }
+            // The snapshot only refreshes while `agy /usage` succeeds; a failing fetch leaves it on disk.
+            // Windows that reset since then lose their value, and an old snapshot is flagged stale.
+            let stale = now.timeIntervalSince(quota.fetchedAt) > StatuslineAge.labelThreshold
+            let fiveExpired = five.map { isExpired($0, fetchedAt: quota.fetchedAt, now: now) } ?? false
+            let weekExpired = week.map { isExpired($0, fetchedAt: quota.fetchedAt, now: now) } ?? false
             return ProviderLimitState(
                 providerId: pid,
-                fiveHour: windowState(from: five, defaultMinutes: 300),
-                weekly: windowState(from: week, defaultMinutes: 10_080),
+                fiveHour: windowState(from: fiveExpired ? nil : five, defaultMinutes: 300,
+                                      observedAt: quota.fetchedAt),
+                weekly: windowState(from: weekExpired ? nil : week, defaultMinutes: 10_080,
+                                    observedAt: quota.fetchedAt),
                 burnRateTokensPerHour: base?.burnRateTokensPerHour ?? 0,
                 lastEventAt: base?.lastEventAt,
                 lastReadingAt: quota.fetchedAt,
-                warning: .ok,
+                warning: stale ? .stale : .ok,
                 planType: base?.planType,
                 lastSourceDescription: "agy:/usage · \(group.name)",
-                fiveHourOfficial: five != nil ? .usable : .absent,
-                weeklyOfficial: week != nil ? .usable : .absent,
+                fiveHourOfficial: five == nil ? .absent : (fiveExpired ? .expiredUnusable : .usable),
+                weeklyOfficial: week == nil ? .absent : (weekExpired ? .expiredUnusable : .usable),
                 todayActivityPercent: nil)
         }
     }
@@ -113,11 +121,12 @@ public enum AntigravityQuotaDisplay {
 
     /// Replace the single `antigravity` row with three quota rows when snapshot is present.
     public static func expandLimitStates(_ states: [ProviderLimitState],
-                                         quota: AntigravityQuotaSnapshot?) -> [ProviderLimitState] {
+                                         quota: AntigravityQuotaSnapshot?,
+                                         now: Date = Date()) -> [ProviderLimitState] {
         var out: [ProviderLimitState] = []
         for st in states {
             if st.providerId == "antigravity", let quota, !quota.groups.isEmpty {
-                let synth = syntheticLimitStates(from: quota, base: st)
+                let synth = syntheticLimitStates(from: quota, base: st, now: now)
                 if !synth.isEmpty {
                     out.append(contentsOf: synth)
                     continue
@@ -128,8 +137,14 @@ public enum AntigravityQuotaDisplay {
         return out
     }
 
+    /// Past its reset, or (no reset time) older than its own window.
+    private static func isExpired(_ bucket: AntigravityQuotaBucket, fetchedAt: Date, now: Date) -> Bool {
+        if let resetsAt = bucket.resetsAt { return resetsAt <= now }
+        return now.timeIntervalSince(fetchedAt) > Double(bucket.windowMinutes) * 60
+    }
+
     private static func windowState(from bucket: AntigravityQuotaBucket?,
-                                    defaultMinutes: Int) -> LimitWindowState {
+                                    defaultMinutes: Int, observedAt: Date) -> LimitWindowState {
         guard let bucket else {
             return LimitWindowState(windowMinutes: defaultMinutes, confidence: .high, idle: false)
         }
@@ -137,6 +152,7 @@ public enum AntigravityQuotaDisplay {
                                 resetAt: bucket.resetsAt,
                                 windowMinutes: bucket.windowMinutes,
                                 confidence: .high,
-                                idle: false)
+                                idle: false,
+                                observedAt: observedAt)
     }
 }

@@ -17,9 +17,12 @@ public enum StatuslineAge {
         return "as of \(Int(age / 86400))d ago"
     }
 
-    /// 只對 Claude 帳戶列與 model-scoped 列的週窗標示(其他 provider 有各自的陳舊度呈現)。
+    /// 對 Claude 帳戶列、model-scoped 列與 Antigravity `agy /usage` 分組列的週窗標示
+    ///(皆為落盤快照,來源停更時值仍在;其他 provider 有各自的陳舊度呈現)。
     public static func weeklyAsOfLabel(for state: ProviderLimitState, now: Date) -> String? {
-        guard ClaudeScopedDisplay.isClaudeChromeId(state.providerId), state.weekly.usedPercent != nil else { return nil }
+        guard ClaudeScopedDisplay.isClaudeChromeId(state.providerId)
+                || AntigravityQuotaDisplay.isQuotaChromeId(state.providerId),
+              state.weekly.usedPercent != nil else { return nil }
         return asOfLabel(observedAt: state.weekly.observedAt, now: now)
     }
 }

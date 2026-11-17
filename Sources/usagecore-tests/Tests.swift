@@ -3078,7 +3078,8 @@ final class AntigravityQuotaDisplayTests: XCTestCase {
                     AntigravityQuotaBucket(id: "ar", label: "w", windowMinutes: 10_080,
                                              usedPercent: 0, remainingPercent: 100, resetsAt: nil)]),
             ])
-        let expanded = AntigravityQuotaDisplay.expandLimitStates([base], quota: quota)
+        let expanded = AntigravityQuotaDisplay.expandLimitStates([base], quota: quota,
+                                                               now: date("2026-11-15T12:01:00Z"))
         XCTAssertEqual(expanded.map(\.providerId), AntigravityQuotaDisplay.quotaChromeOrder)
         XCTAssertEqual(expanded[0].fiveHour.usedPercent, 2)
         XCTAssertEqual(expanded[2].weekly.usedPercent, 0)

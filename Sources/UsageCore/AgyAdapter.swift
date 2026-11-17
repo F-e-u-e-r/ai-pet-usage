@@ -20,6 +20,9 @@ public struct AgyAdapter: ProviderAdapter {
     private let enableOfficialQuotaFetch: Bool
     private let quotaFetcher: () -> AntigravityQuotaSnapshot?
 
+    /// Whether refresh spawns `agy /usage`; when false a persisted snapshot is stale by definition.
+    public var officialQuotaFetchEnabled: Bool { enableOfficialQuotaFetch }
+
     public var roots: [URL] {
         brainRoots.filter { FileManager.default.fileExists(atPath: $0.path) }
     }

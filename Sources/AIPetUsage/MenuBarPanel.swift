@@ -242,7 +242,9 @@ private struct ProviderStatusRow: View {
               // 舊讀數:保留數值但淡化,年齡見 tooltip / a11y(欄寬已實測,不在格內加字)
               windowText(lbl, state.weekly)
                   .opacity(0.55)
-                  .help("Weekly \(asOf) — Claude Code statusline has not refreshed since")
+                  .help(AntigravityQuotaDisplay.isQuotaChromeId(state.providerId)
+                        ? "Weekly \(asOf) — agy /usage has not refreshed since"
+                        : "Weekly \(asOf) — Claude Code statusline has not refreshed since")
           } else {
               windowText(lbl, state.weekly)
           }
