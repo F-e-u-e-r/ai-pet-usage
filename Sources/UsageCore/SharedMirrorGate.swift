@@ -85,6 +85,7 @@ enum SharedMirrorGate {
             var remaining = data.count
             while remaining > 0 {
                 let n = write(wfd, base.advanced(by: offset), remaining)
+                if n < 0 && errno == EINTR { continue }   // interrupted by a signal: retry
                 if n <= 0 { return false }
                 offset += n
                 remaining -= n
@@ -110,8 +111,13 @@ enum SharedMirrorGate {
     }
 
     static func readSnapshotJSON() -> Data? {
-        let dirPath = uidDirectoryPath()
-        guard let dirFD = openDirectoryNoFollow(dirPath) else { return nil }
+        // Validate the shared root itself, then open `<uid>` relative to it: a symlinked root (or one that
+        // fails the sticky/owner policy) must not redirect the reader, mirroring the write path.
+        guard let rootFD = openDirectoryNoFollow(rootPath) else { return nil }
+        defer { close(rootFD) }
+        guard validateRootDirectoryFD(rootFD) else { return nil }
+        let dirFD = openat(rootFD, "\(getuid())", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard dirFD >= 0 else { return nil }
         defer { close(dirFD) }
         guard validateUIDDirectoryFD(dirFD) else { return nil }
         let fd = openat(dirFD, fileName, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
@@ -129,6 +135,7 @@ enum SharedMirrorGate {
             var offset = 0
             while offset < size {
                 let n = read(fd, base.advanced(by: offset), size - offset)
+                if n < 0 && errno == EINTR { continue }   // interrupted by a signal: retry
                 if n <= 0 { return false }
                 offset += n
             }

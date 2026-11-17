@@ -34,13 +34,14 @@ struct WidgetUsageRootView: View {
 
 private struct WidgetHeader: View {
     let snapshot: WidgetSnapshot
+    let now: Date
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text("🐾 AI Usage")
                 .font(.headline)
             Spacer(minLength: 4)
-            if let cost = snapshot.todayCostUSD {
+            if let cost = snapshot.todayCostUSD, snapshot.isFromSameDay(as: now) {
                 Text(costLine(cost))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -61,7 +62,7 @@ private struct WidgetSmallView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            WidgetHeader(snapshot: entry.snapshot)
+            WidgetHeader(snapshot: entry.snapshot, now: entry.date)
             if !live || entry.snapshot.rows.isEmpty {
                 Text("Open AI Pet Usage to refresh")
                     .font(.caption)
@@ -83,7 +84,7 @@ private struct WidgetMediumView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            WidgetHeader(snapshot: entry.snapshot)
+            WidgetHeader(snapshot: entry.snapshot, now: entry.date)
             if !live || entry.snapshot.rows.isEmpty {
                 Text(live ? "No limit data yet — keep the menu-bar app running."
                            : "Open AI Pet Usage once, then remove and re-add this widget.")
@@ -106,8 +107,8 @@ private struct WidgetLargeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            WidgetHeader(snapshot: entry.snapshot)
-            if live {
+            WidgetHeader(snapshot: entry.snapshot, now: entry.date)
+            if live, entry.snapshot.isFromSameDay(as: entry.date) {
                 Text("\(entry.snapshot.todayTokens.formatted()) tokens today")
                     .font(.caption)
                     .foregroundStyle(.secondary)

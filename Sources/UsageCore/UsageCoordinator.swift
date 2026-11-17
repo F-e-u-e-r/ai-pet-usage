@@ -975,6 +975,9 @@ public actor UsageCoordinator {
                     // 注意:僅 rebuildableHistory 走此路;cumulativeSnapshotOnly(OpenCode)落到 else 走增量、
                     // 保留既有切片,絕不把累計總量塌成「現在的一筆」(codex MF2)。
                     let (result, newState) = try adapter.refreshUsage(state: ScanState())
+                    if pid == "antigravity", let quota = result.antigravityQuota {
+                        AntigravityQuotaStore.save(quota, dataDir: dataDir)
+                    }
                     switch result.completeness {
                     case .complete:
                         // #48 Option C gate(pivot §1/§3,owner 交易順序):

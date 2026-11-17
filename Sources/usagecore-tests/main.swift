@@ -1453,4 +1453,26 @@ runSuite("ClaudeUsageProbeTests", [
     ("testCaptureGateSeesPercentSplitAcrossReads", claudeProbe.testCaptureGateSeesPercentSplitAcrossReads),
 ])
 
+let surf4 = SurfRound4Tests()
+runSuite("SurfRound4Tests", [
+    ("testCursorMonthlyWindowClampsAbsurdBillingEnd", surf4.testCursorMonthlyWindowClampsAbsurdBillingEnd),
+    ("testCursorFreshQuotaIsLive", surf4.testCursorFreshQuotaIsLive),
+    ("testCursorOldQuotaMarkedStaleAndLabelled", surf4.testCursorOldQuotaMarkedStaleAndLabelled),
+    ("testCursorQuotaPastBillingEndDropsValue", surf4.testCursorQuotaPastBillingEndDropsValue),
+    ("testCursorTokenCountersAreCapped", surf4.testCursorTokenCountersAreCapped),
+    ("testAgyFetchReadsOutputLargerThanPipeBuffer", surf4.testAgyFetchReadsOutputLargerThanPipeBuffer),
+    ("testAgyFetchNotStalledByDescendantHoldingStdout", surf4.testAgyFetchNotStalledByDescendantHoldingStdout),
+    ("testCursorDashboardSummaryDropsExpiredValue", surf4.testCursorDashboardSummaryDropsExpiredValue),
+    ("testFullReindexPersistsFreshAntigravityQuota", surf4.testFullReindexPersistsFreshAntigravityQuota),
+    ("testWidgetSnapshotDayCheck", surf4.testWidgetSnapshotDayCheck),
+])
+
+let surf5 = SurfRound5Tests()
+runSuite("SurfRound5Tests", [
+    ("testMirrorReadRejectsSymlinkedRoot", surf5.testMirrorReadRejectsSymlinkedRoot),
+    ("testMirrorReadRejectsRootFailingPolicy", surf5.testMirrorReadRejectsRootFailingPolicy),
+    ("testAgyUnknownWindowIsSkippedNotWeekly", surf5.testAgyUnknownWindowIsSkippedNotWeekly),
+    ("testCursorNullBillingEndIsSchemaBreaking", surf5.testCursorNullBillingEndIsSchemaBreaking),
+])
+
 finishTestRun()

@@ -11,11 +11,16 @@ public struct CursorQuotaSnapshot: Sendable, Equatable {
     public var billingCycleEnd: Date?
     public var fetchedAt: Date
 
+    /// The billing cycle this snapshot describes has ended; its percentages no longer apply.
+    public func isPastBillingEnd(now: Date) -> Bool {
+        billingCycleEnd.map { $0 <= now } ?? false
+    }
+
     /// Monthly window length for chrome (from billing cycle when available).
     public var monthlyWindowMinutes: Int {
         guard let s = billingCycleStart, let e = billingCycleEnd, e > s else { return 43_200 }
-        let mins = Int(e.timeIntervalSince(s) / 60)
-        return max(1, min(mins, 62_400))
+        // Clamp in Double first: a malformed far-future end would trap `Int(_:)`.
+        return max(1, Int(min(e.timeIntervalSince(s) / 60, 62_400)))
     }
 
     public init(autoPercentUsed: Double, apiPercentUsed: Double,
@@ -113,7 +118,9 @@ public enum CursorQuotaEngine {
             return .invalidBody
         }
         guard let plan = root["planUsage"] as? [String: Any] else {
-            if root["billingCycleEnd"] != nil { return .noUsageData }
+            // A JSON `null` decodes as NSNull, not nil: count only a real value, in either key spelling.
+            let hasCycleEnd = [root["billingCycleEnd"], root["billing_cycle_end"]].contains { $0 != nil && !($0 is NSNull) }
+            if hasCycleEnd { return .noUsageData }
             return .schemaBreaking
         }
         let auto = percentField(plan["autoPercentUsed"] ?? plan["auto_percent_used"])
@@ -147,9 +154,13 @@ public enum CursorQuotaEngine {
         case let s as String: ms = Double(s)
         default: ms = nil
         }
-        guard let ms, ms.isFinite, ms > 0 else { return nil }
+        // Reject implausible dates (past 2100-01-01): downstream labels convert intervals with `Int(_:)`,
+        // which traps on a far-future value such as `1e30`.
+        guard let ms, ms.isFinite, ms > 0, ms < maxPlausibleMillis else { return nil }
         return Date(timeIntervalSince1970: ms / 1000)
     }
+
+    static let maxPlausibleMillis = 4_102_444_800_000.0   // 2100-01-01T00:00:00Z
 
     private static func clampPercent(_ p: Double) -> Double {
         min(100, max(0, p))
@@ -204,23 +215,30 @@ public enum CursorQuotaDisplay {
     }
 
     public static func syntheticLimitStates(from quota: CursorQuotaSnapshot,
-                                            base: ProviderLimitState?) -> [ProviderLimitState] {
+                                            base: ProviderLimitState?,
+                                            now: Date = Date()) -> [ProviderLimitState] {
         let win = quota.monthlyWindowMinutes
         let reset = quota.billingCycleEnd
+        // The checker keeps the last snapshot when fetches fail: flag an old one stale, and drop
+        // the value once its billing cycle has ended (same rule as the Antigravity quota rows).
+        let stale = now.timeIntervalSince(quota.fetchedAt) > StatuslineAge.labelThreshold
+        let expired = quota.isPastBillingEnd(now: now)
         func monthly(_ used: Double, label: String, pid: String) -> ProviderLimitState {
             ProviderLimitState(
                 providerId: pid,
                 fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
-                weekly: LimitWindowState(usedPercent: used, resetAt: reset, windowMinutes: win,
-                                         confidence: .high, idle: false),
+                weekly: expired
+                    ? LimitWindowState(windowMinutes: win, confidence: .high, idle: false)
+                    : LimitWindowState(usedPercent: used, resetAt: reset, windowMinutes: win,
+                                       confidence: .high, idle: false, observedAt: quota.fetchedAt),
                 burnRateTokensPerHour: base?.burnRateTokensPerHour ?? 0,
                 lastEventAt: base?.lastEventAt,
                 lastReadingAt: quota.fetchedAt,
-                warning: .ok,
+                warning: stale ? .stale : .ok,
                 planType: base?.planType,
                 lastSourceDescription: "cursor dashboard · \(label)",
                 fiveHourOfficial: .absent,
-                weeklyOfficial: .usable,
+                weeklyOfficial: expired ? .expiredUnusable : .usable,
                 todayActivityPercent: nil)
         }
         return [
@@ -229,12 +247,19 @@ public enum CursorQuotaDisplay {
         ]
     }
 
+    /// Dashboard line for one meter: a past billing cycle shows no value (same rule as the menu rows).
+    public static func meterSummary(_ used: Double, quota: CursorQuotaSnapshot, now: Date) -> String {
+        if quota.isPastBillingEnd(now: now) { return "— · awaiting Cursor refresh" }
+        return "\(Int(used.rounded()))% used · resets \(ResetLabel.countdown(to: quota.billingCycleEnd, now: now))"
+    }
+
     public static func expandLimitStates(_ states: [ProviderLimitState],
-                                         quota: CursorQuotaSnapshot?) -> [ProviderLimitState] {
+                                         quota: CursorQuotaSnapshot?,
+                                         now: Date = Date()) -> [ProviderLimitState] {
         var out: [ProviderLimitState] = []
         for st in states {
             if st.providerId == "cursor-ide", let quota {
-                let synth = syntheticLimitStates(from: quota, base: st)
+                let synth = syntheticLimitStates(from: quota, base: st, now: now)
                 out.append(contentsOf: synth)
                 continue
             }

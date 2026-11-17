@@ -244,6 +244,8 @@ private struct ProviderStatusRow: View {
                   .opacity(0.55)
                   .help(AntigravityQuotaDisplay.isQuotaChromeId(state.providerId)
                         ? "Weekly \(asOf) — agy /usage has not refreshed since"
+                        : CursorQuotaDisplay.isQuotaChromeId(state.providerId)
+                        ? "Monthly \(asOf) — Cursor dashboard has not refreshed since"
                         : "Weekly \(asOf) — Claude Code statusline has not refreshed since")
           } else {
               windowText(lbl, state.weekly)

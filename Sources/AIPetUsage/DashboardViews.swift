@@ -910,9 +910,10 @@ struct CursorQuotaMetersView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: presentation == .limits ? 14 : 8) {
-            Text(presentation == .limits
-                 ? "Official quota — Cursor plan usage (from Cursor dashboard)"
-                 : "Official quota — monthly plan usage")
+            Text((presentation == .limits
+                  ? "Official quota — Cursor plan usage (from Cursor dashboard)"
+                  : "Official quota — monthly plan usage")
+                 + (StatuslineAge.asOfLabel(observedAt: quota.fetchedAt, now: now).map { " · \($0)" } ?? ""))
                 .font(.caption2).foregroundStyle(Theme.textMuted)
             switch presentation {
             case .compact:
@@ -944,16 +945,17 @@ struct CursorQuotaMetersView: View {
             Text(label)
                 .padding(.leading, indented ? 8 : 0)
                 .frame(width: 46, alignment: .leading).foregroundStyle(Theme.textMuted)
-            Text("\(Int(used.rounded()))% used · resets \(ResetLabel.countdown(to: quota.billingCycleEnd, now: now))")
+            Text(CursorQuotaDisplay.meterSummary(used, quota: quota, now: now))
         }
     }
 
     private func limitBar(_ title: String, _ used: Double) -> some View {
-        ReportedLimitBar(
+        let expired = quota.isPastBillingEnd(now: now)
+        return ReportedLimitBar(
             title: "\(title) · monthly",
-            main: "\(Int(used.rounded()))% used",
-            secondary: ResetLabel.countdown(to: quota.billingCycleEnd, now: now),
-            gaugePercent: used,
+            main: expired ? "—" : "\(Int(used.rounded()))% used",
+            secondary: expired ? "awaiting Cursor refresh" : ResetLabel.countdown(to: quota.billingCycleEnd, now: now),
+            gaugePercent: expired ? nil : used,
             corrected: false,
             warn: warn,
             danger: danger)

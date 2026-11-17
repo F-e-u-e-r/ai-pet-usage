@@ -19,9 +19,15 @@ struct UsageTimelineProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
         let snap = WidgetSnapshotStore.read(from: .widgetExtension) ?? .empty
-        let entry = UsageEntry(date: Date(), snapshot: snap)
-        let next = Calendar.current.date(byAdding: .minute, value: 15, to: Date()) ?? Date().addingTimeInterval(900)
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        let now = Date()
+        var entries = [UsageEntry(date: now, snapshot: snap)]
+        // Re-render at midnight too: the view hides "today" totals from an earlier day by `entry.date`.
+        if let midnight = Calendar.current.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0, second: 0),
+                                                     matchingPolicy: .nextTime) {
+            entries.append(UsageEntry(date: midnight, snapshot: snap))
+        }
+        let next = Calendar.current.date(byAdding: .minute, value: 15, to: now) ?? now.addingTimeInterval(900)
+        completion(Timeline(entries: entries, policy: .after(next)))
     }
 }
 

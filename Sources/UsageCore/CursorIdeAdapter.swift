@@ -251,8 +251,11 @@ public struct CursorIdeAdapter: ProviderAdapter {
 
     static func parseInt(_ raw: String?) -> Int {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return 0 }
-        return Int(raw) ?? 0
+        // Cap per-field so summing four counters (`TokenBreakdown.total`) cannot overflow and trap.
+        return min(max(Int(raw) ?? 0, 0), maxTokenCount)
     }
+
+    static let maxTokenCount = 1_000_000_000_000
 
     /// Positive delta only; cumulative regression → nil (caller resets baseline, no event).
     static func positiveDelta(prev: TokenBreakdown, cur: TokenBreakdown) -> TokenBreakdown? {

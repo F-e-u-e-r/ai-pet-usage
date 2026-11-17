@@ -31,6 +31,12 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
         todayCostIsEstimated: false,
         rows: []
     )
+
+    /// `todayTokens` / `todayCostUSD` describe the day the snapshot was generated; once the app stops
+    /// publishing, a snapshot from an earlier day must not be rendered as "today".
+    public func isFromSameDay(as now: Date, calendar: Calendar = .current) -> Bool {
+        calendar.isDate(generatedAt, inSameDayAs: now)
+    }
 }
 
 public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {

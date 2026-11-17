@@ -21,7 +21,8 @@ public enum StatuslineAge {
     ///(皆為落盤快照,來源停更時值仍在;其他 provider 有各自的陳舊度呈現)。
     public static func weeklyAsOfLabel(for state: ProviderLimitState, now: Date) -> String? {
         guard ClaudeScopedDisplay.isClaudeChromeId(state.providerId)
-                || AntigravityQuotaDisplay.isQuotaChromeId(state.providerId),
+                || AntigravityQuotaDisplay.isQuotaChromeId(state.providerId)
+                || CursorQuotaDisplay.isQuotaChromeId(state.providerId),
               state.weekly.usedPercent != nil else { return nil }
         return asOfLabel(observedAt: state.weekly.observedAt, now: now)
     }

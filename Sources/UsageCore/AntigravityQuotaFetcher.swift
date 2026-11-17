@@ -86,7 +86,8 @@ public enum AntigravityQuotaFetcher {
                 guard let remaining = b.remaining_fraction else { continue }
                 let remPct = min(100, max(0, remaining * 100))
                 let used = min(100, max(0, 100 - remPct))
-                let windowMin = windowMinutes(b.window)
+                // Unknown window (e.g. a new "24h" bucket): skip rather than mislabel it as the weekly quota.
+                guard let windowMin = windowMinutes(b.window) else { continue }
                 let resets = b.reset_time.flatMap { ISO8601.parse($0) }
                 buckets.append(AntigravityQuotaBucket(id: bid, label: label, windowMinutes: windowMin,
                                                       usedPercent: used, remainingPercent: remPct,
@@ -130,11 +131,11 @@ public enum AntigravityQuotaFetcher {
         return nil
     }
 
-    private static func windowMinutes(_ window: String?) -> Int {
+    private static func windowMinutes(_ window: String?) -> Int? {
         switch window?.lowercased() {
         case "5h", "five_hour", "five-hour": return 300
         case "weekly", "week", "7d": return 10_080
-        default: return 10_080
+        default: return nil
         }
     }
 
@@ -143,26 +144,49 @@ public enum AntigravityQuotaFetcher {
         proc.executableURL = executableURL
         proc.arguments = ["-p", "/usage", "--output-format", "json"]
         let out = Pipe()
-        let err = Pipe()
         proc.standardOutput = out
-        proc.standardError = err
-        try proc.run()
-        let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global().async {
-            proc.waitUntilExit()
-            group.leave()
+        proc.standardError = FileHandle.nullDevice   // never read; an undrained pipe would block the child
+        // Drain stdout as it arrives (a child that fills the ~64 KB pipe buffer would block until killed),
+        // event-driven so no thread is left blocked on a pipe a descendant keeps open.
+        let collected = CollectedOutput()
+        let exited = DispatchSemaphore(value: 0)
+        let reader = out.fileHandleForReading
+        reader.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { handle.readabilityHandler = nil; collected.finish() } else { collected.append(chunk) }
         }
+        proc.terminationHandler = { _ in exited.signal() }
+        // Stop the handler on every exit path. No explicit close: a handler already running still reads the
+        // handle, and `availableData` on a closed handle raises; the pipe closes when the last reference goes.
+        defer { reader.readabilityHandler = nil }
+        try proc.run()
         let deadline = DispatchTime.now() + .seconds(20)
-        if group.wait(timeout: deadline) == .timedOut {
+        if exited.wait(timeout: deadline) == .timedOut {
             proc.terminate()
             throw CocoaError(.userCancelled, userInfo: [NSLocalizedDescriptionKey: "agy /usage timed out"])
         }
+        // Child exited: give the pipe a moment to reach EOF; a descendant holding it open must not stall us.
+        _ = collected.eof.wait(timeout: min(deadline, DispatchTime.now() + .seconds(2)))
         guard proc.terminationStatus == 0 else {
             throw NSError(domain: "AntigravityQuotaFetcher", code: Int(proc.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: "agy /usage exited \(proc.terminationStatus)"])
         }
-        return out.fileHandleForReading.readDataToEndOfFile()
+        return collected.snapshot()
+    }
+
+    /// Filled from the pipe's readability handler; guarded by a lock.
+    private final class CollectedOutput: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        private var finished = false
+        let eof = DispatchSemaphore(value: 0)
+
+        func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
+        func finish() {
+            lock.lock(); let first = !finished; finished = true; lock.unlock()
+            if first { eof.signal() }
+        }
+        func snapshot() -> Data { lock.lock(); defer { lock.unlock() }; return data }
     }
 }
 
