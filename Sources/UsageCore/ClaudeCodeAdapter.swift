@@ -154,7 +154,7 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     /// ingest 對 primary/secondary 共用 reading.observedAt,合成單筆會讓活躍檔的
     /// 新 mtime 灌給另一窗的陳舊值,偽造「兩筆 observedAt 遞增」觸發假下修。
     /// 兩窗恰好同檔時合為一筆(observedAt 相同,無交叉污染)。
-    public static func readStatuslineRateLimits(from urls: [URL]) -> [RateLimitReading] {
+    public static func readStatuslineRateLimits(from urls: [URL], now: Date = Date()) -> [RateLimitReading] {
         struct Candidate {
             var window: RateLimitWindowReading
             var observedAt: Date
@@ -171,7 +171,10 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
             // 只看 mtime 時,複製/touch/備份還原檔案都會讓數小時前的讀數看起來是剛剛的。
             let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
                 .flatMap { $0 } ?? Date()
-            let observedAt = (obj["captured_at"] as? String).flatMap { ISO8601.parse($0) } ?? mtime
+            // captured_at 與 mtime 都在未來(時鐘超前時寫的檔)→ 讀數時間不明,跳過該檔(不讓它永遠勝出)。
+            guard let observedAt = (obj["captured_at"] as? String).flatMap({ ISO8601.parse($0) })
+                .flatMap({ $0 <= now.addingTimeInterval(60) ? $0 : nil })
+                ?? (mtime <= now.addingTimeInterval(60) ? mtime : nil) else { continue }
 
             func window(_ key: String, minutes: Int) -> RateLimitWindowReading? {
                 guard let w = limits.obj(key),
@@ -216,7 +219,7 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     /// 多檔(hook 落地檔 / `/usage` 探針落地檔)**逐項**取該項自己 observedAt 最新者:
     /// hook 會把舊 Fable 項帶著原始 `observed_at` 沿用進新檔(檔案 captured_at 很新),
     /// 以「整檔 captured_at」挑檔會讓這份舊值蓋過探針剛讀到的 Fable。
-    public static func readModelScopedLimits(from urls: [URL]) -> [ModelScopedLimitWindow] {
+    public static func readModelScopedLimits(from urls: [URL], now: Date = Date()) -> [ModelScopedLimitWindow] {
         var best: [String: ModelScopedLimitWindow] = [:]
         var order: [String] = []
         for url in urls {
@@ -225,8 +228,10 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
             let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
                 .flatMap { $0 } ?? Date()
             let captured = (obj["captured_at"] as? String).flatMap { ISO8601.parse($0) }
-            let observedAt = captured ?? mtime
-            for item in parseModelScopedPayload(obj, observedAt: observedAt) {
+                .flatMap { $0 <= now.addingTimeInterval(60) ? $0 : nil }
+            // 檔案時間不可信(captured_at 與 mtime 都在未來)→ nil:只留自帶可信 observed_at 的項目。
+            let observedAt = captured ?? (mtime <= now.addingTimeInterval(60) ? mtime : nil)
+            for item in parseModelScopedPayload(obj, observedAt: observedAt, now: now) {
                 let key = item.displayName.lowercased()
                 if let cur = best[key] {
                     if item.observedAt > cur.observedAt { best[key] = item }
@@ -239,16 +244,16 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
         return order.compactMap { best[$0] }
     }
 
-    private static func parseModelScopedPayload(_ obj: JSONObject, observedAt: Date) -> [ModelScopedLimitWindow] {
+    private static func parseModelScopedPayload(_ obj: JSONObject, observedAt: Date?, now: Date) -> [ModelScopedLimitWindow] {
         var out: [ModelScopedLimitWindow] = []
         var seen = Set<String>()
 
         func add(name: String, percent: Double, resetsAt: Date?, entryObservedAt: Date? = nil) {
             let key = name.lowercased()
-            guard !key.isEmpty, !seen.contains(key) else { return }
+            guard let stamp = entryObservedAt ?? observedAt, !key.isEmpty, !seen.contains(key) else { return }
             seen.insert(key)
             out.append(ModelScopedLimitWindow(displayName: name, usedPercent: percent, resetsAt: resetsAt,
-                                            observedAt: entryObservedAt ?? observedAt))
+                                            observedAt: stamp))
         }
 
         func ingestScopedList(_ scoped: [Any]) {
@@ -258,7 +263,9 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                 guard let percent = scopedPercent(item) else { continue }
                 let resets = resetsAt(from: item)
                 // hook 沿用上一份檔的項目時會帶 `observed_at`(該項原始讀取時間),不得借用新檔的 captured_at。
+                // 自帶 observed_at 在未來 → 該項讀取時間不明,丟棄(不得改用檔案時間而顯得剛讀到)。
                 let entryObservedAt = (item["observed_at"] as? String).flatMap { ISO8601.parse($0) }
+                if let e = entryObservedAt, e > now.addingTimeInterval(60) { continue }
                 add(name: name, percent: percent, resetsAt: resets, entryObservedAt: entryObservedAt)
             }
         }

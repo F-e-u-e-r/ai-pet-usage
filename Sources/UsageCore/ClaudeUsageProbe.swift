@@ -8,7 +8,7 @@ import Darwin
 /// `claude-statusline.json` 會停在幾小時前,meter 顯示的是舊值。
 ///
 /// 做法(與 Codex app-server 同精神:問 CLI,不碰登入憑證):
-///   - 在隱藏的 pseudo-terminal 裡跑 `claude /usage`(cwd = home,已信任),讀畫面文字後確定性拆除。
+///   - 在隱藏的 pseudo-terminal 裡跑 `claude /usage`(cwd = home 底下專用的空目錄,沿用 home 的信任),讀畫面文字後確定性拆除。
 ///   - **不讀 Keychain、不抽 token、不打 API**;`/usage` 是本機指令,不發模型請求(實測 session 檔
 ///     只有 local_command 紀錄、無 assistant/usage)。
 ///   - 解析結果寫成與 hook 相同 schema 的落地檔 `claude-usage-probe.json`,由
@@ -17,7 +17,7 @@ import Darwin
 ///   - fail-soft:找不到 claude / 未登入 / 信任提示 / 畫面格式變了 / 逾時 → 不寫檔(絕不造 0%)。
 ///
 /// 已知副作用(owner 2026-11-16 知悉):每次探針會啟動一個 Claude Code session —— 觸發使用者的
-/// SessionStart hook 與 statusline hook,並在 `~/.claude/projects/<home>/` 留一個小 session 檔。
+/// SessionStart hook 與 statusline hook,並在 `~/.claude/projects/<探針工作目錄>/` 留一個小 session 檔。
 /// 故只在 statusline 讀數陳舊時才跑,且受最小間隔閘限制。
 public enum ClaudeUsageProbe {
 
@@ -225,12 +225,19 @@ public enum ClaudeUsageProbe {
             }
             return candidates.min { abs($0.timeIntervalSince(now)) < abs($1.timeIntervalSince(now)) }
         }
-        // 只有時刻 → 今天或明天中第一個尚未過去者。畫面只到分鐘,顯示的那一分鐘內仍算今天
-        // (11:59:05 看到 "11:59am" 是馬上重置,不是 24h 後)。
-        let today = occurrences(comps)
-        guard let first = today.first else { return nil }
-        if let d = today.first(where: { $0.addingTimeInterval(60) > now }) { return d }
-        return cal.date(byAdding: .day, value: 1, to: first)
+        // 只有時刻 → 昨天/今天/明天所有出現時刻中最早尚未過去者。畫面只到分鐘,顯示的那一分鐘內仍算未過
+        // (11:59:05 看到 "11:59am" 是馬上重置,不是 24h 後)。明天由牆上時刻重建,不由今天 +1 天
+        // (春令跳過的 2:30 今天被挪成 3:30,明天仍是 2:30);昨天涵蓋跨午夜回撥(2010 Casey)。
+        // 春令空檔裡的時刻(紐約 3/8 的 2:30)會被 cal.date 挪成 3:30;沒有任何瞬間顯示成 2:30,故只收牆上時分相符者。
+        let all = (-1...1).flatMap { d -> [Date] in
+            var c = comps
+            c.day = comps.day.map { $0 + d }
+            return occurrences(c)
+        }
+        return all.filter {
+            cal.component(.hour, from: $0) == hour && cal.component(.minute, from: $0) == minute
+                && $0.addingTimeInterval(60) > now
+        }.min()
     }
 
     // MARK: - 落地檔(與 hook 同 schema)
@@ -263,8 +270,34 @@ public enum ClaudeUsageProbe {
     public static func writeLanding(_ p: Parsed, capturedAt: Date, to url: URL) throws {
         guard let data = landingJSON(p, capturedAt: capturedAt) else { throw JSONCodecError.notADictionary }
         try AppPaths.ensureDirectory(url.deletingLastPathComponent())
-        try data.write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: url.path)
+        // 暫存檔一建立就是 0600 再 rename 上去:最終路徑任何時刻都不會是 umask 預設權限(0644)。
+        let temp = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp").path
+        func posixError() -> NSError { NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        var fd = open(temp, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600))
+        guard fd >= 0 else { throw posixError() }
+        do {
+            // open 的 mode 會被 umask 遮(umask 0400 → 0200,adapter 讀不回);fchmod 不受 umask 影響。
+            guard fchmod(fd, 0o600) == 0 else { throw posixError() }
+            try data.withUnsafeBytes { raw in
+                var off = 0
+                while off < raw.count {
+                    let n = write(fd, raw.baseAddress!.advanced(by: off), raw.count - off)
+                    if n < 0, errno == EINTR { continue }
+                    guard n > 0 else { throw posixError() }
+                    off += n
+                }
+            }
+            guard fsync(fd) == 0 else { throw posixError() }
+            let closed = close(fd)
+            fd = -1                                  // close 失敗也不可再 close(fd 號碼可能已被重用)
+            guard closed == 0 else { throw posixError() }
+            guard rename(temp, url.path) == 0 else { throw posixError() }
+        } catch {
+            if fd >= 0 { close(fd) }
+            unlink(temp)
+            throw error
+        }
     }
 
     static func isoUTC(_ d: Date) -> String {
@@ -383,10 +416,11 @@ public enum ClaudeUsageProbe {
         var master: Int32 = -1
         var slave: Int32 = -1
         var ws = winsize(ws_row: 50, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
+        let workDir = probeWorkDirectory(home: home)
+        guard (try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)) != nil else { return nil }
         guard openpty(&master, &slave, nil, nil, &ws) == 0 else { return nil }
         let env = probeEnvironment(binary: binary, home: home, parent: parentEnv)
-        // home 已被 Claude Code 信任 → 不會停在信任提示
-        let spawn = { spawnInOwnGroup(binary: binary, arguments: ["/usage"], env: env, cwd: home, tty: slave) }
+        let spawn = { spawnInOwnGroup(binary: binary, arguments: ["/usage"], env: env, cwd: workDir, tty: slave) }
         guard let pid = handle.map({ $0.register(spawn) }) ?? spawn() else {
             close(master); close(slave)
             return nil
@@ -409,23 +443,40 @@ public enum ClaudeUsageProbe {
             return true
         }
 
+        let bufferCap = 4 * 1024 * 1024
+        let percentUsedPattern = try? NSRegularExpression(pattern: #"\d+(?:\.\d+)?\s*%\s*used"#)
+        func screenHasPercentUsed(_ text: String) -> Bool {
+            guard let re = percentUsedPattern else { return false }
+            return re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+        }
+        func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
         var result: (page: String, at: Date)?
         do {
-            let start = Date()
-            var numbersAt: Date?
-            var nextRedrawAt: Date?
-            var redrawSentAt: Date?
+            let start = uptime()
+            var numbersAt: TimeInterval?
+            var nextRedrawAt: TimeInterval?
+            var redrawSentAt: TimeInterval?
+            var scannedUpTo = 0
             var redrawStart = 0
             var bigger = false
             var lastGood: Parsed?
             var alive = true
-            while alive, Date().timeIntervalSince(start) < timeout, handle?.isCancelled != true {
+            while alive, uptime() - start < timeout, handle?.isCancelled != true {
                 alive = pump(for: 0.1)
-                let now = Date()
+                if buffer.count > bufferCap { break }
+                let wallNow = Date()
+                let mono = uptime()
                 if numbersAt == nil {
-                    if renderText(buffer).contains("% used") {
-                        numbersAt = now
-                        nextRedrawAt = now.addingTimeInterval(1.0)
+                    // 只掃新到的位元組,往回接到上一個換行(同一行的 "5" 與 "% used" 之間可夾任意長的色碼,
+                    // 固定重疊會漏);最多回退 64 KiB,不換行的洪水仍是線性。每次都重繪整個 buffer 是 O(N²)。
+                    var from = scannedUpTo
+                    let floor = max(0, scannedUpTo - 65_536)
+                    while from > floor, buffer[from - 1] != 0x0A { from -= 1 }
+                    scannedUpTo = buffer.count
+                    if screenHasPercentUsed(renderText(buffer.subdata(in: from..<buffer.count))) {
+                        numbersAt = mono
+                        nextRedrawAt = mono + 1.0
                     }
                     continue
                 }
@@ -433,31 +484,31 @@ public enum ClaudeUsageProbe {
                     // 每次重繪後收滿 1s 的所有輸出再判斷(不靠「靜止」:spinner 會一直送位元組,
                     // 而停頓中的片段看起來也像靜止)。要求**連續兩個**視窗都含完整重繪、都不含
                     // Refreshing、解析結果相同才接受。
-                    guard now.timeIntervalSince(sent) >= 1.0 else { continue }
+                    guard mono - sent >= 1.0 else { continue }
                     redrawSentAt = nil
                     let page = renderText(buffer.subdata(in: redrawStart..<buffer.count))
                     // 視窗裡恰好一個 "Current session":多出來的是重繪後的差異幀,會蓋掉乾淨的整頁。
                     if page.components(separatedBy: "Current session").count == 2, !page.contains("Refreshing"),
-                       let parsed = parse(screen: page, now: now) {
+                       let parsed = parse(screen: page, now: wallNow) {
                         if let prev = lastGood, prev == parsed {
-                            result = (page, now)
+                            result = (page, wallNow)
                             break
                         }
                         lastGood = parsed
                     } else {
                         lastGood = nil
                     }
-                    nextRedrawAt = now
+                    nextRedrawAt = mono
                     continue
                 }
-                if let t = nextRedrawAt, now >= t {
+                if let t = nextRedrawAt, mono >= t {
                     bigger.toggle()                              // 每次換尺寸,確保真的觸發重繪
                     var size = bigger ? winsize(ws_row: 52, ws_col: 150, ws_xpixel: 0, ws_ypixel: 0)
                                       : winsize(ws_row: 50, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
                     _ = ioctl(master, TIOCSWINSZ_, &size)
                     kill(-pid, SIGWINCH)                      // wrapper 腳本時 UI 可能在子程序
                     redrawStart = buffer.count
-                    redrawSentAt = now
+                    redrawSentAt = mono
                     nextRedrawAt = nil
                 }
             }
@@ -465,11 +516,12 @@ public enum ClaudeUsageProbe {
 
         // 拆除(整個群組)
         kill(-pid, SIGTERM)
-        let drainUntil = Date().addingTimeInterval(0.5)
-        while Date() < drainUntil, pump(for: 0.1) {}
+        let drainUntil = uptime() + 0.5
+        // 上限也管拆除:狂吐的子程序 0.5s 內可再灌 ~100 MiB(實測)。超過就不再讀,直接 close master。
+        while uptime() < drainUntil, buffer.count <= bufferCap, pump(for: 0.1) {}
         close(master)
-        let killAt = Date().addingTimeInterval(1.5)
-        while !hasExited(pid), Date() < killAt { usleep(50_000) }
+        let killAt = uptime() + 1.5
+        while !hasExited(pid), uptime() < killAt { usleep(50_000) }
         kill(-pid, SIGKILL)                        // leader 尚未 reap → pgid 不會被重用;清掉忽略 TERM 的子孫
         handle?.detach()
         var status: Int32 = 0
@@ -532,6 +584,15 @@ public enum ClaudeUsageProbe {
         var pid: pid_t = 0
         guard posix_spawn(&pid, binary.path, &actions, &attr, argv, envp) == 0 else { return nil }
         return pid
+    }
+
+    /// 探針子程序的 cwd:home 底下專用的空目錄,不是 home 本身。cwd = home 時 Claude Code 啟動會掃 home,
+    /// macOS 把它碰到的 Documents / Desktop / 照片 / 其他 app 資料記在**本 app** 名下 → 一連串不相干的權限提示
+    /// (owner 2026-11-17 回報)。放在 home 底下 → 沿用 home 的信任,不會停在信任提示(實測)。
+    static func probeWorkDirectory(home: URL) -> URL {
+        home.appendingPathComponent("Library/Application Support", isDirectory: true)
+            .appendingPathComponent(AppPaths.appFolderName, isDirectory: true)
+            .appendingPathComponent("claude-probe", isDirectory: true)
     }
 
     /// 乾淨環境:不繼承呼叫端的 CLAUDE_* / ANTHROPIC_*(在 Claude Code 子程序內執行時會被當成子 session,

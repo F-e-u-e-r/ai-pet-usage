@@ -1431,6 +1431,13 @@ runSuite("ClaudeUsageProbeTests", [
     ("testCancelKillsProbeGroupAndWritesNothing", claudeProbe.testCancelKillsProbeGroupAndWritesNothing),
     ("testCaptureRejectsQuietFragmentOfRefreshingPage", claudeProbe.testCaptureRejectsQuietFragmentOfRefreshingPage),
     ("testParseResetRepeatedDSTHour", claudeProbe.testParseResetRepeatedDSTHour),
+    ("testParseResetSkipsNonexistentGapTime", claudeProbe.testParseResetSkipsNonexistentGapTime),
+    ("testAdapterDistrustsFutureCapturedAt", claudeProbe.testAdapterDistrustsFutureCapturedAt),
+    ("testCaptureAcceptsWideSpacedPercent", claudeProbe.testCaptureAcceptsWideSpacedPercent),
+    ("testCaptureGivesUpOnFloodingChild", claudeProbe.testCaptureGivesUpOnFloodingChild),
+    ("testWriteLandingIsOwnerOnly", claudeProbe.testWriteLandingIsOwnerOnly),
+    ("testCaptureRunsInDedicatedEmptyDirectory", claudeProbe.testCaptureRunsInDedicatedEmptyDirectory),
+    ("testCaptureGateSeesPercentSplitAcrossReads", claudeProbe.testCaptureGateSeesPercentSplitAcrossReads),
 ])
 
 finishTestRun()

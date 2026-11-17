@@ -352,5 +352,187 @@ final class ClaudeUsageProbeTests: XCTestCase {
         // 回撥前一天的同一時刻不是重複時刻,只有一次。
         XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets Oct 31 at 1:30am (America/New_York)", now: date("2026-10-31T05:45:00Z")),
                        date("2026-10-31T05:30:00Z"))
+        // 春令當天 3:45 EDT 看到 "2:30am" → 明天的 2:30 EST(06:30Z),不是今天被挪成 3:30 後 +1 天。
+        XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets 2:30am (America/New_York)", now: date("2026-03-08T07:45:00Z")),
+                       date("2026-03-09T06:30:00Z"))
+        // 2010 Casey 由 +11 回撥到 +8,牆上時鐘從 3/5 02:00 退回 3/4 23:00(跨午夜)。
+        XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets 12:30am (Antarctica/Casey)", now: date("2010-03-04T15:00:00Z")),
+                       date("2010-03-04T16:30:00Z"))
+        XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets 11:30pm (Antarctica/Casey)", now: date("2010-03-04T13:30:00Z")),
+                       date("2010-03-04T15:30:00Z"))
+    }
+
+    func testParseResetSkipsNonexistentGapTime() {
+        let ny230 = "Resets 2:30am (America/New_York)"
+        XCTAssertEqual(ClaudeUsageProbe.parseReset(ny230, now: date("2026-03-08T06:00:00Z")),
+                       date("2026-03-09T06:30:00Z"))
+        XCTAssertEqual(ClaudeUsageProbe.parseReset(ny230, now: date("2026-03-08T06:59:00Z")),
+                       date("2026-03-09T06:30:00Z"))
+        XCTAssertEqual(ClaudeUsageProbe.parseReset(ny230, now: date("2026-03-08T07:45:00Z")),
+                       date("2026-03-09T06:30:00Z"))
+        XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets 3:30am (America/New_York)", now: date("2026-03-08T06:00:00Z")),
+                       date("2026-03-08T07:30:00Z"))
+        XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets 11am (Pacific/Apia)", now: date("2011-12-29T21:00:00Z")),
+                       date("2011-12-29T21:00:00Z"))
+        XCTAssertEqual(ClaudeUsageProbe.parseReset("Resets 11am (Pacific/Apia)", now: date("2011-12-29T22:30:00Z")),
+                       date("2011-12-30T21:00:00Z"))
+    }
+
+    private func isoUTC(_ d: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: d)
+    }
+
+    func testAdapterDistrustsFutureCapturedAt() throws {
+        let dir = makeTempDir()
+        let now = date("2026-11-16T12:00:00Z")
+        let hook = dir.appendingPathComponent("hook.json")
+        let probe = dir.appendingPathComponent("probe.json")
+        let future = isoUTC(now.addingTimeInterval(30 * 86400))
+        let atNow = isoUTC(now)
+        try Data(#"{"schema_version":1,"captured_at":"\#(future)","rate_limits":{"five_hour":{"used_percentage":10},"seven_day":{"used_percentage":20}}}"#.utf8).write(to: hook)
+        try Data(#"{"schema_version":1,"captured_at":"\#(atNow)","rate_limits":{"five_hour":{"used_percentage":55},"seven_day":{"used_percentage":60}}}"#.utf8).write(to: probe)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-3600)], ofItemAtPath: hook.path)
+
+        let readings = ClaudeCodeAdapter.readStatuslineRateLimits(from: [hook, probe], now: now)
+        XCTAssertEqual(readings.first(where: { $0.primary != nil })?.primary?.usedPercent, 55)
+        XCTAssertEqual(readings.first(where: { $0.secondary != nil })?.secondary?.usedPercent, 60)
+
+        let hookWin = dir.appendingPathComponent("hook-win.json")
+        let probeOld = dir.appendingPathComponent("probe-old.json")
+        try Data(#"{"schema_version":1,"captured_at":"\#(isoUTC(now.addingTimeInterval(30)))","rate_limits":{"five_hour":{"used_percentage":77}}}"#.utf8).write(to: hookWin)
+        try Data(#"{"schema_version":1,"captured_at":"\#(isoUTC(now.addingTimeInterval(-10)))","rate_limits":{"five_hour":{"used_percentage":33}}}"#.utf8).write(to: probeOld)
+        let win = ClaudeCodeAdapter.readStatuslineRateLimits(from: [hookWin, probeOld], now: now)
+        XCTAssertEqual(win.first?.primary?.usedPercent, 77, "captured_at within tolerance must win")
+
+        let hookScoped = dir.appendingPathComponent("hook-scoped.json")
+        let probeScoped = dir.appendingPathComponent("probe-scoped.json")
+        try Data(#"{"schema_version":1,"captured_at":"\#(future)","model_scoped":[{"display_name":"Fable","used_percentage":10,"observed_at":"\#(future)"}]}"#.utf8).write(to: hookScoped)
+        try Data(#"{"schema_version":1,"captured_at":"\#(atNow)","model_scoped":[{"display_name":"Fable","used_percentage":42}]}"#.utf8).write(to: probeScoped)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-3600)], ofItemAtPath: hookScoped.path)
+        let scoped = ClaudeCodeAdapter.readModelScopedLimits(from: [hookScoped, probeScoped], now: now)
+        XCTAssertEqual(scoped.first?.usedPercent, 42)
+
+        // 時鐘超前時寫的檔:captured_at 與 mtime 來自同一個錯的時鐘,兩者都不可信。
+        let skewed = now.addingTimeInterval(86400)
+        try FileManager.default.setAttributes([.modificationDate: skewed], ofItemAtPath: hook.path)
+        try FileManager.default.setAttributes([.modificationDate: skewed], ofItemAtPath: hookScoped.path)
+        let skew = ClaudeCodeAdapter.readStatuslineRateLimits(from: [hook, probe], now: now)
+        XCTAssertEqual(skew.first(where: { $0.primary != nil })?.primary?.usedPercent, 55, "future mtime must not win")
+        XCTAssertEqual(skew.first(where: { $0.secondary != nil })?.secondary?.usedPercent, 60)
+        let skewScoped = ClaudeCodeAdapter.readModelScopedLimits(from: [hookScoped, probeScoped], now: now)
+        XCTAssertEqual(skewScoped.first?.usedPercent, 42, "future mtime must not win (scoped)")
+
+        // hook 以 captured_at = now 重寫、沿用一個 observed_at 在未來的舊項目:該項不得借用新檔時間勝過探針。
+        let hookCarry = dir.appendingPathComponent("hook-carry.json")
+        let probeRecent = dir.appendingPathComponent("probe-recent.json")
+        try Data(#"{"schema_version":1,"captured_at":"\#(atNow)","model_scoped":[{"display_name":"Fable","used_percentage":10,"observed_at":"\#(isoUTC(skewed))"}]}"#.utf8).write(to: hookCarry)
+        try Data(#"{"schema_version":1,"captured_at":"\#(isoUTC(now.addingTimeInterval(-300)))","model_scoped":[{"display_name":"Fable","used_percentage":55}]}"#.utf8).write(to: probeRecent)
+        let carried = ClaudeCodeAdapter.readModelScopedLimits(from: [hookCarry, probeRecent], now: now)
+        XCTAssertEqual(carried.first?.usedPercent, 55, "item with untrusted observed_at must not borrow the file stamp")
+
+        // 檔案時間不可信,但項目自帶可信 observed_at → 該項照收;沒自帶時間的項目丟棄。
+        let skewFile = dir.appendingPathComponent("skew-file.json")
+        let probeHourOld = dir.appendingPathComponent("probe-hour-old.json")
+        try Data(#"{"schema_version":1,"captured_at":"\#(isoUTC(skewed))","model_scoped":[{"display_name":"Fable","used_percentage":55,"observed_at":"\#(atNow)"},{"display_name":"Other","used_percentage":7}]}"#.utf8).write(to: skewFile)
+        try FileManager.default.setAttributes([.modificationDate: skewed], ofItemAtPath: skewFile.path)
+        try Data(#"{"schema_version":1,"captured_at":"\#(isoUTC(now.addingTimeInterval(-3600)))","model_scoped":[{"display_name":"Fable","used_percentage":10}]}"#.utf8).write(to: probeHourOld)
+        let kept = ClaudeCodeAdapter.readModelScopedLimits(from: [skewFile, probeHourOld], now: now)
+        XCTAssertEqual(kept.first(where: { $0.displayName == "Fable" })?.usedPercent, 55, "item's own trusted observed_at survives an untrusted file stamp")
+        XCTAssertNil(kept.first(where: { $0.displayName == "Other" }), "item without its own stamp in an untrusted file is dropped")
+
+        // 邊界:captured_at 缺、mtime 恰為 now+60s → 可信;now+61s → 跳過。有效 captured_at + 未來 mtime → 照讀。
+        let edge = dir.appendingPathComponent("edge.json")
+        try Data(#"{"schema_version":1,"rate_limits":{"five_hour":{"used_percentage":12}}}"#.utf8).write(to: edge)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: edge.path)
+        XCTAssertEqual(ClaudeCodeAdapter.readStatuslineRateLimits(from: [edge], now: now).first?.primary?.usedPercent, 12)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(61)], ofItemAtPath: edge.path)
+        XCTAssertNil(ClaudeCodeAdapter.readStatuslineRateLimits(from: [edge], now: now).first?.primary)
+        let validStamp = dir.appendingPathComponent("valid-stamp.json")
+        try Data(#"{"schema_version":1,"captured_at":"\#(atNow)","rate_limits":{"five_hour":{"used_percentage":34}}}"#.utf8).write(to: validStamp)
+        try FileManager.default.setAttributes([.modificationDate: skewed], ofItemAtPath: validStamp.path)
+        XCTAssertEqual(ClaudeCodeAdapter.readStatuslineRateLimits(from: [validStamp], now: now).first?.primary?.usedPercent, 34)
+    }
+
+    func testCaptureAcceptsWideSpacedPercent() throws {
+        let frame = "printf '\\033[2J\\033[HCurrent session\\r\\n5%%  used\\r\\n'"
+        let bin = try fakeClaude("""
+        trap '\(frame.replacingOccurrences(of: "'", with: "'\\''"))' WINCH
+        \(frame)
+        while true; do sleep 0.1; done
+        """)
+        let screen = ClaudeUsageProbe.captureScreen(binary: bin, home: makeTempDir(), timeout: 8)
+        let p = screen.flatMap { ClaudeUsageProbe.parse(screen: $0, now: Date()) }
+        XCTAssertNotNil(screen)
+        XCTAssertEqual(p?.session?.usedPercent, 5)
+    }
+
+    /// 第一幀的 "5" 與 "% used" 分兩次 read 到達,中間夾 >256 bytes 的色碼:門檻仍須看見 "5% used"。
+    func testCaptureGateSeesPercentSplitAcrossReads() throws {
+        let clean = "printf '\\033[2J\\033[HCurrent session\\r\\n5%% used\\r\\n'"
+        let bin = try fakeClaude("""
+        trap '\(clean.replacingOccurrences(of: "'", with: "'\\''"))' WINCH
+        printf '\\033[2J\\033[HCurrent session\\r\\n5'
+        sleep 0.5
+        i=0; while [ $i -lt 40 ]; do printf '\\033[38;2;10;20;30m'; i=$((i+1)); done
+        printf '%% used\\r\\n'
+        while true; do sleep 0.1; done
+        """)
+        let screen = ClaudeUsageProbe.captureScreen(binary: bin, home: makeTempDir(), timeout: 8)
+        let p = screen.flatMap { ClaudeUsageProbe.parse(screen: $0, now: Date()) }
+        XCTAssertNotNil(screen, "percent split across reads must still open the gate")
+        XCTAssertEqual(p?.session?.usedPercent, 5)
+    }
+
+    func testCaptureGivesUpOnFloodingChild() throws {
+        let bin = try fakeClaude("yes 'noise without numbers'")
+        let t0 = Date()
+        let screen = ClaudeUsageProbe.captureScreen(binary: bin, home: makeTempDir(), timeout: 8)
+        XCTAssertNil(screen)
+        // 4 MiB 上限應遠早於 8s 逾時觸發(舊碼沒有上限,會一路收到逾時)。
+        XCTAssertTrue(Date().timeIntervalSince(t0) < 6, "flood must hit the buffer cap, not the timeout: \(Date().timeIntervalSince(t0))")
+    }
+
+    /// cwd = home 會讓 Claude Code 掃 home → macOS 以本 app 名義跳 Documents/照片/其他 app 資料的權限提示。
+    func testCaptureRunsInDedicatedEmptyDirectory() throws {
+        let home = makeTempDir()
+        let bin = try fakeClaude("""
+        draw() { printf '\\033[2J\\033[HCurrent session\\r\\n5%% used\\r\\ncwd=%s\\r\\n' "$(pwd -P)"; }
+        trap draw WINCH
+        draw
+        while true; do sleep 0.1; done
+        """)
+        let screen = ClaudeUsageProbe.captureScreen(binary: bin, home: home, timeout: 8)
+        // realpath(3):Foundation 的 resolvingSymlinksInPath 會把 /private/var 剝回 /var,與 `pwd -P` 不同。
+        let dir = home.appendingPathComponent("Library/Application Support/AIPetUsage/claude-probe").path
+        let expected = realpath(dir, nil).map { p in defer { free(p) }; return String(cString: p) } ?? dir
+        XCTAssertTrue(screen?.contains("cwd=\(expected)") == true, "probe must not run with cwd = home: \(screen ?? "nil")")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: expected), [], "work dir stays empty")
+    }
+
+    func testWriteLandingIsOwnerOnly() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent(ClaudeUsageProbe.landingFileName)
+        let at = date("2026-11-16T02:00:00Z")
+        guard let parsed = ClaudeUsageProbe.parse(screen: realScreen, now: at) else {
+            XCTAssertNotNil(nil, "real screen must parse"); return
+        }
+        try ClaudeUsageProbe.writeLanding(parsed, capturedAt: at, to: url)
+        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.intValue, 0o600)
+        // 怪 umask(0400)也不可把擁有者讀權拿掉:adapter 要讀得回來。
+        let strict = dir.appendingPathComponent("strict-umask.json")
+        let old = umask(0o400)
+        defer { umask(old) }
+        try ClaudeUsageProbe.writeLanding(parsed, capturedAt: at, to: strict)
+        umask(old)
+        let strictMode = try FileManager.default.attributesOfItem(atPath: strict.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(strictMode?.intValue, 0o600, "umask must not strip owner read")
+        let raw = try Data(contentsOf: url)
+        let obj = try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+        XCTAssertEqual(obj?["source"] as? String, "usage-probe")
+        XCTAssertEqual(obj?["captured_at"] as? String, isoUTC(at))
     }
 }
