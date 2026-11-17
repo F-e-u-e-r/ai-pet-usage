@@ -117,6 +117,23 @@ final class AntigravityStaleQuotaTests: XCTestCase {
         XCTAssertEqual(st.weeklyOfficial, .expiredUnusable)
     }
 
+    /// Dashboard panel (renders the raw snapshot, not the menu rows) must apply the same expiry rule.
+    func testDashboardBucketSummaryDropsExpiredValue() {
+        func bucket(resets: Date?) -> AntigravityQuotaBucket {
+            AntigravityQuotaBucket(id: "g-5h", label: "5h", windowMinutes: 300,
+                                   usedPercent: 4, remainingPercent: 96, resetsAt: resets)
+        }
+        XCTAssertEqual(AntigravityQuotaDisplay.bucketSummary(bucket(resets: now.addingTimeInterval(3600)),
+                                                              fetchedAt: now.addingTimeInterval(-60), now: now),
+                       "96% left · 1h 0m")
+        XCTAssertEqual(AntigravityQuotaDisplay.bucketSummary(bucket(resets: now.addingTimeInterval(-6 * 3600)),
+                                                              fetchedAt: now.addingTimeInterval(-12 * 3600), now: now),
+                       "— · awaiting agy /usage refresh")
+        XCTAssertEqual(AntigravityQuotaDisplay.bucketSummary(bucket(resets: nil),
+                                                              fetchedAt: now.addingTimeInterval(-6 * 3600), now: now),
+                       "— · awaiting agy /usage refresh")
+    }
+
     func testFiveHourWithoutResetExpiresAfterItsWindow() {
         let st = gemini(snapshot(fetchedAt: now.addingTimeInterval(-6 * 3600), fiveResets: nil,
                                  weekResets: now.addingTimeInterval(86_400)))

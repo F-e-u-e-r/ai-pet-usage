@@ -712,9 +712,10 @@ struct AntigravityQuotaGroupsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: presentation == .limits ? 14 : 8) {
-            Text(presentation == .limits
-                 ? "Official quota — Antigravity buckets (from agy /usage)"
-                 : "\(AntigravityQuotaDisplay.categoryName) official quota")
+            Text((presentation == .limits
+                  ? "Official quota — Antigravity buckets (from agy /usage)"
+                  : "\(AntigravityQuotaDisplay.categoryName) official quota")
+                 + (StatuslineAge.asOfLabel(observedAt: quota.fetchedAt, now: now).map { " · \($0)" } ?? ""))
                 .font(.caption2).foregroundStyle(Theme.textMuted)
             ForEach(Array(AntigravityQuotaDisplay.orderedGroups(quota.groups).enumerated()),
                     id: \.element.id) { index, group in
@@ -760,17 +761,18 @@ struct AntigravityQuotaGroupsView: View {
             Text(bucket.windowMinutes == 300 ? "5h" : "weekly")
                 .frame(width: 46, alignment: .leading)
                 .foregroundStyle(Theme.textMuted)
-            Text("\(Int(bucket.remainingPercent.rounded()))% left · \(ResetLabel.countdown(to: bucket.resetsAt, now: now))")
+            Text(AntigravityQuotaDisplay.bucketSummary(bucket, fetchedAt: quota.fetchedAt, now: now))
         }
     }
 
     private func limitBucketBar(_ bucket: AntigravityQuotaBucket) -> some View {
         let win = bucket.windowMinutes == 300 ? "5-hour" : "Weekly"
+        let expired = AntigravityQuotaDisplay.isExpired(bucket, fetchedAt: quota.fetchedAt, now: now)
         return ReportedLimitBar(
             title: "\(win) window",
-            main: "\(Int(bucket.remainingPercent.rounded()))% left",
-            secondary: ResetLabel.countdown(to: bucket.resetsAt, now: now),
-            gaugePercent: bucket.usedPercent,
+            main: expired ? "—" : "\(Int(bucket.remainingPercent.rounded()))% left",
+            secondary: expired ? "awaiting agy /usage refresh" : ResetLabel.countdown(to: bucket.resetsAt, now: now),
+            gaugePercent: expired ? nil : bucket.usedPercent,
             corrected: false,
             warn: warn,
             danger: danger)

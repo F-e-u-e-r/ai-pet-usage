@@ -164,6 +164,7 @@ runSuite("AntigravityStaleQuotaTests", [
     ("testOldSnapshotMarkedStaleAndLabelled", agyStale.testOldSnapshotMarkedStaleAndLabelled),
     ("testWindowsPastResetDropTheirOldValue", agyStale.testWindowsPastResetDropTheirOldValue),
     ("testFiveHourWithoutResetExpiresAfterItsWindow", agyStale.testFiveHourWithoutResetExpiresAfterItsWindow),
+    ("testDashboardBucketSummaryDropsExpiredValue", agyStale.testDashboardBucketSummaryDropsExpiredValue),
 ])
 
 let ledger = LedgerTests()

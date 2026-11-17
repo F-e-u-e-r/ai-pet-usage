@@ -138,9 +138,15 @@ public enum AntigravityQuotaDisplay {
     }
 
     /// Past its reset, or (no reset time) older than its own window.
-    private static func isExpired(_ bucket: AntigravityQuotaBucket, fetchedAt: Date, now: Date) -> Bool {
+    public static func isExpired(_ bucket: AntigravityQuotaBucket, fetchedAt: Date, now: Date) -> Bool {
         if let resetsAt = bucket.resetsAt { return resetsAt <= now }
         return now.timeIntervalSince(fetchedAt) > Double(bucket.windowMinutes) * 60
+    }
+
+    /// Dashboard line for one bucket: an expired window shows no value (same rule as the menu rows).
+    public static func bucketSummary(_ bucket: AntigravityQuotaBucket, fetchedAt: Date, now: Date) -> String {
+        if isExpired(bucket, fetchedAt: fetchedAt, now: now) { return "— · awaiting agy /usage refresh" }
+        return "\(Int(bucket.remainingPercent.rounded()))% left · \(ResetLabel.countdown(to: bucket.resetsAt, now: now))"
     }
 
     private static func windowState(from bucket: AntigravityQuotaBucket?,
