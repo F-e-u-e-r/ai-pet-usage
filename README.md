@@ -34,6 +34,7 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 - 🧮 **Local ledger + limit engine** — quota, reset windows, token burn rate, and per-model costs from a pricing registry that is sourced & dated per entry.
 - 🐕 **Feeding/XP loop and mood engine** — the pet reacts to signals such as quota remaining, burn rate, stale data, focus sessions, and usage milestones.
 - 📄 **Offline HTML report export** — a local, offline-readable snapshot of Today, Limits, Projects, pricing assumptions, and data-quality notes.
+- 🖥️ **macOS desktop widget** — small, medium, and large sizes showing each provider's 5h and weekly limits. A weekly value older than 30 minutes (Claude, Antigravity, Cursor) is drawn dimmed and VoiceOver reads its age ("as of 10h ago"), the same as the menu bar. Signing and install notes: [`docs/macOS_WIDGET_HANDOFF.md`](docs/macOS_WIDGET_HANDOFF.md).
 - 👀 **Live updates & scheduled exports** — FSEvents file-watching keeps data fresh; report export can run on a schedule.
 - 🪶 **Monitor-only (low RAM) mode** — Settings → General: the floating pet window and animations are never created, and the feeding/XP engine is only instantiated in full-pet mode (switching to monitor-only releases it); usage tracking, menu bar, pages, notifications, and export keep working.
 - ⌨️ **Headless `aipet` CLI** — status, reports, and sprite export from the terminal.
