@@ -68,4 +68,11 @@ echo "Installing to $DST ..."
 rm -rf "$DST"
 ditto "$SRC" "$DST"
 "$ROOT/Scripts/register-widget.sh" "$DST"
+# A running widget extension keeps the OLD binary's layout in memory after the .appex is
+# replaced (snapshot data updates, view code does not). Stop it and WidgetKit's cache
+# daemon so the next render launches the new build; launchd respawns both on demand.
+if pkill -U "$ME" -f "AIPetUsageWidgetExtension.appex/Contents/MacOS/"; then
+  echo "Stopped running widget extension (will relaunch from the new build)."
+fi
+killall chronod 2>/dev/null || true
 echo "Done. Open once: open \"$DST\""

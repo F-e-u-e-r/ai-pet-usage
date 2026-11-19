@@ -290,18 +290,26 @@ enum WidgetProviderChrome {
         switch providerId {
         case "codex":
             return Meta(shortName: "Codex", code: "CX", dotColor: 0x3B82F6)
-        case "claude-code", "claude-code-fable":
-            return Meta(shortName: "Claude", code: providerId == "claude-code-fable" ? "Fb" : "CC", dotColor: 0xE8823A)
+        case "claude-code":
+            return Meta(shortName: "Claude", code: "CC", dotColor: 0xE8823A)
+        case "claude-code-fable":
+            return Meta(shortName: "Claude Fable", code: "Fb", dotColor: 0xE8823A)
         case "grok-code":
             return Meta(shortName: "Grok", code: "GK", dotColor: 0x2E3138)
         case "opencode":
             return Meta(shortName: "OpenCode", code: "OC", dotColor: 0xCA8A04)
         case "antigravity-gemini":
-            return Meta(shortName: "Antigravity", code: "Gm", dotColor: 0x8B5CF6)
+            return Meta(shortName: "AG Gemini", code: "Gm", dotColor: 0x8B5CF6)
         case "antigravity-claude-gpt":
-            return Meta(shortName: "Antigravity", code: "3P", dotColor: 0x8B5CF6)
+            return Meta(shortName: "AG Claude/GPT", code: "3P", dotColor: 0x8B5CF6)
         case "antigravity-argon":
-            return Meta(shortName: "Antigravity", code: "Ar", dotColor: 0x8B5CF6)
+            return Meta(shortName: "AG Argon", code: "Ar", dotColor: 0x8B5CF6)
+        case "cursor-ide":
+            return Meta(shortName: "Cursor", code: "CU", dotColor: 0x1E1E1E)
+        case "cursor-ide-auto":
+            return Meta(shortName: "Cursor Auto", code: "C1", dotColor: 0x1E1E1E)
+        case "cursor-ide-api":
+            return Meta(shortName: "Cursor Other", code: "C3", dotColor: 0x1E1E1E)
         default:
             if providerId.hasPrefix("antigravity") {
                 return Meta(shortName: "Antigravity", code: "AG", dotColor: 0x8B5CF6)

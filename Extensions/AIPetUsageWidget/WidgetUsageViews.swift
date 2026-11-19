@@ -35,13 +35,22 @@ struct WidgetUsageRootView: View {
 private struct WidgetHeader: View {
     let snapshot: WidgetSnapshot
     let now: Date
+    var compact = false
+    var showLegend = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("🐾 AI Usage")
-                .font(.headline)
+                .font(compact ? .caption.weight(.semibold) : .headline)
+                .lineLimit(1)
+                .fixedSize()
+            if showLegend {
+                Text("5h · wk")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Spacer(minLength: 4)
-            if let cost = snapshot.todayCostUSD, snapshot.isFromSameDay(as: now) {
+            if !compact, let cost = snapshot.todayCostUSD, snapshot.isFromSameDay(as: now) {
                 Text(costLine(cost))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -58,17 +67,17 @@ private struct WidgetHeader: View {
 private struct WidgetSmallView: View {
     let entry: UsageEntry
 
-  private var live: Bool { WidgetSnapshotStore.isPopulated(entry.snapshot) }
+    private var live: Bool { WidgetSnapshotStore.isPopulated(entry.snapshot) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            WidgetHeader(snapshot: entry.snapshot, now: entry.date)
+        VStack(alignment: .leading, spacing: 3) {
+            WidgetHeader(snapshot: entry.snapshot, now: entry.date, compact: true, showLegend: true)
             if !live || entry.snapshot.rows.isEmpty {
                 Text("Open AI Pet Usage to refresh")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(entry.snapshot.rows.prefix(3)) { row in
+                FittingRows(rows: entry.snapshot.rows, spacing: 1) { row in
                     WidgetRowCompact(row: row)
                 }
             }
@@ -83,16 +92,23 @@ private struct WidgetMediumView: View {
     private var live: Bool { WidgetSnapshotStore.isPopulated(entry.snapshot) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            WidgetHeader(snapshot: entry.snapshot, now: entry.date)
+        VStack(alignment: .leading, spacing: 6) {
+            WidgetHeader(snapshot: entry.snapshot, now: entry.date, showLegend: true)
             if !live || entry.snapshot.rows.isEmpty {
                 Text(live ? "No limit data yet — keep the menu-bar app running."
                            : "Open AI Pet Usage once, then remove and re-add this widget.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(entry.snapshot.rows.prefix(5)) { row in
-                    WidgetRowDetailed(row: row)
+                let rows = entry.snapshot.rows
+                let half = (rows.count + 1) / 2
+                HStack(alignment: .top, spacing: 12) {
+                    FittingRows(rows: Array(rows.prefix(half)), spacing: 3) { row in
+                        WidgetRowLine(row: row, showBars: false)
+                    }
+                    FittingRows(rows: Array(rows.dropFirst(half)), spacing: 3) { row in
+                        WidgetRowLine(row: row, showBars: false)
+                    }
                 }
             }
         }
@@ -107,7 +123,7 @@ private struct WidgetLargeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            WidgetHeader(snapshot: entry.snapshot, now: entry.date)
+            WidgetHeader(snapshot: entry.snapshot, now: entry.date, showLegend: true)
             if live, entry.snapshot.isFromSameDay(as: entry.date) {
                 Text("\(entry.snapshot.todayTokens.formatted()) tokens today")
                     .font(.caption)
@@ -123,8 +139,8 @@ private struct WidgetLargeView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(entry.snapshot.rows) { row in
-                    WidgetRowDetailed(row: row)
+                FittingRows(rows: entry.snapshot.rows, spacing: 7) { row in
+                    WidgetRowLine(row: row, showBars: true)
                 }
             }
         }
@@ -132,19 +148,46 @@ private struct WidgetLargeView: View {
     }
 }
 
+/// Shows as many rows as fit vertically; if some are cut, the last line says "+N more"
+/// instead of silently clipping.
+private struct FittingRows<Row: View>: View {
+    let rows: [WidgetSnapshotRow]
+    let spacing: CGFloat
+    @ViewBuilder let content: (WidgetSnapshotRow) -> Row
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            ForEach(Array(stride(from: rows.count, through: 1, by: -1)), id: \.self) { n in
+                VStack(alignment: .leading, spacing: spacing) {
+                    ForEach(rows.prefix(n)) { row in content(row) }
+                    if n < rows.count {
+                        Text("+\(rows.count - n) more")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
 private struct WidgetRowCompact: View {
     let row: WidgetSnapshotRow
 
     var body: some View {
-        HStack(spacing: 6) {
-            ProviderDot(color: row.dotColor)
-            Text(row.code)
-                .font(.caption.weight(.semibold))
-                .frame(width: 22, alignment: .leading)
+        HStack(spacing: 4) {
+            ProviderDot(color: row.dotColor, size: 6)
+            Text(row.shortName)
+                .font(.caption2.weight(.medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Spacer(minLength: 2)
             Text(usageText)
-                .font(.caption.monospacedDigit())
+                .font(.caption2.monospacedDigit())
                 .foregroundStyle(.primary)
-            Spacer(minLength: 0)
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 
@@ -156,43 +199,60 @@ private struct WidgetRowCompact: View {
     }
 }
 
-private struct WidgetRowDetailed: View {
+/// One line per provider: dot · name · 5h · wk. `showBars` adds meter bars (large widget).
+private struct WidgetRowLine: View {
     let row: WidgetSnapshotRow
+    let showBars: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                ProviderDot(color: row.dotColor)
-                Text(row.shortName)
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Text(row.code)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+        HStack(spacing: 6) {
+            ProviderDot(color: row.dotColor, size: 7)
+            Text(row.shortName)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: showBars ? 96 : nil, alignment: .leading)
+            if !showBars { Spacer(minLength: 2) }
             if row.idle {
                 Text("idle")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
+                if showBars { Spacer(minLength: 0) }
+            } else if showBars {
+                MeterBar(percent: row.fiveHourPercent)
+                MeterBar(percent: row.weeklyPercent)
             } else {
-                HStack(spacing: 10) {
-                    MeterBar(label: "5h", percent: row.fiveHourPercent)
-                    MeterBar(label: "wk", percent: row.weeklyPercent)
-                }
+                PercentText(percent: row.fiveHourPercent)
+                PercentText(percent: row.weeklyPercent)
             }
         }
     }
 }
 
-private struct MeterBar: View {
-    let label: String
+private struct PercentText: View {
     let percent: Int?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+        Text(percent.map { "\($0)%" } ?? "—")
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(percent.map(percentColor) ?? .secondary)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(width: 30, alignment: .trailing)
+    }
+}
+
+private func percentColor(_ p: Int) -> Color {
+    if p >= 95 { return .red }
+    if p >= 80 { return .orange }
+    return .primary
+}
+
+private struct MeterBar: View {
+    let percent: Int?
+
+    var body: some View {
+        HStack(spacing: 3) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
@@ -203,9 +263,12 @@ private struct MeterBar: View {
                     }
                 }
             }
-            .frame(height: 6)
+            .frame(height: 5)
             Text(percent.map { "\($0)%" } ?? "—")
                 .font(.caption2.monospacedDigit())
+                .lineLimit(1)
+                .fixedSize()
+                .frame(width: 28, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
     }
@@ -219,11 +282,13 @@ private struct MeterBar: View {
 
 private struct ProviderDot: View {
     let color: UInt32
+    var size: CGFloat = 8
 
     var body: some View {
         Circle()
             .fill(Color(rgb: color))
-            .frame(width: 8, height: 8)
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.35), lineWidth: 0.5))
+            .frame(width: size, height: size)
     }
 }
 
