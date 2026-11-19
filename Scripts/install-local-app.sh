@@ -6,6 +6,13 @@ SRC="$ROOT/dist/AI Pet Usage.app"
 DST="/Applications/AI Pet Usage.app"
 
 [ -d "$SRC" ] || { echo "Run Scripts/build-app.sh first." >&2; exit 1; }
+# checks/project.sh (also run by the commit hook) rebuilds dist/ WITHOUT the widget; installing
+# that would replace a working app with a widget-less one. Refuse before touching /Applications.
+[ -d "$SRC/Contents/PlugIns/AIPetUsageWidgetExtension.appex" ] || {
+  echo "Refusing: $SRC has no widget extension (dist/ was rebuilt by checks/project.sh)." >&2
+  echo "Run Scripts/build-app.sh, then re-run this script." >&2
+  exit 1
+}
 
 SHARED_ROOT="/Users/Shared/AIPetUsage"
 UID_DIR="${SHARED_ROOT}/$(id -u)"
