@@ -100,6 +100,45 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(snap.rows.first?.weeklyPercent, 10)
     }
 
+    /// Regression (2026-11-19): with 7 other providers, the 8-row cap plus Cursor sorting last
+    /// (api < auto by id) silently dropped "Cursor Auto". Every provider must reach the widget.
+    func testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders() {
+        let now = Date()
+        func st(_ id: String, _ five: Double?, _ week: Double) -> ProviderLimitState {
+            ProviderLimitState(
+                providerId: id,
+                fiveHour: LimitWindowState(usedPercent: five, windowMinutes: 300, confidence: .high),
+                weekly: LimitWindowState(usedPercent: week, windowMinutes: 10_080, confidence: .high))
+        }
+        let limits = [
+            st("cursor-ide-api", nil, 61), st("cursor-ide-auto", nil, 12),
+            st("codex", 7, 78), st("claude-code", 28, 94), st("claude-code-fable", nil, 41),
+            st("antigravity-gemini", 78, 51), st("antigravity-claude-gpt", 0, 0),
+            st("antigravity-argon", nil, 22), st("grok-code", nil, 100),
+        ]
+        let dash = DashboardState(
+            generatedAt: now, snapshots: [], limitStates: limits, todayTotals: .zero, todayCost: .zero,
+            todayByProvider: [], burnRateTokensPerHour: 0, burnCostPerHour: 0, hourly: [], topProjects: [],
+            models: [], dataQuality: [], lastRefreshAt: now)
+        let snap = WidgetSnapshotBuilder.build(
+            dashboard: dash, limitStates: limits,
+            enabledProviders: ["codex", "claude-code", "antigravity", "grok-code", "cursor-ide"])
+        XCTAssertEqual(snap.rows.map { $0.providerId }, [
+            "codex", "claude-code", "claude-code-fable",
+            "antigravity-gemini", "antigravity-claude-gpt", "antigravity-argon",
+            "grok-code", "cursor-ide-auto", "cursor-ide-api",
+        ])
+        XCTAssertEqual(snap.rows.first { $0.providerId == "cursor-ide-auto" }?.shortName, "Cursor")
+    }
+
+    /// Review fix (sol3/grok8): an unknown provider with an empty display name must not render a blank row.
+    func testUnknownProviderEmptyNameFallsBackToId() {
+        XCTAssertEqual(WidgetProviderChrome.meta(for: "custom-x", displayName: "").shortName, "custom-x")
+        XCTAssertEqual(WidgetProviderChrome.meta(for: "custom-x", displayName: "  ").shortName, "custom-x")
+        XCTAssertEqual(WidgetProviderChrome.meta(for: "custom-x", displayName: "Foo").shortName, "Foo")
+        XCTAssertEqual(WidgetProviderChrome.meta(for: "custom-x", displayName: "").code, "CU")
+    }
+
     func testIsPopulatedRejectsEmptyPreviewShapedSnapshot() {
         let stale = WidgetSnapshot(generatedAt: .distantPast, todayTokens: 0, todayCostUSD: nil,
                                    todayCostIsEstimated: false, rows: [])

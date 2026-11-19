@@ -1399,6 +1399,8 @@ let widgetSnapshot = WidgetSnapshotTests()
 runSuite("WidgetSnapshotTests", [
     ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
     ("testBuilderIgnoresNonFinitePercents", widgetSnapshot.testBuilderIgnoresNonFinitePercents),
+    ("testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders", widgetSnapshot.testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders),
+    ("testUnknownProviderEmptyNameFallsBackToId", widgetSnapshot.testUnknownProviderEmptyNameFallsBackToId),
     ("testIsPopulatedRejectsEmptyPreviewShapedSnapshot", widgetSnapshot.testIsPopulatedRejectsEmptyPreviewShapedSnapshot),
     ("testOverrideMirrorRootIsNeverChmodded", widgetSnapshot.testOverrideMirrorRootIsNeverChmodded),
     ("testSharedMirrorRejectsSymlinkedUIDDirectory", widgetSnapshot.testSharedMirrorRejectsSymlinkedUIDDirectory),

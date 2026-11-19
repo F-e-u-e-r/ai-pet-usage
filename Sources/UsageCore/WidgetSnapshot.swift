@@ -185,9 +185,9 @@ public enum WidgetSnapshotStore {
     }
 }
 
-/// Rows for the macOS widget (Codex · Antigravity · Grok · OpenCode + Claude account).
+/// Rows for the macOS widget (Codex · Claude · Antigravity · Grok · OpenCode · Cursor).
 public enum WidgetSnapshotBuilder {
-    /// Provider chrome ids shown in the widget when data exists (excludes Cursor unless added later).
+    /// Display order of provider chrome ids in the widget (ids not listed sort after, by id).
     public static let preferredProviderOrder: [String] = [
         "codex",
         "claude-code",
@@ -197,13 +197,16 @@ public enum WidgetSnapshotBuilder {
         "antigravity-argon",
         "grok-code",
         "opencode",
+        "cursor-ide",
+        "cursor-ide-auto",
+        "cursor-ide-api",
     ]
 
     public static func build(
         dashboard: DashboardState,
         limitStates: [ProviderLimitState],
         enabledProviders: Set<String>,
-        maxRows: Int = 8
+        maxRows: Int = 12
     ) -> WidgetSnapshot {
         let rowCap = max(0, maxRows)
         let names = Dictionary(
@@ -307,15 +310,17 @@ enum WidgetProviderChrome {
         case "cursor-ide":
             return Meta(shortName: "Cursor", code: "CU", dotColor: 0x1E1E1E)
         case "cursor-ide-auto":
-            return Meta(shortName: "Cursor Auto", code: "C1", dotColor: 0x1E1E1E)
+            return Meta(shortName: "Cursor", code: "C1", dotColor: 0x1E1E1E)
         case "cursor-ide-api":
             return Meta(shortName: "Cursor Other", code: "C3", dotColor: 0x1E1E1E)
         default:
             if providerId.hasPrefix("antigravity") {
                 return Meta(shortName: "Antigravity", code: "AG", dotColor: 0x8B5CF6)
             }
-            let code = String(displayName.prefix(2)).uppercased()
-            return Meta(shortName: displayName, code: code.isEmpty ? "?" : code, dotColor: 0x9AA1AB)
+            let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = trimmed.isEmpty ? providerId : trimmed
+            let code = String(name.prefix(2)).uppercased()
+            return Meta(shortName: name, code: code.isEmpty ? "?" : code, dotColor: 0x9AA1AB)
         }
     }
 }

@@ -11,7 +11,7 @@ struct ProviderUsageWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("AI Usage")
-        .description("Codex, Claude, Antigravity, Grok, and OpenCode limits from AI Pet Usage.")
+        .description("Codex, Claude, Antigravity, Grok, OpenCode, and Cursor limits from AI Pet Usage.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -48,6 +48,7 @@ private struct WidgetHeader: View {
                 Text("5h · wk")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             Spacer(minLength: 4)
             if !compact, let cost = snapshot.todayCostUSD, snapshot.isFromSameDay(as: now) {
@@ -188,14 +189,22 @@ private struct WidgetRowCompact: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .fixedSize()
+                .accessibilityLabel(usageAccessibilityLabel)
         }
     }
 
     private var usageText: String {
         if row.idle { return "idle" }
-        let a = row.fiveHourPercent.map { "\($0)%" } ?? "—"
-        let b = row.weeklyPercent.map { "\($0)%" } ?? "—"
+        let a = row.fiveHourPercent.map { "\(min(100, max(0, $0)))%" } ?? "—"
+        let b = row.weeklyPercent.map { "\(min(100, max(0, $0)))%" } ?? "—"
         return "\(a)/\(b)"
+    }
+
+    private var usageAccessibilityLabel: String {
+        if row.idle { return "idle" }
+        let a = row.fiveHourPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
+        let b = row.weeklyPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
+        return "5 hour \(a), week \(b)"
     }
 }
 
@@ -219,11 +228,11 @@ private struct WidgetRowLine: View {
                     .foregroundStyle(.secondary)
                 if showBars { Spacer(minLength: 0) }
             } else if showBars {
-                MeterBar(percent: row.fiveHourPercent)
-                MeterBar(percent: row.weeklyPercent)
+                MeterBar(percent: row.fiveHourPercent, window: "5 hour")
+                MeterBar(percent: row.weeklyPercent, window: "week")
             } else {
-                PercentText(percent: row.fiveHourPercent)
-                PercentText(percent: row.weeklyPercent)
+                PercentText(percent: row.fiveHourPercent, window: "5 hour")
+                PercentText(percent: row.weeklyPercent, window: "week")
             }
         }
     }
@@ -231,14 +240,21 @@ private struct WidgetRowLine: View {
 
 private struct PercentText: View {
     let percent: Int?
+    let window: String
+
+    private var displayedPercent: Int? {
+        percent.map { min(100, max(0, $0)) }
+    }
 
     var body: some View {
-        Text(percent.map { "\($0)%" } ?? "—")
+        Text(displayedPercent.map { "\($0)%" } ?? "—")
             .font(.caption2.monospacedDigit())
-            .foregroundStyle(percent.map(percentColor) ?? .secondary)
+            .foregroundStyle(displayedPercent.map(percentColor) ?? .secondary)
             .lineLimit(1)
             .fixedSize()
             .frame(width: 30, alignment: .trailing)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(displayedPercent.map { "\(window) \($0) percent" } ?? "\(window) no data")
     }
 }
 
@@ -250,27 +266,34 @@ private func percentColor(_ p: Int) -> Color {
 
 private struct MeterBar: View {
     let percent: Int?
+    let window: String
+
+    private var displayedPercent: Int? {
+        percent.map { min(100, max(0, $0)) }
+    }
 
     var body: some View {
         HStack(spacing: 3) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    if let p = percent {
+                    if let p = displayedPercent {
                         Capsule()
                             .fill(barColor(p))
-                            .frame(width: geo.size.width * CGFloat(min(100, max(0, p))) / 100)
+                            .frame(width: geo.size.width * CGFloat(p) / 100)
                     }
                 }
             }
             .frame(height: 5)
-            Text(percent.map { "\($0)%" } ?? "—")
+            Text(displayedPercent.map { "\($0)%" } ?? "—")
                 .font(.caption2.monospacedDigit())
                 .lineLimit(1)
                 .fixedSize()
                 .frame(width: 28, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(displayedPercent.map { "\(window) \($0) percent" } ?? "\(window) no data")
     }
 
     private func barColor(_ p: Int) -> Color {
