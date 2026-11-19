@@ -1408,6 +1408,12 @@ runSuite("WidgetSnapshotTests", [
     ("testReadNewestEmptySnapshotClearsStaleData", widgetSnapshot.testReadNewestEmptySnapshotClearsStaleData),
     ("testWidgetExtensionReadPrefersSupportBeforeShared", widgetSnapshot.testWidgetExtensionReadPrefersSupportBeforeShared),
     ("testStoreRoundTripInSupportPath", widgetSnapshot.testStoreRoundTripInSupportPath),
+    ("testWeeklyStaleLabelNilWhenNoAsOf", widgetSnapshot.testWeeklyStaleLabelNilWhenNoAsOf),
+    ("testWeeklyStaleLabelNilWhenNoWeeklyPercent", widgetSnapshot.testWeeklyStaleLabelNilWhenNoWeeklyPercent),
+    ("testWeeklyStaleLabelTenHoursAgo", widgetSnapshot.testWeeklyStaleLabelTenHoursAgo),
+    ("testWeeklyStaleLabelFutureSkew", widgetSnapshot.testWeeklyStaleLabelFutureSkew),
+    ("testWeeklyStaleLabelUnderThreshold", widgetSnapshot.testWeeklyStaleLabelUnderThreshold),
+    ("testWidgetSnapshotRowWeeklyAsOfJSONRoundTrip", widgetSnapshot.testWidgetSnapshotRowWeeklyAsOfJSONRoundTrip),
 ])
 
 let claudeStaleness = ClaudeStatuslineStalenessTests()

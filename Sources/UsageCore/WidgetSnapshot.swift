@@ -72,6 +72,15 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         self.idle = idle
         self.weeklyAsOf = weeklyAsOf
     }
+
+    /// a11y/age text for a stale weekly value; nil when the weekly value is live or absent.
+    public func weeklyStaleLabel(now: Date) -> String? {
+        guard weeklyAsOf != nil else { return nil }
+        guard weeklyPercent != nil else { return nil }
+        return StatuslineAge.asOfLabel(observedAt: weeklyAsOf, now: now) ?? "stale"
+    }
+
+    public var isWeeklyStale: Bool { weeklyAsOf != nil && weeklyPercent != nil }
 }
 
 public enum WidgetSnapshotPaths {

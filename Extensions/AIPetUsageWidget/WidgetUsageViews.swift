@@ -79,7 +79,7 @@ private struct WidgetSmallView: View {
                     .foregroundStyle(.secondary)
             } else {
                 FittingRows(rows: entry.snapshot.rows, spacing: 1) { row in
-                    WidgetRowCompact(row: row)
+                    WidgetRowCompact(row: row, now: entry.date)
                 }
             }
         }
@@ -105,10 +105,10 @@ private struct WidgetMediumView: View {
                 let half = (rows.count + 1) / 2
                 HStack(alignment: .top, spacing: 12) {
                     FittingRows(rows: Array(rows.prefix(half)), spacing: 3) { row in
-                        WidgetRowLine(row: row, showBars: false)
+                        WidgetRowLine(row: row, showBars: false, now: entry.date)
                     }
                     FittingRows(rows: Array(rows.dropFirst(half)), spacing: 3) { row in
-                        WidgetRowLine(row: row, showBars: false)
+                        WidgetRowLine(row: row, showBars: false, now: entry.date)
                     }
                 }
             }
@@ -141,7 +141,7 @@ private struct WidgetLargeView: View {
                     .foregroundStyle(.secondary)
             } else {
                 FittingRows(rows: entry.snapshot.rows, spacing: 7) { row in
-                    WidgetRowLine(row: row, showBars: true)
+                    WidgetRowLine(row: row, showBars: true, now: entry.date)
                 }
             }
         }
@@ -175,6 +175,7 @@ private struct FittingRows<Row: View>: View {
 
 private struct WidgetRowCompact: View {
     let row: WidgetSnapshotRow
+    let now: Date
 
     var body: some View {
         HStack(spacing: 4) {
@@ -184,7 +185,7 @@ private struct WidgetRowCompact: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Spacer(minLength: 2)
-            Text(usageText)
+            usageValues
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -193,18 +194,32 @@ private struct WidgetRowCompact: View {
         }
     }
 
-    private var usageText: String {
-        if row.idle { return "idle" }
-        let a = row.fiveHourPercent.map { "\(min(100, max(0, $0)))%" } ?? "—"
-        let b = row.weeklyPercent.map { "\(min(100, max(0, $0)))%" } ?? "—"
-        return "\(a)/\(b)"
+    @ViewBuilder
+    private var usageValues: some View {
+        if row.idle {
+            Text("idle")
+        } else if row.isWeeklyStale {
+            // One Text (not an HStack) so layout and the a11y label match the live case.
+            Text("\(fiveHourText)/") + Text(weeklyText).foregroundColor(.primary.opacity(0.55))
+        } else {
+            Text("\(fiveHourText)/\(weeklyText)")
+        }
+    }
+
+    private var fiveHourText: String {
+        row.fiveHourPercent.map { "\(min(100, max(0, $0)))%" } ?? "—"
+    }
+
+    private var weeklyText: String {
+        row.weeklyPercent.map { "\(min(100, max(0, $0)))%" } ?? "—"
     }
 
     private var usageAccessibilityLabel: String {
         if row.idle { return "idle" }
         let a = row.fiveHourPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
         let b = row.weeklyPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
-        return "5 hour \(a), week \(b)"
+        let age = row.weeklyStaleLabel(now: now).map { " (\($0))" } ?? ""
+        return "5 hour \(a), week \(b)\(age)"
     }
 }
 
@@ -212,6 +227,9 @@ private struct WidgetRowCompact: View {
 private struct WidgetRowLine: View {
     let row: WidgetSnapshotRow
     let showBars: Bool
+    let now: Date
+
+    private var weeklyStaleLabel: String? { row.weeklyStaleLabel(now: now) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -229,10 +247,20 @@ private struct WidgetRowLine: View {
                 if showBars { Spacer(minLength: 0) }
             } else if showBars {
                 MeterBar(percent: row.fiveHourPercent, window: "5 hour")
-                MeterBar(percent: row.weeklyPercent, window: "week")
+                MeterBar(
+                    percent: row.weeklyPercent,
+                    window: "week",
+                    weeklyStale: row.isWeeklyStale,
+                    weeklyStaleLabel: weeklyStaleLabel
+                )
             } else {
                 PercentText(percent: row.fiveHourPercent, window: "5 hour")
-                PercentText(percent: row.weeklyPercent, window: "week")
+                PercentText(
+                    percent: row.weeklyPercent,
+                    window: "week",
+                    weeklyStale: row.isWeeklyStale,
+                    weeklyStaleLabel: weeklyStaleLabel
+                )
             }
         }
     }
@@ -241,6 +269,8 @@ private struct WidgetRowLine: View {
 private struct PercentText: View {
     let percent: Int?
     let window: String
+    var weeklyStale = false
+    var weeklyStaleLabel: String? = nil
 
     private var displayedPercent: Int? {
         percent.map { min(100, max(0, $0)) }
@@ -253,8 +283,15 @@ private struct PercentText: View {
             .lineLimit(1)
             .fixedSize()
             .frame(width: 30, alignment: .trailing)
+            .opacity(weeklyStale ? 0.55 : 1)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(displayedPercent.map { "\(window) \($0) percent" } ?? "\(window) no data")
+            .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        let base = displayedPercent.map { "\(window) \($0) percent" } ?? "\(window) no data"
+        guard weeklyStale, let weeklyStaleLabel else { return base }
+        return base + " (\(weeklyStaleLabel))"
     }
 }
 
@@ -267,6 +304,8 @@ private func percentColor(_ p: Int) -> Color {
 private struct MeterBar: View {
     let percent: Int?
     let window: String
+    var weeklyStale = false
+    var weeklyStaleLabel: String? = nil
 
     private var displayedPercent: Int? {
         percent.map { min(100, max(0, $0)) }
@@ -292,8 +331,15 @@ private struct MeterBar: View {
                 .frame(width: 28, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
+        .opacity(weeklyStale ? 0.55 : 1)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(displayedPercent.map { "\(window) \($0) percent" } ?? "\(window) no data")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        let base = displayedPercent.map { "\(window) \($0) percent" } ?? "\(window) no data"
+        guard weeklyStale, let weeklyStaleLabel else { return base }
+        return base + " (\(weeklyStaleLabel))"
     }
 
     private func barColor(_ p: Int) -> Color {

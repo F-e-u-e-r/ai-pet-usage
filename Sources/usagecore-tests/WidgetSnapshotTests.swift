@@ -270,4 +270,102 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(read?.todayTokens, 99)
         XCTAssertEqual(read?.todayCostUSD, 1.5)
     }
+
+    func testWeeklyStaleLabelNilWhenNoAsOf() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: 40,
+            idle: false,
+            weeklyAsOf: nil
+        )
+        XCTAssertNil(row.weeklyStaleLabel(now: now))
+        XCTAssertFalse(row.isWeeklyStale)
+    }
+
+    func testWeeklyStaleLabelNilWhenNoWeeklyPercent() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: nil,
+            idle: false,
+            weeklyAsOf: now.addingTimeInterval(-3600)
+        )
+        XCTAssertNil(row.weeklyStaleLabel(now: now))
+        XCTAssertFalse(row.isWeeklyStale)
+    }
+
+    func testWeeklyStaleLabelTenHoursAgo() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: 39,
+            idle: false,
+            weeklyAsOf: now.addingTimeInterval(-10 * 3600)
+        )
+        XCTAssertEqual(row.weeklyStaleLabel(now: now), "as of 10h ago")
+        XCTAssertTrue(row.isWeeklyStale)
+    }
+
+    func testWeeklyStaleLabelFutureSkew() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: 39,
+            idle: false,
+            weeklyAsOf: now.addingTimeInterval(5 * 60)
+        )
+        XCTAssertEqual(row.weeklyStaleLabel(now: now), "stale")
+        XCTAssertTrue(row.isWeeklyStale)
+    }
+
+    func testWeeklyStaleLabelUnderThreshold() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: 39,
+            idle: false,
+            weeklyAsOf: now.addingTimeInterval(-10 * 60)
+        )
+        XCTAssertEqual(row.weeklyStaleLabel(now: now), "stale")
+        XCTAssertTrue(row.isWeeklyStale)
+    }
+
+    func testWidgetSnapshotRowWeeklyAsOfJSONRoundTrip() throws {
+        let asOf = Date(timeIntervalSince1970: 1_700_000_000)
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0xFF0000,
+            fiveHourPercent: 5,
+            weeklyPercent: 39,
+            idle: false,
+            weeklyAsOf: asOf
+        )
+        let data = try JSONEncoder().encode(row)
+        let decoded = try JSONDecoder().decode(WidgetSnapshotRow.self, from: data)
+        XCTAssertEqual(decoded.weeklyAsOf, asOf)
+        XCTAssertEqual(decoded.weeklyPercent, 39)
+    }
 }
