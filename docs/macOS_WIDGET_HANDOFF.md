@@ -16,7 +16,7 @@ This document is for **whoever merges and ships** the widget (ideally with a **p
 | Entitlements (adhoc) | `Extensions/AIPetUsageWidget/AIPetUsageWidget.adhoc.entitlements` — **sandbox + `/Users/Shared/AIPetUsage/` read** |
 | Main app App Group | `Extensions/AIPetUsage/AIPetUsage.entitlements` — `group.dev.aipetusage.app` |
 
-**Widget providers (chrome rows):** Codex, Claude (+ Fable when present), Antigravity buckets, Grok, OpenCode (when enabled). Data is **limit % + today tokens/cost** only (no prompts).
+**Widget providers (chrome rows):** Codex, Claude (+ Fable when present), Antigravity buckets, Grok, OpenCode (when enabled), Cursor ("Cursor" and "Cursor Other" rows; monthly plan % shown in the weekly column). Data is **limit % + today tokens/cost** only (no prompts).
 
 ## Data path (contract)
 
