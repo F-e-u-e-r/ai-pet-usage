@@ -6,11 +6,16 @@ SRC="$ROOT/dist/AI Pet Usage.app"
 DST="/Applications/AI Pet Usage.app"
 
 [ -d "$SRC" ] || { echo "Run Scripts/build-app.sh first." >&2; exit 1; }
-# checks/project.sh (also run by the commit hook) rebuilds dist/ WITHOUT the widget; installing
-# that would replace a working app with a widget-less one. Refuse before touching /Applications.
-[ -d "$SRC/Contents/PlugIns/AIPetUsageWidgetExtension.appex" ] || {
-  echo "Refusing: $SRC has no widget extension (dist/ was rebuilt by checks/project.sh)." >&2
-  echo "Run Scripts/build-app.sh, then re-run this script." >&2
+# checks/project.sh (also run by the commit hook) builds dist/ with SKIP_WIDGET=1, and a failed widget
+# build can leave the appex incomplete; installing either would replace a working app with a widget-less
+# one. Refuse before touching /Applications.
+APPEX_SRC="$SRC/Contents/PlugIns/AIPetUsageWidgetExtension.appex"
+PLIST_SRC="$APPEX_SRC/Contents/Info.plist"
+EXEC_SRC="$APPEX_SRC/Contents/MacOS/AIPetUsageWidgetExtension"
+[ -f "$PLIST_SRC" ] && [ -s "$PLIST_SRC" ] && [ -f "$EXEC_SRC" ] && [ -s "$EXEC_SRC" ] && [ -x "$EXEC_SRC" ] || {
+  echo "Refusing: $SRC has no complete widget extension" >&2
+  echo "(likely built by checks/project.sh or with SKIP_WIDGET=1, or the widget build failed)." >&2
+  echo "Run Scripts/build-app.sh with SKIP_WIDGET unset, then re-run this script." >&2
   exit 1
 }
 
