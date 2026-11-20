@@ -133,7 +133,7 @@ Then list findings as \`(reviewer, F#): claim — evidence — severity\`.
 
 ### Static findings (machine)
 - F1: Widget snapshot must stay share-safe (no paths / secrets in JSON).
-- F2: Sandboxed widget reads App Group when signed with a team; ad-hoc uses per-UID \`/Users/Shared/AIPetUsage/<uid>/\` mirror (see docs/macOS_WIDGET_HANDOFF.md).
+- F2: Sandboxed widget reads App Group when signed with a team; ad-hoc uses per-UID \`/Users/Shared/AIPetUsage/<uid>/\` mirror (see docs/macOS_WIDGET.md).
 - F3: Nim and TypeSafe AI are **not** wired as providers; widget order documents Codex/AG/Grok/OC only.
 - F4: Widget extension builds via \`macOS/AIPetUsageWidget.xcodeproj\` and \`Scripts/build-widget-extension.sh\` (embedded in \`Scripts/build-app.sh\` unless SKIP_WIDGET=1).
 

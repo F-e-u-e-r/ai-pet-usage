@@ -34,7 +34,7 @@
 - 🧮 **本機帳本 + 額度引擎** —— 配額、重置視窗、token 消耗率,以及來自定價註冊表(每筆皆註明來源與日期)的各模型花費。
 - 🐕 **餵食/XP 迴圈與心情引擎** —— 寵物會對配額剩餘、消耗率、資料過期、專注時段、使用里程碑等訊號做出反應。
 - 📄 **離線 HTML 報表匯出** —— 一份可離線閱讀的本機快照,涵蓋 Today、Limits、Projects、定價假設與資料品質註記。
-- 🖥️ **macOS 桌面小工具** —— 小、中、大三種尺寸,顯示各供應商的 5 小時與週限額。週數值超過 30 分鐘未更新時(Claude、Antigravity、Cursor)會以淡色顯示,VoiceOver 會讀出資料時間(「as of 10h ago」),與選單列一致。簽署與安裝說明見 [`docs/macOS_WIDGET_HANDOFF.md`](docs/macOS_WIDGET_HANDOFF.md)。
+- 🖥️ **macOS 桌面小工具** —— 小、中、大三種尺寸,顯示各供應商的 5 小時與週限額。週數值超過 30 分鐘未更新時(Claude、Antigravity、Cursor)會以淡色顯示,VoiceOver 會讀出資料時間(「as of 10h ago」),與選單列一致。簽署與安裝說明見 [`docs/macOS_WIDGET.md`](docs/macOS_WIDGET.md)。
 - 👀 **即時更新與排程匯出** —— FSEvents 檔案監看讓資料保持新鮮;報表匯出可依排程執行。
 - 🪶 **僅監看(低記憶體)模式** —— Settings → General:完全不建立漂浮寵物視窗與動畫,餵食/XP 引擎僅在完整寵物模式下實例化(切到僅監看即釋放);使用量追蹤、選單列、頁面、通知與匯出照常運作。
 - ⌨️ **無頭 `aipet` CLI** —— 從終端機取得狀態、報表與 sprite 匯出。

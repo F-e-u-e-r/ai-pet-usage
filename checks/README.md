@@ -32,7 +32,7 @@ Nim and TypeSafe AI are listed for future adapter work; they are not app provide
 
 ## macOS widget
 
-Widget docs (data path, signing, pitfalls): **`docs/macOS_WIDGET_HANDOFF.md`**.
+Widget docs (data path, signing, pitfalls): **`docs/macOS_WIDGET.md`**.
 
 - Snapshot: `UsageCore/WidgetSnapshot.swift` → `widget-snapshot.json` (App Support + `/Users/Shared/AIPetUsage/` + App Group when available).
 - UI: `macOS/AIPetUsageWidget.xcodeproj` + `Extensions/AIPetUsageWidget/` (embedded by `Scripts/build-app.sh`).
