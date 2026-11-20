@@ -149,6 +149,42 @@ then ok "T02 frozen schema exact (allowlist at every level)"; else bad "T02 froz
 [ "$(stat -f %Lp "$DATA_DIR")" = 700 ] && ok "T03 dir perms 700" || bad "T03 dir perms" "$(stat -f %Lp "$DATA_DIR")"
 if ls "$DATA_DIR"/.claude-statusline.json.* >/dev/null 2>&1; then bad "T04 no tmp litter" "$(ls "$DATA_DIR")"; else ok "T04 no tmp litter"; fi
 
+# ---- 4b. model_scoped + seven_day_overage_included (Fable weekly) ----------
+sandbox
+SCOPED_PAYLOAD='{"model":{"id":"claude-fable-5-1","display_name":"Fable"},"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":1789000000},"seven_day":{"used_percentage":12,"resets_at":1789400000},"seven_day_overage_included":{"used_percentage":38,"resets_at":1789500000}}}'
+printf '%s' "$SCOPED_PAYLOAD" > "$SB/payload-scoped.json"
+run_hook "$SB/payload-scoped.json"
+assert_status "T04b scoped exit 0" 0
+assert_out_is "T04b scoped display" '🐾 Fable · 5h 5% · wk 12% · Fable 38%'
+landed
+if "$PYBIN" - "$LANDED" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert "model_scoped" in d, sorted(d)
+ms = d["model_scoped"]
+assert len(ms) == 1 and ms[0]["display_name"] == "Fable"
+assert ms[0]["used_percentage"] == 38
+assert ms[0]["resets_at"] == 1789500000
+PYEOF
+then ok "T04b model_scoped landed (Fable from overage)"; else bad "T04b model_scoped" "$(cat "$LANDED")"; fi
+
+# ---- 4c. rate_limits.model_scoped nested (Claude Code often nests here) ----
+sandbox
+NESTED='{"rate_limits":{"five_hour":{"used_percentage":3,"resets_at":1789000000},"seven_day":{"used_percentage":39,"resets_at":1789400000},"model_scoped":[{"display_name":"Fable","utilization":0.41,"resets_at":1789500000}]}}'
+printf '%s' "$NESTED" > "$SB/payload-nested.json"
+run_hook "$SB/payload-nested.json"
+assert_status "T04c nested exit 0" 0
+assert_out_is "T04c nested display" '🐾 Claude · 5h 3% · wk 39% · Fable 41%'
+landed
+if "$PYBIN" - "$LANDED" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["rate_limits"]["five_hour"]["used_percentage"] == 3
+assert d["rate_limits"]["seven_day"]["used_percentage"] == 39
+assert d["model_scoped"][0]["used_percentage"] == 41
+PYEOF
+then ok "T04c nested model_scoped + account windows"; else bad "T04c nested" "$(cat "$LANDED")"; fi
+
 # ---- 5. wrap:stdin byte-identical(無尾端換行;\n\n 結尾) ------------------
 sandbox; write_full_payload
 make_stub "$SB/stub.sh"

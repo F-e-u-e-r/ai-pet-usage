@@ -210,14 +210,46 @@ sign_app_bundle() {
         adhoc)
             # adhoc —— 與歷來逐字相同(原 build-app.sh 的簽名區塊),僅把隱式 set -e 失敗改為顯式 `|| return`,
             # 行為等價(嚴格路徑失敗即非零退出;非嚴格路徑 best-effort 吞掉失敗)。
-            # 先簽巢狀的 aipet,再簽外層 app(外層密封含已簽的 helper)。
-            # STRICT_SIGN=1(release workflow):簽章失敗即 fail 並 --verify --strict 驗證 —
-            # CI 產出未簽 bundle 下載後是「已損壞」,比 quarantine 更難排;不用 --deep 簽(會掩蓋漏簽)。
+            # inside-out: widget appex → aipet → outer app(密封含 PlugIns)。
+            local widget_appex="$app/Contents/PlugIns/AIPetUsageWidgetExtension.appex"
+            local ent_adhoc="$ROOT/Extensions/AIPetUsageWidget/AIPetUsageWidget.adhoc.entitlements"
+            local ent_prod="$ROOT/Extensions/AIPetUsageWidget/AIPetUsageWidget.entitlements"
+            local ent_widget=""
+            if [ -n "${DEVELOPMENT_TEAM:-}" ] && [ -f "$ent_prod" ]; then ent_widget="$ent_prod"
+            elif [ -f "$ent_adhoc" ]; then ent_widget="$ent_adhoc"; fi
             if [[ "${STRICT_SIGN:-0}" == "1" ]]; then
+                if [ -d "$widget_appex" ]; then
+                    if [ -n "$ent_widget" ]; then
+                        codesign --force --sign - --entitlements "$ent_widget" "$widget_appex" || return 1
+                    else
+                        codesign --force --sign - "$widget_appex" || return 1
+                    fi
+                fi
+                local ent_main="$ROOT/Extensions/AIPetUsage/AIPetUsage.entitlements"
+                if [ -f "$ent_main" ]; then
+                    codesign --force --sign - --entitlements "$ent_main" "$app/Contents/MacOS/AIPetUsage" || return 1
+                else
+                    codesign --force --sign - "$app/Contents/MacOS/AIPetUsage" || return 1
+                fi
                 codesign --force --sign - "$app/Contents/MacOS/aipet" || return 1
                 codesign --force --sign - "$app" || return 1
                 codesign --verify --deep --strict "$app" || return 1
             else
+                if [ -d "$widget_appex" ]; then
+                    if [ -n "$ent_widget" ]; then
+                        codesign --force --sign - --entitlements "$ent_widget" "$widget_appex" 2>/dev/null || true
+                    else
+                        codesign --force --sign - "$widget_appex" 2>/dev/null || true
+                    fi
+                fi
+                local ent_main="$ROOT/Extensions/AIPetUsage/AIPetUsage.entitlements"
+                if [ -f "$ent_main" ]; then
+                    if ! codesign --force --sign - --entitlements "$ent_main" "$app/Contents/MacOS/AIPetUsage" 2>&1; then
+                        echo "sign: warning — AIPetUsage entitlements (App Group) not applied; widget may miss group container" >&2
+                    fi
+                else
+                    codesign --force --sign - "$app/Contents/MacOS/AIPetUsage" 2>/dev/null || true
+                fi
                 codesign --force --sign - "$app/Contents/MacOS/aipet" 2>/dev/null || true
                 codesign --force --sign - "$app" 2>/dev/null || true
             fi
@@ -367,12 +399,27 @@ main() {
     "$ROOT/Scripts/swiftpm.sh" build -c release --product AIPetUsage || return 1
     "$ROOT/Scripts/swiftpm.sh" build -c release --product aipet || return 1
 
+    embed_widget() {
+        local target_app="${1:-$APP}"
+        [ "${SKIP_WIDGET:-0}" = "1" ] && return 0
+        [ -d "$ROOT/macOS/AIPetUsageWidget.xcodeproj" ] || return 0
+        AIPET_APP_BUNDLE="$target_app" "$ROOT/Scripts/build-widget-extension.sh" || return 1
+    }
+
+    register_widget_if_present() {
+        local target_app="${1:-$APP}"
+        [ "${SKIP_WIDGET:-0}" = "1" ] && return 0
+        [ -x "$ROOT/Scripts/register-widget.sh" ] || return 0
+        "$ROOT/Scripts/register-widget.sh" "$target_app" || return 0
+    }
+
     if [ "$SIGN_MODE" = developer-id ]; then
         # 交易式:組裝→簽→驗 全在 staging 路徑;任一失敗即清 staging(最終 dist 路徑「絕不」留下半簽/錯簽/半組裝
         # 的產物,也不會因失敗而破壞先前成功的產物);三者皆通過才原子換到最終路徑。
         local work="$ROOT/dist/.staging-AIPetUsage.app"
         local prev="$ROOT/dist/.prev-AIPetUsage.app"
         _assemble_bundle "$work"  || { rm -rf "$work"; return 1; }
+        embed_widget "$work"      || { rm -rf "$work"; return 1; }
         sign_app_bundle "$work"   || { rm -rf "$work"; return 1; }
         verify_signature "$work"  || { rm -rf "$work"; return 1; }
         # 交易式換置(崩潰安全的 .prev-dance,round-4 三家族 reviewer 共識):絕不同時失去新舊兩者,且能從「上一輪在
@@ -400,11 +447,16 @@ main() {
     else
         # adhoc —— 與歷來相同:直接組裝於最終路徑;組裝失敗即非零退出(不特別清理,與原 set -e 行為一致)。
         _assemble_bundle "$APP" || return 1
-        sign_app_bundle "$APP"  || return 1
+        embed_widget "$APP"      || return 1
+        sign_app_bundle "$APP"   || return 1
+        register_widget_if_present "$APP"
     fi
 
     echo "Built: $APP"
     echo "Run:   open \"$APP\""
+    if [ "${SKIP_WIDGET:-0}" != "1" ] && [ -d "$APP/Contents/PlugIns/AIPetUsageWidgetExtension.appex" ]; then
+        echo "Widget: Scripts/install-local-app.sh  (copy to /Applications + register), then Notification Center → Edit Widgets"
+    fi
 }
 
 # source-guard:被 `source` 時只定義函式(harness 用);直接執行時跑完整建置。

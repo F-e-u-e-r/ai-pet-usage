@@ -11,7 +11,11 @@
 #   {"schema_version":1,"captured_at":"<UTC ISO8601>",
 #    "model":{"id":<str|null>,"display_name":<str|null>} 或 null,
 #    "rate_limits":{"five_hour":{"used_percentage":<num>[,"resets_at":<num>]},
-#                   "seven_day":{...}}}
+#                   "seven_day":{...}},
+#    "model_scoped":[{"display_name":<str>,"used_percentage":<num>[,"resets_at":<num>]
+#                     [,"observed_at":"<UTC ISO8601>"]}…]}
+#   (optional; includes Fable when Claude Code sends model_scoped or seven_day_overage_included;
+#    entries carried over from the previous file keep their original observed_at)
 # 只在至少一個窗口「可用」(used_percentage 為有限數值;bool/NaN/Inf 不算)時才寫檔;
 # payload 缺 rate_limits 或全窗不可用時**保留上一份好檔**(新鮮度由 app 依 mtime 判定)。
 #
@@ -169,6 +173,48 @@ if isinstance(raw, dict):
         if w is not None:
             rl[key] = w
 
+def scoped_entry(item, fallback_name=None):
+    if not isinstance(item, dict):
+        return None
+    name = (safe_str(item.get("display_name")) or safe_str(item.get("displayName"))
+            or fallback_name)
+    if not name:
+        return None
+    w = window(item)
+    if w is None:
+        util = item.get("utilization")
+        if isinstance(util, bool):
+            return None
+        if isinstance(util, (int, float)) and math.isfinite(util):
+            pct = util * 100 if abs(util) <= 1.0 else util
+            entry = {"display_name": name, "used_percentage": pct}
+            resets = num(item.get("resets_at"))
+            if resets is not None:
+                entry["resets_at"] = resets
+            return entry
+        return None
+    entry = {"display_name": name, "used_percentage": w["used_percentage"]}
+    if "resets_at" in w:
+        entry["resets_at"] = w["resets_at"]
+    return entry
+
+model_scoped_out = []
+nested_scoped = raw.get("model_scoped") if isinstance(raw, dict) else None
+raw_scoped = d.get("model_scoped")
+if not isinstance(raw_scoped, list) and isinstance(nested_scoped, list):
+    raw_scoped = nested_scoped
+if isinstance(raw_scoped, list):
+    for item in raw_scoped:
+        e = scoped_entry(item)
+        if e is not None:
+            model_scoped_out.append(e)
+if isinstance(raw, dict):
+    e = scoped_entry(raw.get("seven_day_overage_included"), "Fable")
+    if e is not None and not any(
+        (x.get("display_name") or "").lower() == "fable" for x in model_scoped_out
+    ):
+        model_scoped_out.append(e)
+
 m = d.get("model")
 model_out = None
 if isinstance(m, dict):
@@ -176,11 +222,47 @@ if isinstance(m, dict):
                  "display_name": safe_str(m.get("display_name"))}
 
 tmp_path = sys.argv[1] if len(sys.argv) > 1 else ""
-if rl and tmp_path:
+dest_path = sys.argv[2] if len(sys.argv) > 2 else ""
+# payload 沒帶 model_scoped 時沿用上一份檔的項目,但每項保留**自己的原始讀取時間**
+# (observed_at;首次沿用取上一份檔的 captured_at),app 據此標示年齡 —— 不得被新檔的
+# captured_at 洗成「剛剛」。丟棄會讓 Fable 列在 payload 間歇缺欄時閃爍消失,故選保留+時間戳。
+# 時間戳不可考(非字串或格式不符)的項目直接丟掉:無法誠實標示年齡就不沿用。
+# 只在本次確有帳戶窗(rl)要落地時才沿用:單靠沿用項不得觸發寫檔,否則會以空
+# rate_limits + 新 captured_at 覆蓋上一份好檔。
+def iso_utc(v):
+    v = safe_str(v)
+    if v is None:
+        return None
+    try:
+        datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    return v
+
+if rl and not model_scoped_out and dest_path and os.path.isfile(dest_path):
+    try:
+        with open(dest_path, encoding="utf-8") as prev_f:
+            prev = json.load(prev_f)
+        prev_scoped = prev.get("model_scoped")
+        prev_captured = iso_utc(prev.get("captured_at"))
+        if isinstance(prev_scoped, list):
+            for item in prev_scoped:
+                e = scoped_entry(item)
+                seen_at = iso_utc(item.get("observed_at")) if isinstance(item, dict) else None
+                seen_at = seen_at or prev_captured
+                if e is not None and seen_at is not None:
+                    e["observed_at"] = seen_at
+                    model_scoped_out.append(e)
+    except Exception:
+        model_scoped_out = []
+
+if (rl or model_scoped_out) and tmp_path:
     out = {"schema_version": 1,
            "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            "model": model_out,
            "rate_limits": rl}
+    if model_scoped_out:
+        out["model_scoped"] = model_scoped_out
     try:
         payload = json.dumps(out).encode("utf-8")
         # 群組可寫目錄的 TOCTOU 防護:mktemp 與寫入之間若有人動了臨時檔就中止。
@@ -221,7 +303,13 @@ def pct_text(key):
     return f"{round(v)}%" if v is not None else "—"
 five = pct_text("five_hour")
 week = pct_text("seven_day")
-sys.stdout.write(f"🐾 {display} · 5h {five} · wk {week}")
+scoped_bits = []
+for item in model_scoped_out:
+    n = item.get("display_name") or "Model"
+    v = item.get("used_percentage")
+    scoped_bits.append(f"{n} {round(v)}%" if v is not None else f"{n} —")
+scoped = (" · " + " · ".join(scoped_bits)) if scoped_bits else ""
+sys.stdout.write(f"🐾 {display} · 5h {five} · wk {week}{scoped}")
 '
 
 # ---- telemetry 全階段封裝:全 best-effort,stdout = 狀態列文字,回傳非零 = 解析失敗 ----
@@ -258,7 +346,8 @@ persist_and_render() {
             fi
         fi
     fi
-    if ! rendered=$(printf '%s' "$_hook_stdin" | "$PYTHON_BIN" -I -c "$PY_EXTRACT" "$tmp"); then
+    dest="$OUT_DIR/claude-statusline.json"
+    if ! rendered=$(printf '%s' "$_hook_stdin" | "$PYTHON_BIN" -I -c "$PY_EXTRACT" "$tmp" "$dest"); then
         [ -z "$tmp" ] || /bin/rm -f "$tmp"
         return 1
     fi
@@ -269,7 +358,6 @@ persist_and_render() {
         return 1
     fi
     if [ -n "$tmp" ]; then
-        dest="$OUT_DIR/claude-statusline.json"
         # 權限已由 python 在已驗證的 fd 上 fchmod 600(不再走路徑名 chmod)。
         # 落地目標若已是目錄(或指向目錄的 symlink),mv 會「搬進去」且回 0 —— 假成功,拒絕。
         if [ -s "$tmp" ] && [ ! -d "$dest" ] && /bin/mv -f "$tmp" "$dest"; then

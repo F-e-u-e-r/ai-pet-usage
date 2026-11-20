@@ -17,8 +17,8 @@ public enum UsageRingModel {
     /// 每環直徑增量(= 2 × (線寬 3.5 + 環距 3);pt 固定)。
     public static let ringStep: CGFloat = 13
     public static let strokeWidth: CGFloat = 3.5
-    /// 面板保留的環數上限(Antigravity 未來加入也不改視窗尺寸)。
-    public static let capacity = 4
+    /// 面板保留的環數上限(Antigravity 三桶 + 其他 provider;6 環仍固定容器尺寸)。
+    public static let capacity = 6
     /// 底部缺口(所有環同缺口、同起點)。
     public static let gapFraction: Double = 0.08
 
@@ -27,7 +27,7 @@ public enum UsageRingModel {
         CGFloat(petSize) * 1.75
     }
 
-    /// 容量外徑(容器邊長;含 4 環)。
+    /// 容量外徑(容器邊長;含 6 環)。
     public static func capacityOuterDiameter(petSize: Double) -> CGFloat {
         baseDiameter(petSize: petSize) + CGFloat(capacity - 1) * ringStep
     }
@@ -42,14 +42,26 @@ public enum UsageRingModel {
         }
     }
 
-    /// 過濾規則(B2):有 5h 百分比者各一環,依傳入順序(orderedLimitStates)、
-    /// 至多 capacity 家;Grok(nil)自然跳過。
+    /// 過濾規則(B2):有 5h 百分比者各一環;無官方限額時用 `todayActivityPercent`(本機今日 tokens 刻度)。
+    /// Token-only providers (Grok, Cursor, OpenCode) keep a ring slot even when Antigravity splits into
+    /// multiple menu badges — they must not be truncated by `.prefix(capacity)`.
     public static func entries(from limits: [ProviderLimitState]) -> [Entry] {
-        limits.compactMap { st in
-            st.fiveHour.usedPercent.map { Entry(providerId: st.providerId, percent: $0) }
+        let limits = AntigravityQuotaDisplay.collapseForPetRings(limits)
+        var official: [Entry] = []
+        var activity: [Entry] = []
+        for st in limits {
+            if let p = st.fiveHour.usedPercent {
+                official.append(Entry(providerId: st.providerId, percent: p))
+            } else if GrokChromeDisplay.usesWeeklyOnlyMeter(st.providerId),
+                      let w = st.weekly.usedPercent {
+                official.append(Entry(providerId: st.providerId, percent: w))
+            } else if let act = st.todayActivityPercent {
+                activity.append(Entry(providerId: st.providerId, percent: act))
+            }
         }
-        .prefix(capacity)
-        .map { $0 }
+        let reserved = min(activity.count, capacity)
+        let room = max(0, capacity - reserved)
+        return Array(official.prefix(room)) + activity.prefix(reserved)
     }
 
     /// 第 k 家(0-based,共 n 家)的環直徑:第一家最外,自 base 向外疊。
