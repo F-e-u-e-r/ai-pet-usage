@@ -95,6 +95,8 @@ Claude Code pipes its official rate limits (the real 5-hour / weekly `used_perce
 
 Add `--dry-run` to preview without writing. If your existing `statusLine` is a **compound command** (with pipes/arguments) rather than a single script path, it won't guess — it refuses with guidance and leaves everything unchanged, so you can wrap it manually (see below). It also refuses (changing nothing) on symlinked/dotfiles-managed settings, non-`command` statusLine types, and unmanaged hook references, and prints the revert line after installing.
 
+**Hook path moved or deleted?** If your `statusLine.command` still points at a `claude-statusline-hook.sh` in an old location (for example a clone you moved or deleted), install-hook refuses and changes nothing. It only manages the exact command it writes for its current hook and cannot prove who wrote anything else, so it never rewrites another command that mentions the hook. To recover: save your current `statusLine.command` somewhere (rollback = paste it back), then edit `settings.json` yourself — if the old command wrapped a statusline of your own (`--wrap …`), set `statusLine.command` back to your own script; otherwise remove the `statusLine` block. Then re-run `install-hook` (`--dry-run` previews first). If the command is a manual install or a wrapper you set up on purpose and it still works, keep it.
+
 **Manual alternative** — the same hook lives in the repo at [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh) (not in the app bundle — Homebrew users: clone the repo or grab the file from the source zip of a release).
 
 Fresh install (you don't have a custom statusline yet) — add to `~/.claude/settings.json`:

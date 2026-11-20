@@ -118,6 +118,30 @@ public enum InstallHook {
         """
     }
 
+    /// 指令提到 hook 檔名、卻不是「現行 hook 的 canonical 形式」時的拒絕文案(附復原指引)。
+    /// 刻意是**單一靜態模板**:不解析指令、不探測任何路徑、不依指令內容分流 —— 安裝器形狀 + 舊路徑
+    /// 不存在都證明不了「這是本工具寫的」(#143 owner 決策:維持 fail-closed 所有權契約;歷史 hook
+    /// 自動修復需另行核准的 ownership/provenance 設計)。鎖定:testUnmanagedHookGuidanceIsStatic、
+    /// testRunnerStaleHookReferenceRefusedWithGuidance。不含 "install-hook:" 前綴(runner 統一加上)。
+    static func refuseUnmanagedHookReference(_ shown: String) -> String {
+        """
+        statusLine already references a \(hookFileName) not managed by this installer, so it was left unchanged:
+          \(esc(shown))
+        install-hook only manages the exact command it writes for its current hook. It cannot prove who wrote any
+        other command that mentions this hook (an older install, a manual install, your own wrapper), so it never
+        rewrites one.
+        Options:
+          • If this command is intentional and still works (a manual install or your own wrapper), keep it — nothing
+            needs to change.
+          • If it is an old AI Pet Usage hook you no longer use (e.g. its path was moved or deleted and Claude limits
+            stopped updating): first save your current statusLine.command from settings.json somewhere (to restore
+            it, paste it back), then edit settings.json yourself — if it wrapped a statusline of your own (--wrap …),
+            set statusLine.command back to your own script; otherwise remove the statusLine block. Then re-run
+            install-hook (--dry-run previews first; a real run backs up settings.json before writing and prints how
+            to revert).
+        """
+    }
+
     public static func plan(probe: Probe, hookPath: String) -> Plan {
         let prefix = hookInvocationPrefix(hookPath: hookPath)
 
@@ -171,7 +195,7 @@ public enum InstallHook {
                     return refuse("statusLine.type is \"\(esc(typeValue))\" (not \"command\") — not touching a non-command statusLine")
                 }
                 if containsCI(raw, hookFileName) {
-                    return refuse("statusLine already references a \(hookFileName) not managed by this installer (manual install?) — not touching it")
+                    return refuse(refuseUnmanagedHookReference(raw))
                 }
             } else if let typeValue, typeValue != "command" {
                 return refuse("statusLine.type is \"\(esc(typeValue))\" (not \"command\") — not touching a non-command statusLine")

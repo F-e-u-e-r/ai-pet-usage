@@ -66,6 +66,10 @@ runSuite("InstallHookTests", [
     ("testCLIUnknownArgWritesNothing", installHook.testCLIUnknownArgWritesNothing),
     ("testCLIProcessExitCode", installHook.testCLIProcessExitCode),
     ("testCLIDryRunCreatesNothing", installHook.testCLIDryRunCreatesNothing),
+    ("testUnmanagedHookGuidanceIsStatic", installHook.testUnmanagedHookGuidanceIsStatic),
+    ("testRunnerStaleHookReferenceRefusedWithGuidance", installHook.testRunnerStaleHookReferenceRefusedWithGuidance),
+    ("testRunnerHookGuidanceScopedToHookReferences", installHook.testRunnerHookGuidanceScopedToHookReferences),
+    ("testCLIStaleHookReferenceRefusedWithGuidance", installHook.testCLIStaleHookReferenceRefusedWithGuidance),
 ])
 
 let claude = ClaudeCodeAdapterTests()

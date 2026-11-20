@@ -683,4 +683,214 @@ final class InstallHookTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: data))
         XCTAssertFalse(FileManager.default.fileExists(atPath: cfg))
     }
+
+    // MARK: 非現行 hook 引用 → 照舊拒絕 + 復原指引(#143;契約不變:不解析、不探測、不改寫)
+
+    /// 復原指引的穩定 token(比對前把空白/換行壓成單一空白;斷言「可執行的指引」在,不釘死整段文案)。
+    private let hookGuidanceTokens = [
+        "not managed by this installer", "left unchanged", "cannot prove who wrote", "never rewrites", "keep it",
+        "old AI Pet Usage hook", "save your current statusLine.command from settings.json", "paste it back",
+        "set statusLine.command back to your own script", "remove the statusLine block", "re-run install-hook",
+        "--dry-run",
+    ]
+
+    private func squash(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private func settingsJSON(_ statusLine: [String: Any]) throws -> String {
+        String(data: try JSONSerialization.data(withJSONObject: ["statusLine": statusLine]), encoding: .utf8)!
+    }
+
+    func testUnmanagedHookGuidanceIsStatic() throws {
+        // 提到 hook、但不是現行 canonical 的指令一律拒絕,且拿到同一份指引(只差回顯的指令):
+        // 指引不得依指令形狀分流(不辨識「像不像舊安裝」)。worst-case probe:任何路徑都「存在、
+        // regular、可執行」—— 拒絕不得仰賴檔案系統狀態,而且拒絕路徑根本不得探測任何路徑。
+        let old = "/old place/claude-statusline-hook.sh"
+        let oldPrefix = InstallHook.hookInvocationPrefix(hookPath: old)
+        let cmds = [
+            oldPrefix,                                                       // 舊位置的安裝器 F1
+            "\(oldPrefix) --wrap '/Users/t/my.sh'",                          // 舊位置 F2
+            "\(oldPrefix) --wrap /bin/bash -- '/Users/t/my.sh'",             // 舊位置 F3
+            "/bin/bash /repo/Scripts/claude-statusline-hook.sh",             // README 手寫形式
+            "/bin/bash /repo/Scripts/claude-statusline-hook.sh --wrap /Users/t/my.sh",
+            "/bin/bash /x/claude-statusline-hook.sh | /usr/bin/fmt",         // 管線
+            "FOO=1 /bin/bash /x/claude-statusline-hook.sh",                  // env 前綴
+            "/Users/t/bin/my-claude-statusline-hook.sh",                     // 使用者自己的腳本(名字含 hook 名)
+            "/x/CLAUDE-STATUSLINE-HOOK.SH",                                  // 大小寫變體
+            hookPath,                                                        // 直接指向現行 hook 檔
+            " \(prefix) ",                                                   // 現行 F1 但非 byte-exact
+        ]
+        var templates = Set<String>()
+        var probed: [String] = []
+        for cmd in cmds {
+            let plan = planOf(try settingsJSON(["type": "command", "command": cmd]),
+                              regular: { probed.append($0); return true }, exec: { probed.append($0); return true })
+            guard case .refuse(let reason) = plan.action else {
+                XCTAssertTrue(false, "expected refuse for \(cmd), got \(plan.action)"); continue
+            }
+            XCTAssertNil(plan.newSettingsJSON, cmd)
+            XCTAssertTrue(reason.contains("\n  \(cmd)\n"), "須回顯原指令:\(reason)")
+            for t in hookGuidanceTokens {
+                XCTAssertTrue(squash(reason).contains(t), "缺少「\(t)」:\(reason)")
+            }
+            templates.insert(reason.replacingOccurrences(of: "\n  \(cmd)\n", with: "\n  <CMD>\n"))
+        }
+        XCTAssertEqual(templates.count, 1, "指引必須是同一份靜態模板(不依指令形狀分流):\(templates)")
+        XCTAssertEqual(probed, [], "拒絕路徑不得探測任何檔案系統路徑:\(probed)")
+    }
+
+    func testRunnerStaleHookReferenceRefusedWithGuidance() throws {
+        // #143 的真實情境:statusLine 指向「舊位置」的 hook(舊資料夾已搬走/刪除),包裹的使用者
+        // 腳本仍在且合法。安裝器形狀 + 舊路徑不存在都證明不了歸屬 → 照舊拒絕(exit 2)、settings
+        // 逐位元不動、零寫入(無備份、不建資料目錄、舊路徑不放任何東西),並給出復原指引。
+        let dir = plainTempDir()
+        let cfg = dir.appendingPathComponent("cfg").path
+        let data = dir.appendingPathComponent("data").path
+        try FileManager.default.createDirectory(atPath: cfg, withIntermediateDirectories: true)
+        let mine = dir.appendingPathComponent("my status.sh").path
+        try Data("#!/bin/bash\nprintf MINE\n".utf8).write(to: URL(fileURLWithPath: mine)); chmod(mine, 0o755)
+        let exe = dir.appendingPathComponent("exe.sh").path
+        try Data("#!/bin/bash\nprintf EXE\n".utf8).write(to: URL(fileURLWithPath: exe)); chmod(exe, 0o755)
+        let plain = dir.appendingPathComponent("plain.sh").path
+        try Data("printf PLAIN\n".utf8).write(to: URL(fileURLWithPath: plain)); chmod(plain, 0o644)
+        let goneDir = dir.appendingPathComponent("moved away").path
+        let gone = goneDir + "/claude-statusline-hook.sh"
+        let stale = InstallHook.hookInvocationPrefix(hookPath: gone)
+        let q = InstallHook.shellSingleQuote
+        let cmds = [stale,                                                  // 舊位置 F1
+                    "\(stale) --wrap \(q(mine))",                           // 舊位置 F2(可執行 target)
+                    "\(stale) --wrap /bin/bash -- \(q(plain))",             // 舊位置 F3(regular target)
+                    "/bin/bash \(dir.path)/old-clone/Scripts/claude-statusline-hook.sh --wrap \(exe)"]   // README 形式
+        for cmd in cmds {
+            let before = try JSONSerialization.data(withJSONObject:
+                ["statusLine": ["type": "command", "command": cmd, "padding": 0], "keep": ["x": 1]])
+            try before.write(to: URL(fileURLWithPath: cfg + "/settings.json"))
+            for dry in [true, false] {
+                let r = InstallHook.run(configDir: cfg, dataDir: data, home: "/Users/t", dryRun: dry)
+                XCTAssertEqual(r.exitCode, 2, "dry=\(dry) 必須拒絕:\(cmd) → \(r.output)")
+                XCTAssertTrue(r.output.hasPrefix("install-hook: statusLine already references"), r.output)
+                XCTAssertTrue(r.output.contains("\n  \(cmd)\n"), "須回顯原指令:\(r.output)")
+                for t in hookGuidanceTokens {
+                    XCTAssertTrue(squash(r.output).contains(t), "缺少「\(t)」:\(r.output)")
+                }
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: cfg + "/settings.json")), before,
+                               "settings 必須逐位元不動:\(cmd)")
+            }
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cfg), ["settings.json"],
+                           "不得有備份或任何新檔:\(cmd)")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: data), "拒絕時不得建立資料目錄:\(cmd)")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: goneDir), "舊路徑不得被建立:\(cmd)")
+        }
+        // 回顯的指令不可信:控制字元必須跳脫,不得偽造輸出行(與 testRefuseComplexEscapesControlChars 同一守則)
+        let evil = "/bin/bash /x/claude-statusline-hook.sh\u{1b}[2J\ninstall-hook: installed"
+        try JSONSerialization.data(withJSONObject: ["statusLine": ["type": "command", "command": evil]])
+            .write(to: URL(fileURLWithPath: cfg + "/settings.json"))
+        let r = InstallHook.run(configDir: cfg, dataDir: data, home: "/Users/t", dryRun: false)
+        XCTAssertEqual(r.exitCode, 2, r.output)
+        XCTAssertTrue(r.output.contains("\\x1B[2J\\x0Ainstall-hook: installed"), r.output)
+        XCTAssertFalse(r.output.contains("\u{1b}"), r.output)
+        XCTAssertFalse(r.output.split(separator: "\n").contains { $0.hasPrefix("install-hook: installed") }, r.output)
+    }
+
+    func testRunnerHookGuidanceScopedToHookReferences() throws {
+        // 指引只屬於「提到 hook 的非現行指令」;其餘路徑行為與文案不變:不提 hook 的自訂指令照舊拒絕且
+        // 零改動,fresh → F1,現行 canonical F1/F2/F3 → already installed(settings 不動),單一 script
+        // 包裹照舊(可執行 → F2、不可執行 → F3)。
+        let dir = plainTempDir()
+        let data = dir.appendingPathComponent("data").path
+        let current = InstallHook.hookInvocationPrefix(hookPath: data + "/claude-statusline-hook.sh")
+        let exe = dir.appendingPathComponent("exe.sh").path
+        try Data("#!/bin/bash\nprintf EXE\n".utf8).write(to: URL(fileURLWithPath: exe)); chmod(exe, 0o755)
+        let txt = dir.appendingPathComponent("txt.sh").path
+        try Data("printf TXT\n".utf8).write(to: URL(fileURLWithPath: txt)); chmod(txt, 0o644)
+        let q = InstallHook.shellSingleQuote
+        var n = 0
+        func run(_ statusLine: [String: Any]?) throws -> (r: InstallHook.RunResult, before: Data?, after: Data?, files: [String]) {
+            n += 1
+            let cfg = dir.appendingPathComponent("cfg\(n)").path
+            try FileManager.default.createDirectory(atPath: cfg, withIntermediateDirectories: true)
+            var before: Data?
+            if let statusLine {
+                let d = try JSONSerialization.data(withJSONObject: ["statusLine": statusLine])
+                try d.write(to: URL(fileURLWithPath: cfg + "/settings.json"))
+                before = d
+            }
+            let r = InstallHook.run(configDir: cfg, dataDir: data, home: "/Users/t", dryRun: false)
+            XCTAssertFalse(squash(r.output).contains("old AI Pet Usage hook"), "指引不得外溢:\(r.output)")
+            return (r, before, try? Data(contentsOf: URL(fileURLWithPath: cfg + "/settings.json")),
+                    try FileManager.default.contentsOfDirectory(atPath: cfg).sorted())
+        }
+        func command(_ settings: Data?) throws -> String? {
+            guard let settings else { return nil }
+            let root = try JSONSerialization.jsonObject(with: settings) as? [String: Any]
+            return (root?["statusLine"] as? [String: Any])?["command"] as? String
+        }
+        for cmd in ["/usr/local/bin/st --compact | tr -d x", "FOO=1 \(exe)", "\(exe); echo hi",
+                    "~bob/st.sh", dir.path + "/missing.sh", dir.path] {
+            let x = try run(["type": "command", "command": cmd])
+            XCTAssertEqual(x.r.exitCode, 2, "\(cmd) → \(x.r.output)")
+            XCTAssertTrue(x.r.output.contains("single script file"), x.r.output)
+            XCTAssertFalse(x.r.output.contains("not managed by this installer"), x.r.output)
+            XCTAssertEqual(x.after, x.before, "settings 不得被動:\(cmd)")
+            XCTAssertEqual(x.files, ["settings.json"], cmd)
+        }
+        let fresh = try run(nil)
+        XCTAssertEqual(fresh.r.exitCode, 0, fresh.r.output)
+        XCTAssertEqual(try command(fresh.after), current)
+        for cmd in [current, "\(current) --wrap \(q(exe))", "\(current) --wrap /bin/bash -- \(q(txt))"] {
+            let x = try run(["type": "command", "command": cmd])
+            XCTAssertEqual(x.r.exitCode, 0, "\(cmd) → \(x.r.output)")
+            XCTAssertTrue(x.r.output.contains("already installed"), x.r.output)
+            XCTAssertEqual(x.after, x.before, "現行 canonical:settings 不動")
+            XCTAssertEqual(x.files, ["settings.json"])
+        }
+        for (target, expected) in [(exe, "\(current) --wrap \(q(exe))"), (txt, "\(current) --wrap /bin/bash -- \(q(txt))")] {
+            let x = try run(["type": "command", "command": target])
+            XCTAssertEqual(x.r.exitCode, 0, x.r.output)
+            XCTAssertEqual(try command(x.after), expected)
+            XCTAssertEqual(x.files.filter { $0.contains("aipet-backup") }.count, 1, "包裹前必須備份")
+        }
+    }
+
+    func testCLIStaleHookReferenceRefusedWithGuidance() throws {
+        // 真正的 production 入口(.build/debug/aipet install-hook):舊位置 hook 的 F2 →
+        // --dry-run 與真跑都 exit 2、stdout 帶復原指引、settings 逐位元不動、無備份、不建資料目錄。
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let aipet = root.appendingPathComponent(".build/debug/aipet").path
+        XCTAssertTrue(FileManager.default.fileExists(atPath: aipet), "需先建 aipet")
+        let dir = plainTempDir()
+        let cfg = dir.appendingPathComponent("cfg").path
+        let data = dir.appendingPathComponent("data").path
+        try FileManager.default.createDirectory(atPath: cfg, withIntermediateDirectories: true)
+        let mine = dir.appendingPathComponent("mine.sh").path
+        try Data("#!/bin/bash\nprintf MINE\n".utf8).write(to: URL(fileURLWithPath: mine)); chmod(mine, 0o755)
+        let gone = dir.appendingPathComponent("old/claude-statusline-hook.sh").path
+        let cmd = InstallHook.hookInvocationPrefix(hookPath: gone) + " --wrap " + InstallHook.shellSingleQuote(mine)
+        let before = try JSONSerialization.data(withJSONObject: ["statusLine": ["type": "command", "command": cmd]])
+        try before.write(to: URL(fileURLWithPath: cfg + "/settings.json"))
+        for extra in [["--dry-run"], []] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: aipet)
+            p.arguments = ["install-hook"] + extra
+            var env = ProcessInfo.processInfo.environment
+            env["CLAUDE_CONFIG_DIR"] = cfg
+            env["AIPET_DATA_DIR"] = data
+            p.environment = env
+            let out = Pipe()
+            p.standardOutput = out; p.standardError = Pipe()
+            try p.run()
+            let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            p.waitUntilExit()
+            XCTAssertEqual(p.terminationStatus, 2, "\(extra) → \(stdout)")
+            XCTAssertTrue(stdout.contains("\n  \(cmd)\n"), stdout)
+            for t in hookGuidanceTokens {
+                XCTAssertTrue(squash(stdout).contains(t), "缺少「\(t)」:\(stdout)")
+            }
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: cfg + "/settings.json")), before)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cfg), ["settings.json"])
+            XCTAssertFalse(FileManager.default.fileExists(atPath: data))
+        }
+    }
 }
