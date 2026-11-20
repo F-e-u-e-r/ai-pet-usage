@@ -1,8 +1,8 @@
-# macOS Notification Center widget — handoff for upstream
+# macOS desktop widget
 
-This document is for **whoever merges and ships** the widget (ideally with a **paid or Personal Team** Apple Developer account). Personal ad‑hoc builds work for dogfooding; **proper signing is the path of least pain** for gallery + data.
+A WidgetKit extension (small, medium, large) that shows each provider's limits on the desktop and in Notification Center. Ad‑hoc builds work for personal use; distributing it to others needs a **paid or Personal Team** Apple Developer account, because **proper signing is the path of least pain** for gallery + data.
 
-## What landed (local / this branch)
+## Where it lives
 
 | Piece | Location |
 |--------|-----------|
@@ -17,6 +17,8 @@ This document is for **whoever merges and ships** the widget (ideally with a **p
 | Main app App Group | `Extensions/AIPetUsage/AIPetUsage.entitlements` — `group.dev.aipetusage.app` |
 
 **Widget providers (chrome rows):** Codex, Claude (+ Fable when present), Antigravity buckets, Grok, OpenCode (when enabled), Cursor ("Cursor" and "Cursor Other" rows; monthly plan % shown in the weekly column). Data is **limit % + today tokens/cost** only (no prompts).
+
+**Stale weekly values:** a weekly reading older than 30 minutes (Claude, Antigravity, Cursor) is drawn at 0.55 opacity and its VoiceOver label adds the age ("as of 10h ago"), matching the menu bar.
 
 ## Data path (contract)
 
@@ -48,7 +50,7 @@ Scripts/build-app.sh
 # Wire signing in Xcode for main app + appex; drop reliance on Shared temp exception if group works.
 ```
 
-## Recommended upstream follow-ups (with Developer account)
+## Before distributing signed builds (needs a Developer account)
 
 1. **Single team ID** on **main app binary** and **widget appex** (`CODE_SIGN_ENTITLEMENTS` already point at prod plist when `DEVELOPMENT_TEAM` is set in `build-widget-extension.sh`).
 2. **Confirm App Group** `group.dev.aipetusage.app` in the Apple Developer portal for that team; register to provisioning profiles.
@@ -74,14 +76,14 @@ Official `agy /usage` quota is **off by default** (`AppSettings.antigravityQuota
 - `Sources/usagecore-tests/WidgetSnapshotTests.swift` (+ suite in `main.swift`)
 - `checks/widget-golden/cases.jsonl` — row filter / provider order
 
-## Acceptance checklist (maintainer)
+## Release checklist
 
 - [ ] `Scripts/build-app.sh` embeds `AIPetUsageWidgetExtension.appex`
 - [ ] Install to `/Applications`, `pluginkit -m -i dev.aipetusage.app.widget` shows **`+`** and correct path
 - [ ] Widget shows **non-empty rows** within 1 refresh of opening app
 - [ ] With **team signing only**: snapshot file appears in group container and widget works **without** `/Users/Shared` mirror (optional hardening PR)
 
-## Out of scope for this handoff
+## Out of scope
 
 - App Store metadata, widget family screenshots
 - Paid-account automatic CI signing secrets (maintainer supplies `DEVELOPMENT_TEAM` in secure CI vars)
