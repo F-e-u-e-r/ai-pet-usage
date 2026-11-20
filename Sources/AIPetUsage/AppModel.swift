@@ -46,6 +46,7 @@ final class AppModel {
     /// OpenRouter credits 監控(opt-in;獨立 15 分鐘節奏,刻意不掛 FSEvents 刷新風暴)。
     let orCredits = OpenRouterCreditsChecker()
     let grokQuota = GrokQuotaChecker()
+    let cursorQuota = CursorQuotaChecker()
     private let settingsStore: SettingsStore
     private let dataDir: URL
     /// monitor-only(低 RAM)模式下完全不建立;只在 full 模式第一次用到時載入。
@@ -71,12 +72,21 @@ final class AppModel {
     /// stop() 後 fence:進行中的背景抓取(Task.detached 不受父 cancel 影響)完成時,據此不得再
     /// setCodexOfficialReadings / refreshNow(避免 teardown 後復活一次刷新)。
     private var codexStopped = false
+    /// Claude `/usage` 探針(statusline 陳舊時的備援;desktop session 不呼叫 statusLine)。
+    /// 單流 + 5 分鐘最小間隔(含手動);只在所有 Claude 讀數都陳舊時才真的 spawn。
+    private var claudeProbeGate = CodexAppServerLimits.FetchGate(minInterval: ClaudeUsageProbe.minInterval)
+    private var claudeProbeHandle: ClaudeUsageProbe.ProbeHandle?
+    private var claudeProbeTask: Task<Void, Never>?
 
     init() {
         dataDir = AppPaths.dataDirectory()
         settingsStore = SettingsStore(dataDir: dataDir)
         settings = settingsStore.settings
-        coordinator = UsageCoordinator(dataDir: dataDir, settings: settingsStore.settings.core)
+        coordinator = UsageCoordinator(
+            dataDir: dataDir,
+            settings: settingsStore.settings.core,
+            adapters: UsageCoordinator.productionAdapters(
+                antigravityOfficialQuota: settingsStore.settings.antigravityQuotaEnabled))
         petState = PetStateData()
     }
 
@@ -94,6 +104,9 @@ final class AppModel {
     func start() {
         // 持久化的 Appearance 偏好在任何視窗/面板建立前先套到 NSApp(整 app 一體繼承)。
         applyAppearancePreference()
+        applyFontStylePreference()
+        applyTextColorPreference()
+        bumpMenuBarChromePresentation()
         // EngineV2 flag 必須在 petPanel 建立前映射(PetPanelController.show() 據此掛 driver)。
         EngineV2.isEnabled = settings.petEngineV2Enabled
         if LaunchAtLogin.available {
@@ -108,6 +121,7 @@ final class AppModel {
             get: { [weak self] in self?.settings.grokQuotaKilledAtVersion },
             set: { [weak self] v in self?.updateSettings { $0.grokQuotaKilledAtVersion = v } })
         grokQuota.setEnabled(settings.grokQuotaEnabled, isUserAction: false)   // bootstrap ≠ 手動 re-enable(r3)
+        cursorQuota.setEnabled(settings.cursorQuotaEnabled)
         applyModeSideEffects()
         observeAppearanceChanges()
         // 排程匯出:啟動時重套(修正 app 被移動後 plist 內失效的絕對路徑);僅 bundle 版有效。
@@ -151,8 +165,11 @@ final class AppModel {
         settingsPushTask?.cancel()
         codexStopped = true           // fence:in-flight 抓取完成後不得再 apply/refresh
         codexFetchTask?.cancel()      // Source B:停止背景抓取(ProcessTransport 以 bounded timeout + teardown 自清)
+        claudeProbeTask?.cancel()     // 同 codexStopped fence
+        claudeProbeHandle?.cancel()   // 同步 SIGKILL 探針整個程序群組(detached 擷取不吃 task 取消;quit 不留孤兒)
         orCredits.setEnabled(false)
         grokQuota.setEnabled(false)   // r1 三鏡:stop 漏停 grok 會讓輪詢在 teardown 後殘留
+        cursorQuota.setEnabled(false)
     }
 
     /// 系統深/淺色切換時選單列徽章需重烤(NSImage 顏色是預先算好的)。
@@ -169,6 +186,42 @@ final class AppModel {
     /// 把 app 外觀偏好套到 NSApp —— 整 app 唯一一處指派,Dashboard / Settings / A1 hover panel /
     /// menu-bar panel / pet panel / NSSavePanel 全部繼承(`.system` → nil = 回到跟隨系統)。
     /// 隨後走**同一條** `appearanceTick` 重烤路徑:手動偏好變更與系統外觀通知只有一個 refresh authority。
+    /// `fontStyleTick` 變更時儀表板/設定會重繪以套用 `Theme.FontScale`。
+    private(set) var fontStyleTick = 0
+    /// Menu bar badge 烤圖代次(墨色 / label 設定);`MenuBarExtra` label 需顯式讀取才會重烤。
+    private(set) var menuBarChromeTick = 0
+
+    private func applyFontStylePreference() {
+        Theme.applyFontStyle(design: settings.fontDesign, size: settings.fontSize)
+        fontStyleTick &+= 1
+    }
+
+    private func applyTextColorPreference() {
+        Theme.applyTextColors(preference: settings.dashboardTextColor,
+                              primaryHex: settings.dashboardTextPrimaryHex,
+                              secondaryHex: settings.dashboardTextSecondaryHex)
+        fontStyleTick &+= 1
+    }
+
+    /// Badge 墨色 / 標籤樣式變更:強制選單列 label 重烤(`MenuBarExtra` 不會只因 `settings` 變就重繪)。
+    func bumpMenuBarChromePresentation() {
+        menuBarChromeTick &+= 1
+        appearanceTick &+= 1
+    }
+
+    func resolveMenuBarBadgeLabel(providerId: String, displayName: String?) -> String {
+        if let raw = settings.chromeBadgeLabelOverrides?[providerId]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            return String(raw.prefix(14))
+        }
+        let brand = ProviderBrands.brand(for: providerId, displayName: displayName)
+        switch settings.menuBarBadgeLabelStyle {
+        case .code: return brand.code
+        case .short: return brand.shortName
+        case .full: return String(brand.displayName.prefix(14))
+        }
+    }
+
     private func applyAppearancePreference() {
         NSApp.appearance = settings.appearance.nsAppearanceName.flatMap { NSAppearance(named: $0) }
         appearanceTick += 1
@@ -180,6 +233,7 @@ final class AppModel {
     func userRefresh() async {
         orCredits.refreshNow()
         if settings.grokQuotaEnabled { grokQuota.refreshNow() }
+        if settings.cursorQuotaEnabled { cursorQuota.refreshNow() }
         requestCodexOfficialFetch()   // ⌘R 亦受統一 60s 閘 + 單流(owner:B spawn 不超過 ~每 60s 一次)
         await refreshNow()
     }
@@ -219,7 +273,49 @@ final class AppModel {
         await refreshNow()                          // 經既有單一權威把 B 併入顯示(此輪 min-interval 自然跳過)
     }
 
+    // MARK: - Claude `/usage` 探針(statusline 陳舊時的備援)
+
+    /// 請求一次探針。claude-code 未啟用 / 已 stop / 閘擋下 → 不做事。實際判斷是否陳舊與 spawn 都在背景。
+    func requestClaudeUsageProbe() {
+        guard !codexStopped, settings.core.enabledProviders.contains("claude-code") else { return }
+        guard claudeProbeGate.decide(now: ProcessInfo.processInfo.systemUptime) == .proceed else { return }
+        claudeProbeGate.begin()
+        claudeProbeTask = Task { [weak self] in await self?.performClaudeUsageProbe() }
+    }
+
+    private func performClaudeUsageProbe() async {
+        let dataDir = self.dataDir
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let handle = ClaudeUsageProbe.ProbeHandle()
+        claudeProbeHandle = handle
+        if codexStopped { handle.cancel() }          // stop() 早於本 task 開跑 → 不 spawn
+        defer { if claudeProbeHandle === handle { claudeProbeHandle = nil } }
+        // nil = 讀數仍新鮮,沒跑;false = 跑了但失敗(fail-soft,不寫檔);true = 寫入新落地檔。
+        let outcome: Bool? = await Task.detached(priority: .utility) {
+            // 與 adapter 預設 statuslineFiles 同一組來源(含第三方 ~/.claude/usage-status.json,缺 captured_at 退 mtime)。
+            let stamps = ClaudeUsageProbe.freshnessStamps(of: [
+                dataDir.appendingPathComponent("claude-statusline.json"),
+                home.appendingPathComponent(".claude/usage-status.json"),
+                dataDir.appendingPathComponent(ClaudeUsageProbe.landingFileName),
+            ])
+            guard ClaudeUsageProbe.shouldProbe(capturedAts: stamps, now: Date()) else { return nil }
+            guard let binary = ClaudeUsageProbe.discoverClaudeBinary() else { return false }
+            return ClaudeUsageProbe.runOnce(binary: binary,
+                                            landing: dataDir.appendingPathComponent(ClaudeUsageProbe.landingFileName),
+                                            handle: handle)
+        }.value
+        if outcome == nil {
+            // 沒 spawn → 不佔用完整最小間隔,但 30s 內不再重讀檔(FSEvents 觸發的 refresh 很頻繁)。
+            claudeProbeGate.finish(at: ProcessInfo.processInfo.systemUptime - ClaudeUsageProbe.minInterval + 30)
+        } else {
+            claudeProbeGate.finish(at: ProcessInfo.processInfo.systemUptime)
+        }
+        guard outcome == true, !codexStopped else { return }
+        await refreshNow()                             // 併入顯示(此輪閘的最小間隔自然跳過)
+    }
+
     func refreshNow() async {
+        requestClaudeUsageProbe()
         // Codex Source B hybrid(owner 2026-10-09):startup / FSEvents / 300s safety-net 全部匯流到此,
         // 故在此請求一次 off-hot-path 的 app-server 抓取(gate 做 single-flight + 60s 最小間隔,防 spawn
         // storm;抓取結束後自身會再呼叫一次 refreshNow 把 fresh B 併入顯示,屆時 min-interval 自然跳過)。
@@ -240,6 +336,7 @@ final class AppModel {
             handleTransitions(outcome.transitions)
 
             syncPetAfterDashboard()
+            publishWidgetSnapshot()
 
             // 任何範圍(含 custom)都要跟著刷新,否則專案表會停留在舊資料。
             // 視窗關閉時跳過(重開時 dashboardOpened() + 各分頁 .task 會補載)。
@@ -290,6 +387,12 @@ final class AppModel {
         } else {
             rows.append(api)
         }
+        let cursorApi = cursorQuota.dataSourceStatus()
+        if let i = rows.lastIndex(where: { $0.providerId == "cursor-ide" }) {
+            rows.insert(cursorApi, at: rows.index(after: i))
+        } else {
+            rows.append(cursorApi)
+        }
         return rows
     }
 
@@ -304,11 +407,20 @@ final class AppModel {
         // 重建前的舊值直到下次排程刷新(codex SEV2 round-2)。轉變(transitions)刻意
         // 不處理:重建是重放,不該觸發慶祝/通知。
         syncPetAfterDashboard()
+        publishWidgetSnapshot()
         if dashboardWindowOpen {
             await reloadProjectPage()
             await reloadModelPage()
             await reloadTrends()
         }
+    }
+
+    private func publishWidgetSnapshot() {
+        WidgetSnapshotPublisher.publish(
+            dashboard: dashboard,
+            limitStates: orderedChromeLimitStates,
+            enabledProviders: settings.core.enabledProviders
+        )
     }
 
     /// dashboard 更新後同步寵物側(tick / warning / treats / mood)。monitor-only 無寵物 → no-op。
@@ -381,7 +493,9 @@ final class AppModel {
     }
 
     func providerName(_ id: String) -> String {
-        dashboard.snapshots.first { $0.providerId == id }?.displayName ?? id
+        if let ag = AntigravityQuotaDisplay.displayName(forGroupId: id) { return ag }
+        if let cu = CursorQuotaDisplay.displayName(forChromeId: id) { return cu }
+        return dashboard.snapshots.first { $0.providerId == id }?.displayName ?? id
     }
 
     // MARK: - 設定
@@ -393,17 +507,56 @@ final class AppModel {
         let oldRange = settings.petWanderRangePercent
         let oldORCredits = settings.openRouterCreditsEnabled
         let oldGrokQuota = settings.grokQuotaEnabled
+        let oldCursorQuota = settings.cursorQuotaEnabled
+        let oldAntigravityQuota = settings.antigravityQuotaEnabled
         let oldAppearance = settings.appearance
+        let oldFontDesign = settings.fontDesign
+        let oldFontSize = settings.fontSize
+        let oldTextColor = settings.dashboardTextColor
+        let oldTextPrimary = settings.dashboardTextPrimaryHex
+        let oldTextSecondary = settings.dashboardTextSecondaryHex
+        let oldBadgeInk = settings.menuBarBadgeInk
+        let oldBadgeInkHex = settings.menuBarBadgeInkHex
+        let oldBadgeLabelStyle = settings.menuBarBadgeLabelStyle
+        let oldBadgeOverrides = settings.chromeBadgeLabelOverrides
         settingsStore.update(mutate)
         settings = settingsStore.settings
         // Appearance 偏好變更 → 與啟動套用同一條 apply/refresh 路徑(NSApp.appearance + appearanceTick)。
         if oldAppearance != settings.appearance {
             applyAppearancePreference()
         }
+        if oldFontDesign != settings.fontDesign || oldFontSize != settings.fontSize {
+            applyFontStylePreference()
+        }
+        if oldTextColor != settings.dashboardTextColor
+            || oldTextPrimary != settings.dashboardTextPrimaryHex
+            || oldTextSecondary != settings.dashboardTextSecondaryHex {
+            applyTextColorPreference()
+        }
+        if oldBadgeInk != settings.menuBarBadgeInk || oldBadgeInkHex != settings.menuBarBadgeInkHex
+            || oldBadgeLabelStyle != settings.menuBarBadgeLabelStyle
+            || oldBadgeOverrides != settings.chromeBadgeLabelOverrides {
+            bumpMenuBarChromePresentation()
+        }
         // OpenRouter credits 開關:啟用即抓一次 + 開始 15 分鐘輪詢;停用即取消並清空狀態。
         if oldGrokQuota != settings.grokQuotaEnabled {
             grokQuota.setEnabled(settings.grokQuotaEnabled)
             Task { [weak self] in await self?.refreshSourceStatuses() }   // Data Health 立即反映
+        }
+        if oldCursorQuota != settings.cursorQuotaEnabled {
+            cursorQuota.setEnabled(settings.cursorQuotaEnabled)
+            Task { [weak self] in await self?.refreshSourceStatuses() }
+        }
+        if oldAntigravityQuota != settings.antigravityQuotaEnabled {
+            let enabled = settings.antigravityQuotaEnabled
+            Task { [weak self] in
+                guard let self else { return }
+                await self.coordinator.setAntigravityOfficialQuotaEnabled(enabled)
+                if !enabled {
+                    AntigravityQuotaStore.save(nil, dataDir: self.dataDir)
+                }
+                await self.refreshNow()
+            }
         }
         if oldORCredits != settings.openRouterCreditsEnabled {
             orCredits.setEnabled(settings.openRouterCreditsEnabled)
@@ -625,12 +778,19 @@ final class AppModel {
     /// 略過無資料 provider、identity dot 恆定、severity 只上在百分比。
     var menuBarBadges: [MenuBadge] {
         guard settings.menuBarDisplayMode != .petOnly else { return [] }
-        let states = dashboard.limitStates.map { st in
-            (id: st.providerId,
-             displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
-             fiveHour: st.fiveHour.usedPercent,
-             weekly: st.weekly.usedPercent,
-             idle: st.fiveHour.idle)
+        let states = orderedChromeLimitStates.map { st -> (id: String, displayName: String?, badgeLabel: String?,
+                                                           fiveHour: Double?, weekly: Double?, idle: Bool,
+                                                           todayActivityPercent: Double?) in
+            let name = AntigravityQuotaDisplay.displayName(forGroupId: st.providerId)
+                ?? ClaudeScopedDisplay.displayName(forChromeId: st.providerId)
+                ?? CursorQuotaDisplay.displayName(forChromeId: st.providerId)
+                ?? dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName
+            return (id: st.providerId, displayName: name,
+                    badgeLabel: resolveMenuBarBadgeLabel(providerId: st.providerId, displayName: name),
+                    fiveHour: st.fiveHour.usedPercent,
+                    weekly: st.weekly.usedPercent,
+                    idle: st.fiveHour.idle,
+                    todayActivityPercent: st.todayActivityPercent)
         }
         return MenuBadgeBuilder.badges(from: states,
                                        warn: settings.core.warnThresholdPercent,
@@ -674,11 +834,21 @@ final class AppModel {
 
     /// 純文字後備(NSImage 烤製失敗時);不再夾帶心情/警示 emoji(spec P0)。
     var menuBarTitle: String {
+        let fableByProvider = Dictionary(uniqueKeysWithValues:
+            dashboard.limitStates.compactMap { st -> (String, Int)? in
+                guard let row = st.modelScopedWeekly?.first(where: { $0.displayName.lowercased().contains("fable") })
+                else { return nil }
+                return (st.providerId, Int(row.usedPercent.rounded()))
+            })
         let parts = menuBarBadges.map { badge -> String in
-            if badge.idle { return "\(badge.code) idle" }
+            let tag = badge.badgeLabel
+            if badge.idle { return "\(tag) idle" }
             let a = badge.fiveHour.map { "\($0.percent)%" } ?? "-"
             let b = badge.weekly.map { "\($0.percent)%" } ?? "-"
-            return "\(badge.code)\(a)/\(b)"
+            if let fab = fableByProvider[badge.providerId] {
+                return "\(tag)\(a)/\(b)/F\(fab)%"
+            }
+            return "\(tag)\(a)/\(b)"
         }
         let usage = parts.isEmpty ? (menuBarShowsPlaceholder ? "—" : "") : parts.joined(separator: " ")
         return usage.isEmpty ? menuBarPetEmoji : "\(menuBarPetEmoji) \(usage)"
@@ -692,6 +862,68 @@ final class AppModel {
         }
     }
 
+    /// Expanded limit rows before the user's menu-bar / ring selection filter.
+    var chromeLimitStateOptions: [ProviderLimitState] {
+        let agExpanded = AntigravityQuotaDisplay.expandLimitStates(dashboard.limitStates,
+                                                                 quota: dashboard.antigravityQuota)
+        let claudeExpanded = ClaudeScopedDisplay.expandLimitStates(agExpanded)
+        let cursorSnap = settings.cursorQuotaEnabled ? cursorQuota.status.snapshot : nil
+        let expanded = CursorQuotaDisplay.expandLimitStates(claudeExpanded, quota: cursorSnap)
+        return expanded.sorted {
+            ChromeMenuGrouping.sortKey(for: $0).lowercased() < ChromeMenuGrouping.sortKey(for: $1).lowercased()
+        }
+    }
+
+    /// Chrome limits for the menu dropdown (quota meters grouped by provider category).
+    var orderedChromeLimitStatesForMenu: [ProviderLimitState] {
+        ChromeMenuGrouping.orderForMenu(orderedChromeLimitStates)
+    }
+
+    /// Menu bar, dropdown, and pet rings (after `chromeProviderSelection` + Grok weekly-only merge).
+    var orderedChromeLimitStates: [ProviderLimitState] {
+        applyGrokChromeNormalization(applyChromeProviderSelection(chromeLimitStateOptions))
+    }
+
+    /// Pet ring input: chrome selection, then collapse Antigravity to one arc (menu bar keeps three badges).
+    var petRingLimitStates: [ProviderLimitState] {
+        let cursorCollapsed = CursorQuotaDisplay.collapseForPetRings(orderedChromeLimitStates)
+        return AntigravityQuotaDisplay.collapseForPetRings(cursorCollapsed)
+    }
+
+    func isChromeProviderVisible(_ providerId: String) -> Bool {
+        guard let sel = settings.chromeProviderSelection else { return true }
+        return sel.contains(providerId)
+    }
+
+    func setChromeProviderVisible(_ providerId: String, _ visible: Bool) {
+        updateSettings { s in
+            var sel = s.chromeProviderSelection ?? Set(chromeLimitStateOptions.map(\.providerId))
+            if visible { sel.insert(providerId) } else { sel.remove(providerId) }
+            let allIds = Set(chromeLimitStateOptions.map(\.providerId))
+            if sel == allIds {
+                s.chromeProviderSelection = nil
+            } else {
+                s.chromeProviderSelection = sel
+            }
+        }
+    }
+
+    func resetChromeProviderSelection() {
+        updateSettings { $0.chromeProviderSelection = nil }
+    }
+
+    private func applyChromeProviderSelection(_ states: [ProviderLimitState]) -> [ProviderLimitState] {
+        guard let sel = settings.chromeProviderSelection else { return states }
+        return states.filter { sel.contains($0.providerId) }
+    }
+
+    private func applyGrokChromeNormalization(_ states: [ProviderLimitState]) -> [ProviderLimitState] {
+        let quota = settings.grokQuotaEnabled ? grokQuota.status.snapshot : nil
+        return states.map {
+            GrokChromeDisplay.normalizeLimitState($0, officialQuota: $0.providerId == "grok-code" ? quota : nil)
+        }
+    }
+
     var orderedSnapshots: [UsageSnapshot] {
         dashboard.snapshots.sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
     }
@@ -699,7 +931,7 @@ final class AppModel {
     /// 面板 header 的警示摘要(spec §8):取最嚴重的一條,一句話、不加 emoji。
     var alertSummary: (text: String, isDanger: Bool)? {
         var worst: (name: String, window: String, percent: Double, reset: Date?)?
-        for st in orderedLimitStates {
+        for st in orderedChromeLimitStates {
             for (label, w) in [("5h", st.fiveHour), ("weekly", st.weekly)] {
                 guard let p = w.usedPercent, p >= settings.core.warnThresholdPercent else { continue }
                 if worst == nil || p > worst!.percent {
