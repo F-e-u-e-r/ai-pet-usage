@@ -172,8 +172,8 @@ final class ReportedLimitFieldTests: XCTestCase {
         XCTAssertEqual(derive(bothWindows, .fiveHour, unknownWindow, .absent, hook: nil, health: nil),
                        .temporarilyUnavailable(.noReadingYet), "列 7")
 
-        // 8 grok-code:capability .notProvided + 殘留 usable .high 42% → 2 在 3 之前(I6)
-        XCTAssertEqual(derive(.notProvided, .fiveHour, win(42, reset: plus(hour), .high), .usable, hook: nil, health: .ok),
+        // 8 grok-code:capability .provides([.weekly])、kind fiveHour → 2(kind ∉ windows)
+        XCTAssertEqual(derive(.provides(windows: [.weekly]), .fiveHour, win(42, reset: plus(hour), .high), .usable, hook: nil, health: .ok),
                        .notProvidedBySource, "列 8")
 
         // 9 claude:capability .provides([.fiveHour])、kind weekly、usable weekly reading → 2(kind ∉ windows)
@@ -189,9 +189,9 @@ final class ReportedLimitFieldTests: XCTestCase {
                        .provided(percent: 12, resetsAt: t3d, confidence: .high, corrected: true), "列 11")
         XCTAssertEqual(ReportedLimitField.cue(statuslinePresent: true, sourceHealth: .transientError), .sourceUnhealthy, "列 11 cue")
 
-        // 12 grok-code:.notProvided + F17 stale + 無 reading → 2 在 5 之前
-        XCTAssertEqual(derive(.notProvided, .weekly, unknownWindow, .absent, hook: nil, health: .stale),
-                       .notProvidedBySource, "列 12")
+        // 12 grok-code:.provides([.weekly]) + F17 stale + 無 reading → 5 在 7 之前
+        XCTAssertEqual(derive(.provides(windows: [.weekly]), .weekly, unknownWindow, .absent, hook: nil, health: .stale),
+                       .temporarilyUnavailable(.sourceUnhealthy), "列 12")
 
         // 13 claude:hook 缺 + F17 ok + usable 合成 0%(hold 中)→ 4 在 6 之前
         XCTAssertEqual(derive(bothWindows, .fiveHour, synthesizedZero, .usable, hook: false, health: .ok),
@@ -349,16 +349,19 @@ final class ReportedLimitFieldTests: XCTestCase {
         XCTAssertNil(text.gaugePercent)
     }
 
-    // D5/D20:走訪 production wiring 列表;每個宣告 ∈ {.notProvided, 非空 provides};集合 == 四個 provider。
+    // D5/D20:走訪 production wiring 列表;每個宣告 ∈ {.notProvided, 非空 provides};集合 == 五個 provider。
     func testCapability_ProvidesWindowsAreNonEmpty() {
         let adapters = UsageCoordinator.defaultProductionAdapters
-        XCTAssertEqual(adapters.count, 4)
-        XCTAssertEqual(Set(adapters.map { $0.providerId }), Set(["claude-code", "codex", "grok-code", "opencode"]))
+        XCTAssertEqual(adapters.count, 6)
+        XCTAssertEqual(Set(adapters.map { $0.providerId }),
+                       Set(["claude-code", "codex", "grok-code", "opencode", "antigravity", "cursor-ide"]))
         let declared: [String: ReportedLimitCapability] = [
             "claude-code": bothWindows,      // statusline five_hour / seven_day
             "codex": bothWindows,            // rollout token_count.rate_limits
-            "grok-code": .notProvided,       // plan-only + M0-2 結果(官方 status-line 無 rate-limit summary)
+            "grok-code": .provides(windows: [.weekly]),  // unified.jsonl creditUsagePercent (+ optional network billing)
             "opencode": .notProvided,        // adapter 契約 disclosure(rateLimits: [])
+            "antigravity": .provides(windows: [.fiveHour, .weekly]),     // agy /usage official buckets
+            "cursor-ide": .notProvided,      // structured logs; no local subscription %
         ]
         for adapter in adapters {
             switch adapter.reportedLimitCapability {
@@ -650,7 +653,7 @@ final class ReportedLimitFieldTests: XCTestCase {
     func testSmoke_ProviderWindowSituationMatrix() {
         let capabilities: [(String, ReportedLimitCapability, Bool?)] = [
             ("claude-code", bothWindows, true), ("codex", bothWindows, nil),
-            ("grok-code", .notProvided, nil), ("opencode", .notProvided, nil),
+            ("grok-code", .provides(windows: [.weekly]), nil), ("opencode", .notProvided, nil),
         ]
         // (window, official, hookOverride)
         let situations: [(String, LimitWindowState, OfficialWindowStatus, Bool??)] = [
@@ -670,7 +673,11 @@ final class ReportedLimitFieldTests: XCTestCase {
                     switch capability {
                     case .notProvided:
                         XCTAssertEqual(out, .notProvidedBySource, "\(providerId) \(kind) \(name)")
-                    case .provides:
+                    case .provides(let windows):
+                        if !windows.contains(kind) {
+                            XCTAssertEqual(out, .notProvidedBySource, "\(providerId) \(kind) \(name)")
+                            continue
+                        }
                         XCTAssertFalse(out == .notProvidedBySource, "\(providerId) \(kind) \(name)")
                         XCTAssertFalse(out == .unknownCapability, "\(providerId) \(kind) \(name)")
                     }

@@ -51,6 +51,42 @@ struct GeneralSettings: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                Picker("Font style", selection: Binding(
+                    get: { model.settings.fontDesign },
+                    set: { v in model.updateSettings { $0.fontDesign = v } }
+                )) {
+                    ForEach(FontDesignPreference.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Picker("Text size", selection: Binding(
+                    get: { model.settings.fontSize },
+                    set: { v in model.updateSettings { $0.fontSize = v } }
+                )) {
+                    ForEach(FontSizePreference.allCases, id: \.self) { size in
+                        Text(size.displayName).tag(size)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Dashboard text color", selection: Binding(
+                    get: { model.settings.dashboardTextColor },
+                    set: { v in model.updateSettings { $0.dashboardTextColor = v } }
+                )) {
+                    ForEach(DashboardTextColorPreference.allCases, id: \.self) { pref in
+                        Text(pref.displayName).tag(pref)
+                    }
+                }
+                if model.settings.dashboardTextColor == .custom {
+                    ColorPicker("Main text", selection: hexColorBinding(
+                        get: { model.settings.dashboardTextPrimaryHex },
+                        set: { v in model.updateSettings { $0.dashboardTextPrimaryHex = v } }))
+                    ColorPicker("Secondary text", selection: hexColorBinding(
+                        get: { model.settings.dashboardTextSecondaryHex },
+                        set: { v in model.updateSettings { $0.dashboardTextSecondaryHex = v } }))
+                }
+                Text("Font and colors apply to the dashboard, limits, and trends. Menu bar badge options are below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -62,8 +98,79 @@ struct GeneralSettings: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
-                Text("Full lists every detected provider (● CC 91%). Compact keeps only providers at or above the warning threshold. Percent colors: orange ≥ warn, red ≥ alert threshold.")
+                Picker("Badge label", selection: Binding(
+                    get: { model.settings.menuBarBadgeLabelStyle },
+                    set: { v in model.updateSettings { $0.menuBarBadgeLabelStyle = v } }
+                )) {
+                    ForEach(MenuBarBadgeLabelStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Picker("Badge text color", selection: Binding(
+                    get: { model.settings.menuBarBadgeInk },
+                    set: { v in
+                        model.updateSettings { s in
+                            s.menuBarBadgeInk = v
+                            if v == .custom, s.menuBarBadgeInkHex == nil {
+                                s.menuBarBadgeInkHex = model.systemIsDark ? 0xF2F4F6 : 0x1A1A1A
+                            }
+                        }
+                    }
+                )) {
+                    ForEach(MenuBarBadgeInkPreference.allCases, id: \.self) { ink in
+                        Text(ink.displayName).tag(ink)
+                    }
+                }
+                if model.settings.menuBarBadgeInk == .custom {
+                    ColorPicker("Badge ink", selection: hexColorBinding(
+                        get: { model.settings.menuBarBadgeInkHex },
+                        set: { v in model.updateSettings { $0.menuBarBadgeInkHex = v } }))
+                }
+                Text("Full lists every detected provider. Override badge labels per provider in the section below. Percent colors: orange ≥ warn, red ≥ alert.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Text("Limits shown in the menu bar, menu dropdown, and pet rings (Today and Limits pages always list enabled providers).")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.chromeLimitStateOptions.isEmpty {
+                    Text("Enable providers on the Providers tab, then refresh.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    let split = ChromeMenuGrouping.partition(model.chromeLimitStateOptions)
+                    ForEach(split.others, id: \.providerId) { st in
+                        chromeLimitRow(st)
+                    }
+                    if !split.antigravity.isEmpty {
+                        Text(AntigravityQuotaDisplay.categoryName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(split.antigravity, id: \.providerId) { st in
+                            chromeLimitRow(st, indented: true)
+                        }
+                    }
+                    if !split.claude.isEmpty {
+                        Text("Claude Code")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(split.claude, id: \.providerId) { st in
+                            chromeLimitRow(st, indented: true)
+                        }
+                    }
+                    if !split.cursor.isEmpty {
+                        Text(CursorQuotaDisplay.categoryName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(split.cursor, id: \.providerId) { st in
+                            chromeLimitRow(st, indented: true)
+                        }
+                    }
+                    Button("Show all") { model.resetChromeProviderSelection() }
+                        .disabled(model.settings.chromeProviderSelection == nil)
+                }
             }
 
             Section {
@@ -105,6 +212,60 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func chromeLimitRow(_ st: ProviderLimitState, indented: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            chromeVisibilityToggle(st, indented: indented)
+            chromeBadgeLabelField(st.providerId, indented: indented)
+        }
+    }
+
+    private func chromeBadgeLabelField(_ providerId: String, indented: Bool) -> some View {
+        TextField("Badge label (optional)", text: Binding(
+            get: { model.settings.chromeBadgeLabelOverrides?[providerId] ?? "" },
+            set: { new in
+                model.updateSettings { s in
+                    var map = s.chromeBadgeLabelOverrides ?? [:]
+                    let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        map.removeValue(forKey: providerId)
+                    } else {
+                        map[providerId] = String(trimmed.prefix(14))
+                    }
+                    s.chromeBadgeLabelOverrides = map.isEmpty ? nil : map
+                }
+            }
+        ))
+        .textFieldStyle(.roundedBorder)
+        .font(.caption)
+        .padding(.leading, indented ? 28 : 0)
+    }
+
+    private func hexColorBinding(get: @escaping () -> UInt32?, set: @escaping (UInt32?) -> Void) -> Binding<Color> {
+        Binding(
+            get: { ColorHexCodec.color(from: get()) ?? Color.primary },
+            set: { set(ColorHexCodec.hex(from: $0)) })
+    }
+
+    @ViewBuilder
+    private func chromeVisibilityToggle(_ st: ProviderLimitState, indented: Bool = false) -> some View {
+        let label: String = {
+            if st.providerId == "claude-code" { return "Account" }
+            return AntigravityQuotaDisplay.meterLabel(forGroupId: st.providerId)
+                ?? ClaudeScopedDisplay.meterLabel(forChromeId: st.providerId)
+                ?? CursorQuotaDisplay.meterLabel(forChromeId: st.providerId)
+                ?? model.providerName(st.providerId)
+        }()
+        let code = ProviderBrands.brand(for: st.providerId).code
+        Toggle(isOn: Binding(
+            get: { model.isChromeProviderVisible(st.providerId) },
+            set: { on in model.setChromeProviderVisible(st.providerId, on) }
+        )) {
+            Text("\(label) (\(code))")
+                .padding(.leading, indented ? 12 : 0)
+        }
     }
 }
 
@@ -394,6 +555,39 @@ struct ProviderSettings: View {
                 }
             }
 
+            Section("Antigravity quota (official)") {
+                Toggle("Show Antigravity plan usage (agy CLI)", isOn: Binding(
+                    get: { model.settings.antigravityQuotaEnabled },
+                    set: { v in model.updateSettings { $0.antigravityQuotaEnabled = v } }
+                ))
+                Text("""
+                Off by default. When Antigravity is enabled, local token totals still come from agy \
+                brain transcripts with no network. Turning this on runs `agy -p "/usage"` during \
+                refresh to load official quota buckets (Gemini / Claude+GPT / Argon). If agy is not \
+                signed in, the CLI may open a browser OAuth window — complete it once in Terminal \
+                with `agy -p "/usage"` if you prefer to sign in outside the app. Token transcripts \
+                are never uploaded by this toggle; only the agy subprocess talks to Antigravity.
+                """)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Cursor quota (official)") {
+                Toggle("Show Cursor plan usage (Cursor IDE)", isOn: Binding(
+                    get: { model.settings.cursorQuotaEnabled },
+                    set: { v in model.updateSettings { $0.cursorQuotaEnabled = v } }
+                ))
+                Text("""
+                Off by default. When on, the app reads the access token Cursor or cursor-agent \
+                saved in the macOS Keychain (service `cursor-access-token`) and asks \
+                https://api2.cursor.sh for your current billing period usage — about every \
+                15 minutes and on manual Refresh. The token is sent only to that host over HTTPS \
+                (redirects refused) and is never stored, logged, or refreshed by this app. \
+                Two meters match the Cursor Usage UI: **Cursor models** (first-party) and \
+                **Other models** (third-party). Token usage from local logs stays separate.
+                """)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             // Grok 官方額度(F3;opt-in;boundary #73 —— 揭露文案說清楚讀什麼、送哪裡)。
             Section("Grok quota (official)") {
                 Toggle("Show Grok credit usage (grok CLI)", isOn: Binding(
@@ -401,7 +595,8 @@ struct ProviderSettings: View {
                     set: { v in model.updateSettings { $0.grokQuotaEnabled = v } }
                 ))
                 Text("""
-                Off by default. When on, the app reads the session token the grok CLI saved in \
+                Off by default. When Grok Code is enabled, quota appears on that same row (weekly \
+                column only — no separate "Grok quota" line). When on, the app reads the session token the grok CLI saved in \
                 ~/.grok/auth.json (or $GROK_HOME/auth.json; an issuer→account store read as bytes, from \
                 which only the nested "key" field — plus its expiry, to pick the active account — is \
                 decoded, never the refresh token or profile fields) and asks \
@@ -448,7 +643,7 @@ struct ProviderSettings: View {
                         Spacer()
                     }
                 }
-                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity and Grok Code appear automatically once their adapters ship.")
+                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity (AG) has no local quota rings — enable it under Providers and check Today for token usage.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }

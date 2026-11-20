@@ -197,11 +197,31 @@ final class PixelAnimatorTests: XCTestCase {
 // MARK: - ProviderBrand / MenuBadge
 
 final class ProviderBrandTests: XCTestCase {
+    func testTodayActivityPercentShowsWhenNoQuotaWindows() {
+        let badges = MenuBadgeBuilder.badges(from: [
+            (id: "antigravity", displayName: "Antigravity", badgeLabel: nil, fiveHour: nil, weekly: nil, idle: false,
+             todayActivityPercent: 21),
+        ], warn: 80, danger: 95)
+        XCTAssertEqual(badges.count, 1)
+        XCTAssertEqual(badges[0].code, "AG")
+        XCTAssertEqual(badges[0].fiveHour?.percent, 21)
+        XCTAssertNil(badges[0].weekly)
+    }
+
+    func testBadgeLabelOverrideShownInChrome() {
+        let badges = MenuBadgeBuilder.badges(from: [
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: "MyCC",
+             fiveHour: 10, weekly: nil, idle: false, todayActivityPercent: nil),
+        ], warn: 80, danger: 95)
+        XCTAssertEqual(badges.first?.badgeLabel, "MyCC")
+        XCTAssertEqual(badges.first?.code, "CC")
+    }
+
     func testBadgesAlphabeticalOmitMissingAndSeverity() {
         let badges = MenuBadgeBuilder.badges(from: [
-            (id: "codex", displayName: "Codex", fiveHour: 53, weekly: nil, idle: false),
-            (id: "claude-code", displayName: "Claude Code", fiveHour: 91, weekly: nil, idle: false),
-            (id: "grok-code", displayName: nil, fiveHour: nil, weekly: nil, idle: false), // 兩窗無資料 → 略過
+            (id: "codex", displayName: "Codex", badgeLabel: nil, fiveHour: 53, weekly: nil, idle: false, todayActivityPercent: nil),
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: 91, weekly: nil, idle: false, todayActivityPercent: nil),
+            (id: "grok-code", displayName: nil, badgeLabel: nil, fiveHour: nil, weekly: nil, idle: false, todayActivityPercent: nil), // 兩窗無資料 → 略過
         ], warn: 80, danger: 95)
         XCTAssertEqual(badges.map(\.code), ["CC", "CX"], "依顯示名稱字母序,無資料省略")
         XCTAssertEqual(badges[0].fiveHour?.severity, .warn)
@@ -213,9 +233,9 @@ final class ProviderBrandTests: XCTestCase {
     func testIdleBadgeShownWithoutPercentButHiddenInCompactAndDistinctFromNoData() {
         // idle(兩窗 nil, idle:true)→ 不被丟掉,顯示中性 idle 徽章;無資料(idle:false)仍省略。
         let full = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", fiveHour: nil, weekly: nil, idle: true),
-            (id: "codex", displayName: "Codex", fiveHour: 53, weekly: nil, idle: false),
-            (id: "grok-code", displayName: "Grok", fiveHour: nil, weekly: nil, idle: false), // 無資料 → 略過
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: nil, weekly: nil, idle: true, todayActivityPercent: nil),
+            (id: "codex", displayName: "Codex", badgeLabel: nil, fiveHour: 53, weekly: nil, idle: false, todayActivityPercent: nil),
+            (id: "grok-code", displayName: "Grok", badgeLabel: nil, fiveHour: nil, weekly: nil, idle: false, todayActivityPercent: nil), // 無資料 → 略過
         ], warn: 80, danger: 95)
         XCTAssertEqual(full.map(\.code), ["CC", "CX"], "idle 的 Claude 不得從選單列消失;無資料的 Grok 仍省略")
         XCTAssertTrue(full[0].idle, "idle 徽章帶 idle 旗標")
@@ -227,8 +247,8 @@ final class ProviderBrandTests: XCTestCase {
 
         // compact(onlyWarnings)只顯示警告 → idle 省略(Codex 53% 未達 warn 亦省略)。
         let compact = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", fiveHour: nil, weekly: nil, idle: true),
-            (id: "codex", displayName: "Codex", fiveHour: 53, weekly: nil, idle: false),
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: nil, weekly: nil, idle: true, todayActivityPercent: nil),
+            (id: "codex", displayName: "Codex", badgeLabel: nil, fiveHour: 53, weekly: nil, idle: false, todayActivityPercent: nil),
         ], warn: 80, danger: 95, onlyWarnings: true)
         XCTAssertEqual(compact.map(\.code), [], "compact 模式 idle 不算警告 → 省略")
     }
@@ -241,16 +261,16 @@ final class ProviderBrandTests: XCTestCase {
         XCTAssertEqual(UsageSeverity.of(percent: nil, warn: 80, danger: 95), .normal)
 
         let compact = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", fiveHour: 91, weekly: nil, idle: false),
-            (id: "codex", displayName: "Codex", fiveHour: 53, weekly: nil, idle: false),
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: 91, weekly: nil, idle: false, todayActivityPercent: nil),
+            (id: "codex", displayName: "Codex", badgeLabel: nil, fiveHour: 53, weekly: nil, idle: false, todayActivityPercent: nil),
         ], warn: 80, danger: 95, onlyWarnings: true)
         XCTAssertEqual(compact.map(\.code), ["CC"], "Compact 模式只留 ≥warn 的 provider")
     }
 
     func testAccessibilitySummaryUsesFullNames() {
         let badges = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", fiveHour: 91, weekly: 40, idle: false),
-            (id: "codex", displayName: "Codex", fiveHour: 53, weekly: nil, idle: false),
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: 91, weekly: 40, idle: false, todayActivityPercent: nil),
+            (id: "codex", displayName: "Codex", badgeLabel: nil, fiveHour: 53, weekly: nil, idle: false, todayActivityPercent: nil),
         ], warn: 80, danger: 95)
         let summary = MenuBadgeBuilder.accessibilitySummary(petName: "Golden Retriever", badges: badges)
         XCTAssertEqual(summary,
@@ -261,8 +281,8 @@ final class ProviderBrandTests: XCTestCase {
     /// compact:只有 weekly 達 warn(5h 正常)時,provider 仍須顯示 —— 否則高 weekly 會消失(本功能核心)。
     func testCompactShowsProviderWhenOnlyWeeklyWarns() {
         let compact = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", fiveHour: 2, weekly: 91, idle: false),
-            (id: "codex", displayName: "Codex", fiveHour: 10, weekly: 20, idle: false), // 兩窗皆 normal → 省略
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: 2, weekly: 91, idle: false, todayActivityPercent: nil),
+            (id: "codex", displayName: "Codex", badgeLabel: nil, fiveHour: 10, weekly: 20, idle: false, todayActivityPercent: nil), // 兩窗皆 normal → 省略
         ], warn: 80, danger: 95, onlyWarnings: true)
         XCTAssertEqual(compact.map(\.code), ["CC"], "只有 weekly 告警也要顯示;兩窗皆正常則省略")
         XCTAssertEqual(compact[0].fiveHour?.severity, .normal)
@@ -272,7 +292,7 @@ final class ProviderBrandTests: XCTestCase {
     /// 5h idle/無資料但 weekly 有值:顯示 "-/B"(fiveHour nil、weekly 有值),而非整筆消失或 idle。
     func testFiveHourMissingWithWeeklyPresentShowsDash() {
         let badges = MenuBadgeBuilder.badges(from: [
-            (id: "claude-code", displayName: "Claude Code", fiveHour: nil, weekly: 18, idle: true),
+            (id: "claude-code", displayName: "Claude Code", badgeLabel: nil, fiveHour: nil, weekly: 18, idle: true, todayActivityPercent: nil),
         ], warn: 80, danger: 95)
         XCTAssertEqual(badges.count, 1)
         XCTAssertFalse(badges[0].idle, "weekly 有值 → 非 idle 徽章")
@@ -281,7 +301,9 @@ final class ProviderBrandTests: XCTestCase {
     }
 
     func testIdentityDotsAreStableAndDistinct() {
-        let dots = ProviderBrands.known.map(\.dotColor)
+        // Chrome-split ids (AG/Cursor buckets) intentionally share parent identity colors.
+        let primaryIds = ["antigravity", "claude-code", "codex", "grok-code", "opencode", "cursor-ide"]
+        let dots = primaryIds.map { ProviderBrands.brand(for: $0).dotColor }
         XCTAssertEqual(Set(dots).count, dots.count, "各 provider 身分色必須互異")
         XCTAssertTrue(ProviderBrands.brand(for: "grok-code").needsOutline, "GK 深色 dot 需描邊")
         XCTAssertEqual(ProviderBrands.brand(for: "unknown-x", displayName: "Unknown X").code, "UN")

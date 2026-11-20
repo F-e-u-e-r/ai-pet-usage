@@ -97,17 +97,40 @@ private struct PanelHeader: View {
             // 倒數需要走時鐘;面板開著時每 30s 重算一次即可
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 VStack(alignment: .leading, spacing: 5) {
-                    ForEach(model.orderedLimitStates) { state in
-                        ProviderStatusRow(state: state, now: context.date)
+                    ForEach(Array(ChromeMenuGrouping.menuSegments(
+                        model.orderedChromeLimitStatesForMenu).enumerated()), id: \.offset) { _, segment in
+                        switch segment {
+                        case .provider(let state):
+                            ProviderStatusRow(state: state, now: context.date)
+                        case .antigravityGroup(let states):
+                            QuotaCategoryMenuGroup(categoryName: AntigravityQuotaDisplay.categoryName,
+                                                   brandId: "antigravity",
+                                                   states: states,
+                                                   now: context.date) { AntigravityQuotaDisplay.meterLabel(forGroupId: $0) }
+                        case .claudeGroup(let states):
+                            QuotaCategoryMenuGroup(categoryName: "Claude Code",
+                                                   brandId: "claude-code",
+                                                   states: states,
+                                                   now: context.date) { id in
+                                if id == "claude-code" { return "Account" }
+                                return ClaudeScopedDisplay.meterLabel(forChromeId: id)
+                            }
+                        case .cursorGroup(let states):
+                            QuotaCategoryMenuGroup(categoryName: CursorQuotaDisplay.categoryName,
+                                                   brandId: "cursor-ide",
+                                                   states: states,
+                                                   now: context.date) { CursorQuotaDisplay.meterLabel(forChromeId: $0) }
+                        }
                     }
-                    if model.orderedLimitStates.isEmpty {
+                    if model.orderedChromeLimitStates.isEmpty {
                         Text("No providers enabled")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     if model.settings.openRouterCreditsEnabled {
                         OpenRouterCreditsRow(status: model.orCredits.status, now: context.date)
                     }
-                    if model.settings.grokQuotaEnabled {
+                    if model.settings.grokQuotaEnabled,
+                       !model.settings.core.enabledProviders.contains("grok-code") {
                         GrokQuotaRow(status: model.grokQuota.status, now: context.date)
                     }
                     if let alert = model.alertSummary {
@@ -125,30 +148,74 @@ private struct PanelHeader: View {
     }
 }
 
+/// Official quota meters: category header + indented sub-row labels (Antigravity / Cursor).
+private struct QuotaCategoryMenuGroup: View {
+    let categoryName: String
+    let brandId: String
+    let states: [ProviderLimitState]
+    let now: Date
+    let meterLabel: (String) -> String?
+
+    var body: some View {
+        let brand = ProviderBrands.brand(for: brandId)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ProviderDot(brand: brand, size: 8)
+                Text(categoryName)
+                    .font(.callout.weight(.semibold))
+                Spacer()
+            }
+            ForEach(states) { state in
+                ProviderStatusRow(state: state, now: now, nestedUnderCategory: true,
+                                nestedMeterTitle: meterLabel(state.providerId))
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// 一列 provider 狀態:● 全名 5h% wk% resets Xm(百分比依 severity 上色)。
 private struct ProviderStatusRow: View {
     @Environment(AppModel.self) private var model
     let state: ProviderLimitState
     let now: Date
+    var nestedUnderCategory: Bool = false
+    var nestedMeterTitle: String? = nil
 
     var body: some View {
         let brand = ProviderBrands.brand(for: state.providerId,
                                          displayName: model.providerName(state.providerId))
+        let rowTitle = nestedMeterTitle
+            ?? AntigravityQuotaDisplay.meterLabel(forGroupId: state.providerId)
+            ?? CursorQuotaDisplay.meterLabel(forChromeId: state.providerId)
+            ?? brand.shortName
         // 固定欄寬 HStack:name 彈性佔剩餘寬(左、truncate),5h/wk/reset 各自固定寬右對齊 →
         // 每列相同固定寬 ⇒ 跨列對齊成表格,且 reset 有專屬寬度不被鄰欄擠掉(取代原 Spacer 大空隙 +
         // reset 截字)。欄寬 = MenuPanelMetrics **實測** worst-case("wk 100%" 在本機 51.45pt,
         // 舊寫死 50pt → 三位數截字,2026-07-16 使用者回報);macOS 無使用者可調 Dynamic Type,
         // 固定密度可接受,minimumScaleFactor 為溢位保險(window cell 也要有,不只 reset)。
         HStack(spacing: 8) {
-            ProviderDot(brand: brand, size: 8)
-            Text(brand.shortName)   // A2:面板用中短名(Claude/Codex/Grok);全名在 .help / a11y。
-                .font(.callout.weight(.medium))
+            if !nestedUnderCategory {
+                ProviderDot(brand: brand, size: 8)
+            } else {
+                Color.clear.frame(width: 8, height: 8)
+            }
+            Text(rowTitle)   // A2:面板用中短名;類別子列用 meterLabel。
+                .font(.callout.weight(nestedUnderCategory ? .regular : .medium))
+                .padding(.leading, nestedUnderCategory ? 10 : 0)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            windowText("5h", state.fiveHour)
-                .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
-            windowText("wk", state.weekly)
-                .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+            if GrokChromeDisplay.usesWeeklyOnlyMeter(state.providerId)
+                || CursorChromeDisplay.usesMonthlyOnlyMeter(state.providerId) {
+                Text("—")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+            } else {
+                windowText("5h", state.fiveHour, activityPercent: state.todayActivityPercent)
+                    .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+            }
+            grokWeeklyCell(state)
             Text(resetLabel)
                 .font(.caption).monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -160,15 +227,43 @@ private struct ProviderStatusRow: View {
         .accessibilityLabel(a11yLabel(brand: brand))
     }
 
-    private func windowText(_ label: String, _ window: LimitWindowState) -> some View {
-        let percent = window.usedPercent
-        let severity = UsageSeverity.of(percent: percent,
+  @ViewBuilder
+  private func grokWeeklyCell(_ state: ProviderLimitState) -> some View {
+      HStack(spacing: 2) {
+          if state.providerId == "grok-code",
+             model.settings.grokQuotaEnabled,
+             model.grokQuota.status.snapshot?.reportedPercentOverflow == true {
+              Image(systemName: "exclamationmark.triangle")
+                  .font(.caption2).foregroundStyle(.orange)
+                  .help("Provider reported a value above 100% — shown clamped")
+          }
+          let lbl = CursorChromeDisplay.usesMonthlyOnlyMeter(state.providerId) ? "mo" : "wk"
+          if let asOf = StatuslineAge.weeklyAsOfLabel(for: state, now: now) {
+              // 舊讀數:保留數值但淡化,年齡見 tooltip / a11y(欄寬已實測,不在格內加字)
+              windowText(lbl, state.weekly)
+                  .opacity(0.55)
+                  .help(AntigravityQuotaDisplay.isQuotaChromeId(state.providerId)
+                        ? "Weekly \(asOf) — agy /usage has not refreshed since"
+                        : CursorQuotaDisplay.isQuotaChromeId(state.providerId)
+                        ? "Monthly \(asOf) — Cursor dashboard has not refreshed since"
+                        : "Weekly \(asOf) — Claude Code statusline has not refreshed since")
+          } else {
+              windowText(lbl, state.weekly)
+          }
+      }
+      .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
+  }
+
+    private func windowText(_ label: String, _ window: LimitWindowState, activityPercent: Double? = nil) -> some View {
+        let percent = window.usedPercent ?? activityPercent
+        let activityOnly = window.usedPercent == nil && activityPercent != nil
+        let severity = UsageSeverity.of(percent: window.usedPercent,
                                         warn: model.settings.core.warnThresholdPercent,
                                         danger: model.settings.core.dangerThresholdPercent)
         // 字體規格與 MenuPanelMetrics.measuredWindowCellWidth 一一對應(改這裡要同步那裡)。
         // lineLimit(1)+minScale:欄寬已按 worst-case 實測,此為最後保險 —— 寧可微縮不可折行/截字。
         return HStack(spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(activityOnly ? "today" : label).font(.caption2).foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.85)
             Text(window.idle ? "idle" : (percent.map { "\(Int($0.rounded()))%" } ?? "—"))
                 .font(.callout.weight(.semibold)).monospacedDigit()
@@ -188,7 +283,8 @@ private struct ProviderStatusRow: View {
         func win(_ w: LimitWindowState) -> String {
             w.idle ? "idle" : (w.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")
         }
-        return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly)). "
+        let weeklyAge = StatuslineAge.weeklyAsOfLabel(for: state, now: now).map { " (\($0))" } ?? ""
+        return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly))\(weeklyAge). "
             + ResetLabel.accessibility(fiveHourResetAt: state.fiveHour.resetAt,
                                        weeklyResetAt: state.weekly.resetAt, now: now)
     }

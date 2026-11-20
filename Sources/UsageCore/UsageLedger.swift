@@ -74,7 +74,7 @@ public final class UsageLedger {
     /// 事件欄位駐留(低基數欄位共用緩衝;id/timestamp/tokens 原樣)。
     private func interned(_ e: UsageEvent) -> UsageEvent {
         var e = e
-        e.providerId = intern(e.providerId) ?? e.providerId
+        e.providerId = intern(UsageEvent.canonicalProviderId(e.providerId)) ?? e.providerId
         e.accountId = intern(e.accountId)
         e.projectId = intern(e.projectId)
         e.projectName = intern(e.projectName)

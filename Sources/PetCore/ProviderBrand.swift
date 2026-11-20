@@ -37,7 +37,15 @@ public enum ProviderBrands {
     public static let known: [ProviderBrand] = [
         ProviderBrand(id: "antigravity", code: "AG", shortName: "Antigravity", displayName: "Antigravity",
                       dotColor: 0x8B5CF6, needsOutline: false),
+        ProviderBrand(id: "antigravity-gemini", code: "Gm", shortName: "Antigravity", displayName: "Antigravity · Gemini models",
+                      dotColor: 0x8B5CF6, needsOutline: false),
+        ProviderBrand(id: "antigravity-claude-gpt", code: "3P", shortName: "Antigravity",
+                      displayName: "Antigravity · Claude & GPT", dotColor: 0x8B5CF6, needsOutline: false),
+        ProviderBrand(id: "antigravity-argon", code: "Ar", shortName: "Antigravity",
+                      displayName: "Antigravity · Argon", dotColor: 0x8B5CF6, needsOutline: false),
         ProviderBrand(id: "claude-code", code: "CC", shortName: "Claude", displayName: "Claude Code",
+                      dotColor: 0xE8823A, needsOutline: false),
+        ProviderBrand(id: "claude-code-fable", code: "Fb", shortName: "Claude", displayName: "Claude Code · Fable",
                       dotColor: 0xE8823A, needsOutline: false),
         ProviderBrand(id: "codex", code: "CX", shortName: "Codex", displayName: "Codex",
                       dotColor: 0x3B82F6, needsOutline: false),
@@ -46,6 +54,12 @@ public enum ProviderBrands {
         // 深黃(yellow-600):與 CC 橘同暖色系但明度/色相可辨;淺色選單列對比足(R1 codex C11)。
         ProviderBrand(id: "opencode", code: "OC", shortName: "OpenCode", displayName: "OpenCode",
                       dotColor: 0xCA8A04, needsOutline: false),
+        ProviderBrand(id: "cursor-ide", code: "CU", shortName: "Cursor", displayName: "Cursor",
+                      dotColor: 0x1E1E1E, needsOutline: true),
+        ProviderBrand(id: "cursor-ide-auto", code: "C1", shortName: "Cursor", displayName: "Cursor · models",
+                      dotColor: 0x1E1E1E, needsOutline: true),
+        ProviderBrand(id: "cursor-ide-api", code: "C3", shortName: "Cursor", displayName: "Cursor · other models",
+                      dotColor: 0x1E1E1E, needsOutline: true),
     ]
 
     public static func brand(for providerId: String, displayName: String? = nil) -> ProviderBrand {
@@ -95,6 +109,8 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
 
     public let providerId: String
     public let code: String
+    /// Text beside the dot in the menu bar badge (may differ from `code` when the user customizes labels).
+    public let badgeLabel: String
     public let displayName: String
     public let dotColor: UInt32
     public let needsOutline: Bool
@@ -107,10 +123,11 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
 
     public var id: String { providerId }
 
-    public init(providerId: String, code: String, displayName: String, dotColor: UInt32,
-                needsOutline: Bool, fiveHour: Window?, weekly: Window?, idle: Bool = false) {
+    public init(providerId: String, code: String, badgeLabel: String? = nil, displayName: String,
+                dotColor: UInt32, needsOutline: Bool, fiveHour: Window?, weekly: Window?, idle: Bool = false) {
         self.providerId = providerId
         self.code = code
+        self.badgeLabel = badgeLabel ?? code
         self.displayName = displayName
         self.dotColor = dotColor
         self.needsOutline = needsOutline
@@ -135,7 +152,8 @@ public enum MenuBadgeBuilder {
     /// (否則高 weekly 會在 compact 模式消失 —— 正是本功能要防的漏報)。
     /// 兩窗皆無資料:idle → 顯示中性「idle」徽章(compact 省略);非 idle → 略過(未偵測/無資料)。
     public static func badges(
-        from states: [(id: String, displayName: String?, fiveHour: Double?, weekly: Double?, idle: Bool)],
+        from states: [(id: String, displayName: String?, badgeLabel: String?, fiveHour: Double?, weekly: Double?,
+                       idle: Bool, todayActivityPercent: Double?)],
         warn: Double, danger: Double,
         onlyWarnings: Bool = false
     ) -> [MenuBadge] {
@@ -145,16 +163,30 @@ public enum MenuBadgeBuilder {
         }
         return states.compactMap { st -> MenuBadge? in
             let brand = ProviderBrands.brand(for: st.id, displayName: st.displayName)
+            let chromeLabel: String = {
+                let trimmed = st.badgeLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return trimmed.isEmpty ? brand.code : String(trimmed.prefix(14))
+            }()
             let fiveHour = window(st.fiveHour)
             let weekly = window(st.weekly)
-            // 兩窗皆無資料:idle 顯示中性徽章(compact 除外);否則整筆略過(無資料)。
+            // 兩窗皆無資料:本機今日 token 刻度 → 5h 槽顯示 activity%;否則 idle 徽章或略過。
             if fiveHour == nil, weekly == nil {
+                if let act = st.todayActivityPercent, let w = window(act) {
+                    let badge = MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
+                                          displayName: brand.displayName,
+                                          dotColor: brand.dotColor, needsOutline: brand.needsOutline,
+                                          fiveHour: w, weekly: nil, idle: false)
+                    if onlyWarnings, badge.aggregateSeverity == .normal { return nil }
+                    return badge
+                }
                 guard st.idle, !onlyWarnings else { return nil }
-                return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+                return MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
+                                 displayName: brand.displayName,
                                  dotColor: brand.dotColor, needsOutline: brand.needsOutline,
                                  fiveHour: nil, weekly: nil, idle: true)
             }
-            let badge = MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+            let badge = MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
+                                  displayName: brand.displayName,
                                   dotColor: brand.dotColor, needsOutline: brand.needsOutline,
                                   fiveHour: fiveHour, weekly: weekly, idle: false)
             // compact:任一窗達 warn 才顯示。

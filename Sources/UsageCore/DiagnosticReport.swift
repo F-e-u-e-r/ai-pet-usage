@@ -13,6 +13,7 @@ public enum KnownProviderID: String, Codable, Sendable, CaseIterable {
     case claudeCode = "claude-code"
     case grokCode = "grok-code"
     case antigravity
+    case cursorIde = "cursor-ide"
     case opencode
     public init?(known raw: String) { self.init(rawValue: raw) }
 }
@@ -205,6 +206,7 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .claudeCode: return "Claude Code"
         case .grokCode: return "Grok Code"
         case .antigravity: return "Antigravity"
+        case .cursorIde: return "Cursor"
         case .opencode: return "OpenCode"
         }
     }
@@ -217,6 +219,8 @@ public struct DiagnosticReport: Encodable, Sendable {
         case .claudeStatuslineOurHook: return "~/Library/Application Support/AIPetUsage/claude-statusline.json"
         case .claudeStatuslineShared: return "~/.claude/usage-status.json"
         case .grokSessions: return "~/.grok/sessions"
+        case .agyBrain: return "~/.gemini/antigravity-cli/brain"
+        case .cursorStructuredLogs: return "~/Library/Application Support/Cursor/logs"
         case .opencodeDb: return "~/.local/share/opencode/opencode.db"
         }
     }
