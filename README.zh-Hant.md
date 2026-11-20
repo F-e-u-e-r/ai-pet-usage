@@ -95,6 +95,8 @@ Claude Code 會把官方限額(真實的 5 小時 / 週 `used_percentage`)餵給
 
 加 `--dry-run` 可先預覽、不寫入。若你既有的 `statusLine` 是**複合指令**(含管線/參數)而非單一 script 路徑,它不會亂猜 —— 會拒絕並給指引、零改動,讓你自行手動包裹(見下)。symlink/dotfiles 管理的 settings、非 `command` 型 statusLine、非本工具管理的 hook 引用同樣一律拒絕且零改動;安裝完會印出復原指令。
 
+**hook 路徑搬走或刪除了?** 若你的 `statusLine.command` 仍指向舊位置的 `claude-statusline-hook.sh`(例如已搬移或刪除的 clone),install-hook 會拒絕且零改動。它只管理自己為目前 hook 寫入的確切指令,無法證明其他指令是誰寫的,所以任何提到這支 hook 的其他指令一律不改寫。復原方式:先把現有的 `statusLine.command` 存起來(復原 = 貼回去),再自行編輯 `settings.json` —— 若舊指令包裹了你自己的 statusline(`--wrap …`),把 `statusLine.command` 改回你自己的 script;否則移除整個 `statusLine` 區塊。然後重跑 `install-hook`(可先加 `--dry-run` 預覽)。若那是你刻意設定、且仍正常運作的手動安裝或包裹,保留即可。
+
 **手動替代方案** —— 同一支 hook 在 repo 的 [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh)(不在 app bundle 內 —— Homebrew 使用者請 clone repo 或從 release 的原始碼 zip 取得)。
 
 全新安裝(還沒有自訂 statusline)—— 在 `~/.claude/settings.json` 加入:
