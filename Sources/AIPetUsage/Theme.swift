@@ -20,6 +20,17 @@ enum Theme {
         static let tableHeader = Font.system(size: 12, weight: .semibold)
         static let note = Font.system(size: 12)                     // data-quality 註記
         static let micro = Font.system(size: 9)                     // 座標軸刻度
+
+        // 選單列下拉面板(provider / Grok / OpenRouter)—— 與 PetCore.MenuPanelMetrics
+        // measuredWindowCellWidth 同一套 TextStyle;改這裡須重跑欄寬實測。
+        static let panelProviderName = Font.callout.weight(.medium)
+        static let panelWindowLabel = Font.caption2
+        static let panelWindowValue = Font.callout.weight(.semibold)
+        static let panelReset = Font.caption
+        static let panelMeta = Font.caption2                       // as-of / stale 等
+        static let panelStatus = Font.caption                        // 錯誤句第二行
+        static let panelHeaderTitle = Font.headline
+        static let panelHeaderMeta = Font.caption
     }
 
     private static func dynamic(light: NSColor, darkHex: UInt32) -> Color {

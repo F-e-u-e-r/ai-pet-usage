@@ -625,12 +625,26 @@ final class AppModel {
     /// 略過無資料 provider、identity dot 恆定、severity 只上在百分比。
     var menuBarBadges: [MenuBadge] {
         guard settings.menuBarDisplayMode != .petOnly else { return [] }
-        let states = dashboard.limitStates.map { st in
-            (id: st.providerId,
-             displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
-             fiveHour: st.fiveHour.usedPercent,
-             weekly: st.weekly.usedPercent,
-             idle: st.fiveHour.idle)
+        var states = dashboard.limitStates.map { st -> (id: String, displayName: String?, fiveHour: Double?, weekly: Double?, idle: Bool) in
+            let fiveHour = st.fiveHour.usedPercent
+            var weekly = st.weekly.usedPercent
+            var idle = st.fiveHour.idle
+            // F3 官方額度沒有獨立 provider 列:併入 grok-code 選單列徽章的 weekly 欄(日誌無 rate_limits 時)。
+            if st.providerId == "grok-code", settings.grokQuotaEnabled, let snap = grokQuota.status.snapshot {
+                weekly = snap.usedPercent
+                idle = false
+            }
+            return (id: st.providerId,
+                    displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
+                    fiveHour: fiveHour,
+                    weekly: weekly,
+                    idle: idle)
+        }
+        if settings.grokQuotaEnabled,
+           settings.core.enabledProviders.contains("grok-code"),
+           !states.contains(where: { $0.id == "grok-code" }),
+           let snap = grokQuota.status.snapshot {
+            states.append((id: "grok-code", displayName: nil, fiveHour: nil, weekly: snap.usedPercent, idle: false))
         }
         return MenuBadgeBuilder.badges(from: states,
                                        warn: settings.core.warnThresholdPercent,
@@ -690,6 +704,34 @@ final class AppModel {
             ProviderBrands.brand(for: $0.providerId).displayName.lowercased() <
             ProviderBrands.brand(for: $1.providerId).displayName.lowercased()
         }
+    }
+
+    /// 面板用限額列:官方 Grok 額度(F3)覆寫 grok-code 的 weekly 欄,取代空的日誌限額列。
+    var panelLimitStates: [ProviderLimitState] {
+        orderedLimitStates.map { overlayGrokOfficialQuota($0) }
+    }
+
+    /// grok-code + 官方額度啟用時,用 billing snapshot 取代舊的 local-only weekly 呈現。
+    private func overlayGrokOfficialQuota(_ state: ProviderLimitState) -> ProviderLimitState {
+        guard state.providerId == "grok-code",
+              settings.grokQuotaEnabled,
+              let snap = grokQuota.status.snapshot else { return state }
+        var st = state
+        st.weekly = LimitWindowState(
+            usedPercent: snap.usedPercent,
+            resetAt: snap.periodEnd,
+            windowMinutes: 10_080,
+            confidence: .high,
+            idle: false
+        )
+        st.weeklyOfficial = .usable
+        st.lastSourceDescription = "Grok official billing (opt-in)"
+        return st
+    }
+
+    /// 官方額度已併入 provider 列時不再顯示獨立 Grok quota 列。
+    var showsStandaloneGrokQuotaRow: Bool {
+        settings.grokQuotaEnabled && grokQuota.status.snapshot == nil
     }
 
     var orderedSnapshots: [UsageSnapshot] {
