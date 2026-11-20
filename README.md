@@ -93,7 +93,9 @@ Claude Code pipes its official rate limits (the real 5-hour / weekly `used_perce
 .build/debug/aipet install-hook                                             # built from source
 ```
 
-Add `--dry-run` to preview without writing. If your existing `statusLine` is a **compound command** (with pipes/arguments) rather than a single script path, it won't guess — it refuses with guidance and leaves everything unchanged, so you can wrap it manually (see below). It also refuses (changing nothing) on symlinked/dotfiles-managed settings, non-`command` statusLine types, and unmanaged hook references, and prints the revert line after installing.
+Add `--dry-run` to preview without writing. If your existing `statusLine` is a **compound command** (with pipes/arguments) rather than a single script path, it won't guess — it refuses with guidance and leaves everything unchanged, so you can wrap it manually (see below). It also refuses (changing nothing) on symlinked/dotfiles-managed settings, non-`command` statusLine types, and **unparseable** hook references, and prints the revert line after installing.
+
+**Stale repo path?** If you followed the manual `Scripts/claude-statusline-hook.sh` example and later moved the clone or switched to the Homebrew app, Claude may stop feeding limits because that path no longer exists. Re-run `aipet install-hook` — it rewrites `statusLine.command` to the bundled hook under `~/Library/Application Support/AIPetUsage/` and **keeps your existing `--wrap` target** (e.g. Claude Desktop’s `~/.claude/claude-desktop/statusline.sh`).
 
 **Manual alternative** — the same hook lives in the repo at [`Scripts/claude-statusline-hook.sh`](Scripts/claude-statusline-hook.sh) (not in the app bundle — Homebrew users: clone the repo or grab the file from the source zip of a release).
 

@@ -171,6 +171,24 @@ public enum InstallHook {
                     return refuse("statusLine.type is \"\(esc(typeValue))\" (not \"command\") — not touching a non-command statusLine")
                 }
                 if containsCI(raw, hookFileName) {
+                    // 手動指向 repo/舊路徑的 hook:若能抽出 wrap 語義 → 改接 canonical hookPath
+                    // (常見:搬了 clone、升級 app,或 README 範例的 Scripts/ 路徑已不存在)。
+                    if let salvaged = salvageManualHookReference(raw) {
+                        switch salvaged {
+                        case .fresh:
+                            return freshPlan(root: root, statusLine: statusLine, prefix: prefix, oldCommand: raw)
+                        case .wrapPath(let target):
+                            return wrapPlan(root: root, statusLine: statusLine, prefix: prefix,
+                                            action: .wrapPath(target),
+                                            command: "\(prefix) --wrap \(shellSingleQuote(target))",
+                                            oldCommand: raw)
+                        case .wrapBashDashDash(let target):
+                            return wrapPlan(root: root, statusLine: statusLine, prefix: prefix,
+                                            action: .wrapBashDashDash(target),
+                                            command: "\(prefix) --wrap /bin/bash -- \(shellSingleQuote(target))",
+                                            oldCommand: raw)
+                        }
+                    }
                     return refuse("statusLine already references a \(hookFileName) not managed by this installer (manual install?) — not touching it")
                 }
             } else if let typeValue, typeValue != "command" {
@@ -212,6 +230,31 @@ public enum InstallHook {
 
         // statusLine 完全不存在。
         return freshPlan(root: root, statusLine: [:], prefix: prefix, oldCommand: nil)
+    }
+
+    /// 從手動安裝的 statusLine(任意路徑的 `claude-statusline-hook.sh`)抽出 wrap 語義;
+    /// 僅 hook、無 `--wrap` → fresh;無法解析 → nil。
+    static func salvageManualHookReference(_ command: String) -> CanonicalKind? {
+        guard containsCI(command, hookFileName) else { return nil }
+        guard let wrapRange = command.range(of: "--wrap ", options: .caseInsensitive) else {
+            return .fresh
+        }
+        let wrapRest = String(command[wrapRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        let bashPrefix = "/bin/bash -- "
+        if wrapRest.hasPrefix(bashPrefix) {
+            guard let target = unquoteSingle(String(wrapRest.dropFirst(bashPrefix.count))),
+                  target.hasPrefix("/"), !containsCI(target, hookFileName) else { return nil }
+            return .wrapBashDashDash(target)
+        }
+        if let target = unquoteSingle(wrapRest), target.hasPrefix("/"), !containsCI(target, hookFileName) {
+            return .wrapPath(target)
+        }
+        if wrapRest.hasPrefix("/"),
+           wrapRest.range(of: simplePathPattern, options: .regularExpression) != nil,
+           !containsCI(wrapRest, hookFileName) {
+            return .wrapPath(wrapRest)
+        }
+        return nil
     }
 
     /// 辨識三種 canonical 形式(byte-exact,不 trim)。target 必須是「本安裝器可能產生的
