@@ -59,6 +59,8 @@ reports/diagnostics.**
 
 When several statusline files exist, the 5-hour and weekly windows are each taken from the file with the freshest `mtime` that carries that window, and each window keeps its own source file's observation time (a stale file can never borrow freshness from an active one).
 
+**Fable / model-scoped weekly limits.** When Claude Code includes `rate_limits.model_scoped` or `rate_limits.seven_day_overage_included` in the statusline payload, the hook also persists a narrowed `model_scoped` array (display name, `used_percentage`, optional `resets_at` only). The Limits tab shows these under **Model-scoped weekly** (e.g. **Fable weekly**). Token usage for `claude-fable-*` models is already attributed from session JSONL and priced when a curated row exists in `model-prices.json`. Older Claude Code builds may omit `model_scoped` from stdin — only account-level 5h/weekly limits appear until an upgrade exposes the extra fields.
+
 **Fallback estimation.** Without a statusline payload, session logs contain only token counts, so the app estimates the 5-hour window with the standard block rule (first event floors to the hour, window = start + 5h) and shows a percent only when the user sets a token budget in Settings → Limits. Weekly is a rolling 7-day sum. Estimated values are always labelled `estimated`.
 
 ## Grok Code (`providerId: grok-code`)
@@ -79,13 +81,74 @@ When several statusline files exist, the 5-hour and weekly windows are each take
 
 The session-folder name is the URL-encoded project path and is decoded to attribute usage to a project. Message contents (`params.update`) are never decoded — each line is read through a narrow parser that only sees the token counter and its metadata.
 
-**Also read**: the tail (last ≤2 MiB) of `logs/unified.jsonl`, only to extract the subscription tier label (`subscriptionTier`, e.g. "SuperGrok") from billing lines through a narrow decoder — no other log content is parsed or retained. (Billing lines are written on CLI startup and can sit ~1 MB deep under heavy use; once seen, the label persists even when later tails miss it.)
+**Also read**: the tail (last ≤2 MiB) of `logs/unified.jsonl`, to extract `subscriptionTier` and weekly `creditUsagePercent` (plus `billingPeriodEnd` / `currentPeriod.end` when present) from billing lines through a narrow decoder — no other log content is parsed or retained. (Billing lines are written on CLI startup and can sit ~1 MB deep under heavy use; once seen, values persist even when later tails miss them.)
 
 **Not read**: prompts, assistant/message contents, tool call payloads, `events.jsonl`, search indexes, other log content, auth/credential files.
 
-**Token figures are estimates that undercount.** Grok's local log exposes only a cumulative, context-size-like token counter per session, and it even regresses after context compaction (a later line reports a smaller value). The ledger event for each turn is the positive growth of that counter since the previous turn; on a regression the baseline is reset and no negative event is produced. Because the counter tracks context size rather than billed input/output, these figures **undercount actual billed usage** and have no input/output/cache split (all growth is recorded as input, confidence: estimated). **Grok exposes no usage limits locally, so no usage percent is provided.**
+**Token figures are estimates that undercount.** Grok's local log exposes only a cumulative, context-size-like token counter per session, and it even regresses after context compaction (a later line reports a smaller value). The ledger event for each turn is the positive growth of that counter since the previous turn; on a regression the baseline is reset and no negative event is produced. Because the counter tracks context size rather than billed input/output, these figures **undercount actual billed usage** and have no input/output/cache split (all growth is recorded as input, confidence: estimated). **Weekly subscription usage %** comes from `creditUsagePercent` in unified.jsonl (official Grok CLI billing snapshot), not from token activity. Optional Settings → Grok quota can refresh the same field from `GET /v1/billing?format=credits`.
 
 **Pricing: curated entries only, and costs are lower-bound estimates.** Auto-generated price entries are ignored for Grok (a price list refresh can never silently start pricing rough token estimates). Grok models are priced only through deliberate, source-verified curated entries or a user price override — currently `grok-4.5` ($2/$6, cache read $0.50, verified against docs.x.ai and OpenRouter 2026-07-11). Because the underlying token counts undercount billed usage, grok costs are **lower-bound estimates**, not invoices. Models without a verifiable public price (e.g. `grok-composer-2.5-fast`) stay unpriced and appear as "unknown model" rows.
+
+## Antigravity / agy CLI (`providerId: antigravity`; off by default)
+
+Antigravity does **not** write model quota or rate-limit percentages to disk (those live server-side). This app therefore shows **local token totals only** (from transcripts), not subscription % rings.
+
+**How on-disk layout maps to this repo**
+
+| Location (typical) | Used by AI Pet Usage? |
+|---|---|
+| `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl` | **Yes** — per-turn `input_tokens` / `output_tokens` / `cache_read_tokens` |
+| `~/.gemini/antigravity-cli/cache/conversation_metadata.json` | **Yes** — workspace path for project attribution |
+| `~/.gemini/antigravity-cli/conversation_summaries.db` | **No** — search/metadata; no stable token ledger in the schema we rely on |
+| `~/.gemini/antigravity-cli/conversations/` | **No** |
+| `~/.gemini/antigravity-cli/antigravity_state.pbtxt` (and similar state blobs) | **No** |
+| Parallel tree `~/.gemini/antigravity/` (IDE) | **No** — same kinds of files, but the **agy CLI** home is `antigravity-cli` |
+| `~/Library/Application Support/Antigravity/` (Electron app) | **No** — different product surface; not the agy brain path |
+
+**Paths read**
+
+- `~/.gemini/antigravity-cli/brain/<conversation-uuid>/.system_generated/logs/transcript.jsonl`
+- `~/.gemini/antigravity-cli/cache/conversation_metadata.json` — conversation id → first `summary.WorkspaceURIs` entry only (`file://` workspace path for project attribution)
+
+Chunked transcript files under `logs/chunks/` are ignored.
+
+**Lines consumed**
+
+| line | fields extracted | purpose |
+|---|---|---|
+| model lines with `input_tokens` | `step_index`, `created_at`, `input_tokens`, `cache_read_tokens`, `output_tokens`, optional `model` | one ledger event per turn; `input`/`output` as reported; `cache_read_tokens` is **cumulative in the file** → stored as **positive deltas** (reset on compaction regression) |
+
+**Not read**: `content`, `thinking`, `tool_calls`, credentials, `conversation_summaries.db`, IDE-side `~/.gemini/antigravity/`, Electron Application Support trees, or other caches.
+
+**Narrow decode (privacy boundary).** Each matching line is parsed through a **narrow decoder** that declares only the fields listed above. Prompts, thinking, and tool payloads are **not decoded into retained objects, written to the ledger, or included in reports/diagnostics.**
+
+Token counts are **per-turn totals as recorded in the transcript** (confidence: high for shape; pricing uses the `antigravity` / Google model registry).
+
+**Official quota (three buckets, like the Antigravity Usage panel):** opt-in only — Settings → **Antigravity quota (official)** (default **off**). When on and Antigravity is enabled, each refresh runs `agy -p "/usage" --output-format json` if the `agy` binary is on `PATH`, parsing `remaining_fraction` / `reset_time` for **Gemini Models** (5h + weekly), **Claude and GPT models** (5h + weekly), and **Gemini 4 Argon** (weekly only). That call uses your existing CLI login and may open agy OAuth if the session expired; nothing is stored besides the parsed percentages and reset times in `antigravity-quota.json`. Menu-bar rings use the **Gemini Models** 5h window; the Today card lists all three groups.
+
+Enable the provider in Settings → Providers (off by default, like OpenCode). Token totals need only the provider toggle; the quota toggle is separate.
+
+## Cursor IDE (`providerId: cursor-ide`; on by default)
+
+**Paths read**
+
+- `~/Library/Application Support/Cursor/logs/**/anysphere.cursor-always-local/Cursor Structured Logs*.log`
+- Override: set `CURSOR_LOGS` to the logs directory root if Cursor is relocated.
+
+**Lines consumed**
+
+| line `message` | fields extracted | purpose |
+|---|---|---|
+| `cursor_agent_exec.startup.workspace_paths` | `metadata.workspacePaths` (JSON array string) | workspace → project attribution (first path only) |
+| `Setting token details for client token ring` | log timestamp prefix, `metadata.modelName`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` | positive delta since previous cumulative snapshot in the same log file → one ledger event |
+
+**Not read**: `~/.cursor/chats/**/store.db`, agent transcript JSONL (message bodies), `~/Library/Application Support/Cursor/User/globalStorage` credentials, network calls.
+
+**Narrow decode (privacy boundary).** Each matching line is parsed through a **narrow decoder** that declares only the fields listed above. Prompts, diffs, and chat content are **not decoded into retained objects, written to the ledger, or included in reports/diagnostics.**
+
+Token counts are **provider-reported per API round** (confidence: high for shape). Counters are cumulative within a composer session; the adapter emits **positive deltas** only and resets on regression (no negative events). Cursor does **not** expose subscription usage-percent in these logs, so no usage percent is shown.
+
+**Official plan usage (opt-in):** Settings → **Cursor quota (official)**. When enabled, the app reads the access token Cursor or `cursor-agent` stored in the macOS Keychain (`cursor-access-token` / `cursor-user`) and POSTs to `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` about every 15 minutes (and on manual Refresh). Parsed fields: `planUsage.autoPercentUsed` (**Cursor models**), `planUsage.apiPercentUsed` (**Other models**), plus `billingCycleEnd` for reset. The token is sent only to `api2.cursor.sh` over HTTPS; it is not logged, persisted, or refreshed by this app. Menu bar / pet chrome can show two monthly meters when the toggle is on.
 
 ## OpenCode (`providerId: opencode`; off by default)
 

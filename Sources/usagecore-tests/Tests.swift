@@ -393,6 +393,33 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         XCTAssertEqual(singleReadings.count, 1)
         XCTAssertEqual(singleReadings[0].primary?.usedPercent, 7)
         XCTAssertNil(singleReadings[0].secondary)
+
+        let scopedPayload = """
+        {"schema_version":1,"captured_at":"2026-07-17T01:23:45Z","model":null,
+         "rate_limits":{"five_hour":{"used_percentage":10},"seven_day":{"used_percentage":20}},
+         "model_scoped":[{"display_name":"Fable","used_percentage":38.5,"resets_at":1789400000}]}
+        """
+        let scopedFile = dir.appendingPathComponent("scoped.json")
+        try scopedPayload.data(using: .utf8)!.write(to: scopedFile)
+        let scoped = ClaudeCodeAdapter.readModelScopedLimits(from: [scopedFile])
+        XCTAssertEqual(scoped.count, 1)
+        XCTAssertEqual(scoped[0].displayName, "Fable")
+        XCTAssertEqual(scoped[0].usedPercent, 38.5, accuracy: 0.0001)
+        XCTAssertEqual(scoped[0].resetsAt?.timeIntervalSince1970, 1_789_400_000)
+
+        let nestedPayload = """
+        {"schema_version":1,"captured_at":"2026-07-17T01:23:45Z",
+         "rate_limits":{"five_hour":{"used_percentage":3},"seven_day":{"used_percentage":39},
+         "model_scoped":[{"display_name":"Fable","utilization":0.41}]}}
+        """
+        let nestedFile = dir.appendingPathComponent("nested-scoped.json")
+        try nestedPayload.data(using: .utf8)!.write(to: nestedFile)
+        let nestedScoped = ClaudeCodeAdapter.readModelScopedLimits(from: [nestedFile])
+        XCTAssertEqual(nestedScoped.count, 1)
+        XCTAssertEqual(nestedScoped[0].usedPercent, 41, accuracy: 0.01)
+        let nestedLimits = ClaudeCodeAdapter.readStatuslineRateLimits(from: [nestedFile])
+        XCTAssertEqual(nestedLimits[0].primary?.usedPercent, 3)
+        XCTAssertEqual(nestedLimits[0].secondary?.usedPercent, 39)
     }
 
     func testHookProducedFileDecodesEndToEnd() throws {
@@ -642,7 +669,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         let adapter = ClaudeCodeAdapter(roots: [], statuslineFiles: [], planConfigFiles: [])
         XCTAssertEqual(adapter.reportedLimitCapability, .provides(windows: [.fiveHour, .weekly]))
         XCTAssertEqual(CodexAdapter(roots: []).reportedLimitCapability, .provides(windows: [.fiveHour, .weekly]))
-        XCTAssertEqual(GrokCodeAdapter(roots: [], billingLogFiles: []).reportedLimitCapability, .notProvided)
+        XCTAssertEqual(GrokCodeAdapter(roots: [], billingLogFiles: []).reportedLimitCapability, .provides(windows: [.weekly]))
         XCTAssertEqual(OpenCodeAdapter(dbURL: makeTempDir().appendingPathComponent("none.db")).reportedLimitCapability, .notProvided)
     }
 }
@@ -776,6 +803,21 @@ final class LedgerTests: XCTestCase {
         let l2 = UsageLedger(fileURL: file)
         XCTAssertEqual(l2.events.count, 2)
         XCTAssertEqual(l2.append([event("a", "2026-01-15T10:00:00Z")]), 0)
+    }
+
+    func testLegacyAgyProviderIdCanonicalizesOnLoad() throws {
+        let dir = makeTempDir()
+        let file = dir.appendingPathComponent("ledger.jsonl")
+        let legacy = """
+        {"id":"ag:legacy:1","providerId":"agy","timestamp":"2026-01-15T10:00:00Z","tokens":{"input":50,"output":10,"cacheRead":0,"cacheWrite5m":0,"cacheWrite1h":0},"sourceKind":"agy-transcript"}
+        """
+        try legacy.write(to: file, atomically: true, encoding: .utf8)
+        let ledger = UsageLedger(fileURL: file)
+        XCTAssertEqual(ledger.events.count, 1)
+        guard ledger.events.count == 1 else { return }
+        XCTAssertEqual(ledger.events[0].providerId, "antigravity")
+        XCTAssertEqual(ledger.totals(in: DateInterval(start: .distantPast, end: .distantFuture),
+                                       providerId: "antigravity").total, 60)
     }
 
     func testQueries() {
@@ -2315,7 +2357,7 @@ final class PricingTests: XCTestCase {
         XCTAssertGreaterThan(generated!.count, 50, "完整價目應涵蓋長尾模型")
         for entry in generated! {
             XCTAssertGreaterThan(entry.inputPerMillion, 0)
-            XCTAssertTrue(["claude-code", "codex", "antigravity", "grok-code"].contains(entry.providerId))
+            XCTAssertTrue(["claude-code", "codex", "antigravity", "cursor-ide", "grok-code"].contains(entry.providerId))
         }
         let registry = PricingRegistry.loadDefault(overridesURL: nil)
 
@@ -2888,6 +2930,20 @@ final class GrokCodeAdapterTests: XCTestCase {
         XCTAssertNil(GrokCodeAdapter.readSubscriptionTier(from: [dir.appendingPathComponent("nope.jsonl")]))
     }
 
+    func testWeeklyCreditsPercentFromLogTail() throws {
+        let dir = makeTempDir()
+        let log = dir.appendingPathComponent("unified.jsonl")
+        let end = "2026-11-22T12:00:00Z"
+        try """
+        {"ts":"2026-07-01T00:00:00Z","msg":"noise"}
+        {"ts":"2026-07-05T00:00:00Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":12.0}}}
+        {"ts":"2026-11-15T00:00:00Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":30.0,"billingPeriodEnd":"\(end)"},"subscriptionTier":"SuperGrok"}}
+        """.data(using: .utf8)!.write(to: log)
+        let weekly = GrokCodeAdapter.readWeeklyCreditsUsage(from: [log])
+        XCTAssertEqual(weekly?.usedPercent, 30)
+        XCTAssertEqual(weekly?.resetAt, ISO8601.parse(end))
+    }
+
     func testPlanOnlyReadingEmittedThroughRefresh() throws {
         let dir = makeTempDir()
         let log = dir.appendingPathComponent("unified.jsonl")
@@ -2898,12 +2954,368 @@ final class GrokCodeAdapterTests: XCTestCase {
         let (result, _) = try adapter.refreshUsage(state: ScanState())
         XCTAssertEqual(result.rateLimits.count, 1)
         XCTAssertEqual(result.rateLimits[0].planType, "SuperGrok")
-        XCTAssertNil(result.rateLimits[0].primary, "grok 仍不回報任何用量百分比")
-        XCTAssertNil(result.rateLimits[0].secondary)
+        XCTAssertNil(result.rateLimits[0].primary)
+        XCTAssertNil(result.rateLimits[0].secondary, "no config.creditUsagePercent → no weekly reading")
+    }
+
+    func testWeeklyReadingEmittedThroughRefresh() throws {
+        let dir = makeTempDir()
+        let log = dir.appendingPathComponent("unified.jsonl")
+        try """
+        {"ts":"2026-11-15T00:00:00Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":30.0,"billingPeriodEnd":"2026-11-22T12:00:00Z"},"subscriptionTier":"SuperGrok"}}
+        """.data(using: .utf8)!.write(to: log)
+        let adapter = GrokCodeAdapter(roots: [try makeFixtureSessions()], billingLogFiles: [log])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.rateLimits.count, 1)
+        XCTAssertEqual(result.rateLimits[0].secondary?.usedPercent, 30)
+        XCTAssertEqual(result.rateLimits[0].secondary?.windowMinutes, 10_080)
+        XCTAssertEqual(result.rateLimits[0].sourcePath, "grok:unified.jsonl")
     }
 }
 
-// MARK: - fmtUSD(千分位金額)
+// MARK: - Cursor IDE adapter
+
+final class CursorIdeAdapterTests: XCTestCase {
+    let projectPath = "/Users/dev/projects/cursor-demo"
+
+    func writeLog(lines: [String]) throws -> URL {
+        let root = makeTempDir()
+        let dir = root.appendingPathComponent("20261101T000000/window1/exthost/anysphere.cursor-always-local",
+                                              isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let log = dir.appendingPathComponent("Cursor Structured Logs.workspaceId-test.log")
+        try (lines.joined(separator: "\n") + "\n").data(using: .utf8)!.write(to: log)
+        return root
+    }
+
+    func workspaceLine() -> String {
+        let meta = """
+        {"workspacePathCount":"1","workspacePaths":"[\\"\(projectPath)\\"]"}
+        """
+        return "2026-11-10 08:00:00.000 [info] {\"level\":\"info\",\"key\":\"agent_exec\"," +
+            "\"message\":\"cursor_agent_exec.startup.workspace_paths\",\"metadata\":\(meta)}"
+    }
+
+    func tokenLine(ts: String, input: Int, output: Int, cache: Int = 0, model: String = "composer-2.5") -> String {
+        let meta = """
+        {"modelName":"\(model)","inputTokens":"\(input)","outputTokens":"\(output)","cacheReadTokens":"\(cache)","cacheWriteTokens":"0"}
+        """
+        return "\(ts) [debug] {\"level\":\"debug\",\"key\":\"agent_exec\"," +
+            "\"message\":\"Setting token details for client token ring\",\"metadata\":\(meta)}"
+    }
+
+    func testParsesDeltaTokensModelAndProject() throws {
+        let lines = [
+            workspaceLine(),
+            tokenLine(ts: "2026-11-10 08:01:00.000", input: 1000, output: 50),
+            tokenLine(ts: "2026-11-10 08:02:00.000", input: 1500, output: 80, cache: 10),
+        ]
+        let root = try writeLog(lines: lines)
+        let adapter = CursorIdeAdapter(logRoots: [root])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.events.count, 2)
+        XCTAssertEqual(result.events[0].tokens.input, 1000)
+        XCTAssertEqual(result.events[0].tokens.output, 50)
+        XCTAssertEqual(result.events[1].tokens.input, 500)
+        XCTAssertEqual(result.events[1].tokens.output, 30)
+        XCTAssertEqual(result.events[1].tokens.cacheRead, 10)
+        XCTAssertEqual(result.events[0].modelId, "composer-2.5")
+        XCTAssertEqual(result.events[0].projectId, projectPath)
+        XCTAssertEqual(result.events[0].providerId, "cursor-ide")
+        XCTAssertEqual(result.rateLimits.count, 0)
+    }
+
+    func testRegressionResetsWithoutNegativeEvent() throws {
+        let lines = [
+            tokenLine(ts: "2026-11-10 08:01:00.000", input: 2000, output: 100),
+            tokenLine(ts: "2026-11-10 08:02:00.000", input: 500, output: 20),
+            tokenLine(ts: "2026-11-10 08:03:00.000", input: 800, output: 40),
+        ]
+        let root = try writeLog(lines: lines)
+        let adapter = CursorIdeAdapter(logRoots: [root])
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.events.count, 2, "regression line emits nothing; third line deltas from new baseline")
+        XCTAssertEqual(result.events[0].tokens.input, 2000)
+        XCTAssertEqual(result.events[1].tokens.input, 300)
+    }
+
+    func testIncrementalEmitsOnlyNewLines() throws {
+        let root = try writeLog(lines: [tokenLine(ts: "2026-11-10 08:01:00.000", input: 100, output: 10)])
+        let adapter = CursorIdeAdapter(logRoots: [root])
+        let (r1, s1) = try adapter.refreshUsage(state: ScanState())
+        let (r2, _) = try adapter.refreshUsage(state: s1)
+        XCTAssertEqual(r1.events.count, 1)
+        XCTAssertTrue(r2.events.isEmpty)
+    }
+
+    func testAvailabilityFollowsRootExistence() {
+        XCTAssertFalse(CursorIdeAdapter(logRoots: []).detectAvailability().available)
+    }
+
+    func testCursorEnabledInDefaultSettings() {
+        XCTAssertTrue(CoreSettings().enabledProviders.contains("cursor-ide"))
+    }
+}
+
+// MARK: - Antigravity quota fetcher
+
+final class AntigravityQuotaDisplayTests: XCTestCase {
+    func testExpandLimitStatesIntoThreeBuckets() {
+        let base = ProviderLimitState(
+            providerId: "antigravity",
+            fiveHour: LimitWindowState(usedPercent: 1, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(usedPercent: 1, windowMinutes: 10_080, confidence: .high))
+        let quota = AntigravityQuotaSnapshot(
+            fetchedAt: date("2026-11-15T12:00:00Z"),
+            groups: [
+                AntigravityQuotaGroup(name: "Gemini Models", buckets: [
+                    AntigravityQuotaBucket(id: "g5", label: "5h", windowMinutes: 300,
+                                             usedPercent: 2, remainingPercent: 98, resetsAt: nil)]),
+                AntigravityQuotaGroup(name: "Claude and GPT models", buckets: []),
+                AntigravityQuotaGroup(name: "Gemini 4 Argon", buckets: [
+                    AntigravityQuotaBucket(id: "ar", label: "w", windowMinutes: 10_080,
+                                             usedPercent: 0, remainingPercent: 100, resetsAt: nil)]),
+            ])
+        let expanded = AntigravityQuotaDisplay.expandLimitStates([base], quota: quota)
+        XCTAssertEqual(expanded.map(\.providerId), AntigravityQuotaDisplay.quotaChromeOrder)
+        XCTAssertEqual(expanded[0].fiveHour.usedPercent, 2)
+        XCTAssertEqual(expanded[2].weekly.usedPercent, 0)
+    }
+
+    func testCollapseForPetRingsKeepsOneAntigravityRow() {
+        let gem = ProviderLimitState(
+            providerId: AntigravityQuotaDisplay.geminiId,
+            fiveHour: LimitWindowState(usedPercent: 1, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .high))
+        let third = ProviderLimitState(
+            providerId: AntigravityQuotaDisplay.claudeGptId,
+            fiveHour: LimitWindowState(usedPercent: 0, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .high))
+        let grok = ProviderLimitState(
+            providerId: "grok-code",
+            fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .unknown),
+            todayActivityPercent: 42)
+        let collapsed = AntigravityQuotaDisplay.collapseForPetRings([third, gem, grok])
+        XCTAssertEqual(collapsed.map(\.providerId), [AntigravityQuotaDisplay.geminiId, "grok-code"])
+    }
+
+    func testOrderedGroupsPutsGeminiBeforeClaudeBeforeArgon() {
+        let groups = [
+            AntigravityQuotaGroup(name: "Gemini 4 Argon", buckets: []),
+            AntigravityQuotaGroup(name: "Gemini Models", buckets: []),
+            AntigravityQuotaGroup(name: "Claude and GPT models", buckets: []),
+        ]
+        XCTAssertEqual(AntigravityQuotaDisplay.orderedGroups(groups).map(\.name), [
+            "Gemini Models",
+            "Claude and GPT models",
+            "Gemini 4 Argon",
+        ])
+    }
+
+    func testAntigravityMenuSegmentsGroupBuckets() {
+        let gem = ProviderLimitState(
+            providerId: AntigravityQuotaDisplay.geminiId,
+            fiveHour: LimitWindowState(usedPercent: 1, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .high))
+        let third = ProviderLimitState(
+            providerId: AntigravityQuotaDisplay.claudeGptId,
+            fiveHour: LimitWindowState(usedPercent: 0, windowMinutes: 300, confidence: .high),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .high))
+        let ordered = ChromeMenuGrouping.orderForMenu([third, gem])
+        let parts = ChromeMenuGrouping.partition(ordered)
+        XCTAssertEqual(parts.antigravity.count, 2)
+        XCTAssertTrue(ChromeMenuGrouping.menuSegments(ordered).contains { seg in
+            if case .antigravityGroup(let g) = seg { return g.count == 2 }
+            return false
+        })
+    }
+}
+
+final class AntigravityQuotaFetcherTests: XCTestCase {
+    func testParseUsageJSONAndGeminiRateLimit() {
+        let json = """
+        {"command":{"data":{"groups":[
+        {"name":"Gemini Models","buckets":[
+          {"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.998,"reset_time":"2026-11-21T07:56:33Z"},
+          {"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.997,"reset_time":"2026-11-15T15:58:10Z"}]},
+        {"name":"Gemini 4 Argon","buckets":[
+          {"id":"argon-w","name":"Gemini 4 Argon Weekly Limit","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-22T13:11:54Z"}]}
+        ]}}}
+        """.data(using: .utf8)!
+        struct Fake: Decodable {}
+        _ = Fake.self
+        let snapshot = AntigravityQuotaFetcher.fetch(now: date("2026-11-15T12:00:00Z"),
+                                                     executableURL: URL(fileURLWithPath: "/fake/agy")) { _ in json }
+        XCTAssertEqual(snapshot?.groups.count, 2)
+        let reading = AntigravityQuotaFetcher.geminiModelsRateLimit(from: snapshot!)
+        let used5h = reading?.primary?.usedPercent ?? -1
+        XCTAssertEqual(used5h, 0.3, accuracy: 0.2)
+        XCTAssertNotNil(reading?.secondary)
+    }
+}
+
+// MARK: - Agy adapter
+
+final class AgyAdapterTests: XCTestCase {
+    let brainUUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    let projectPath = "/Users/dev/projects/agy-demo"
+    let sentinel = "SENTINEL_DO_NOT_LEAK_f4c2"
+
+    func writeBrain(lines: [String], metadataJSON: String?) throws -> (brain: URL, cache: URL) {
+        let root = makeTempDir()
+        let brain = root.appendingPathComponent("brain")
+        let transcript = brain.appendingPathComponent(brainUUID)
+            .appendingPathComponent(".system_generated/logs/transcript.jsonl")
+        try FileManager.default.createDirectory(at: transcript.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try (lines.joined(separator: "\n") + "\n").data(using: .utf8)!.write(to: transcript)
+        let cache = root.appendingPathComponent("cache")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        if let metadataJSON {
+            try metadataJSON.data(using: .utf8)!
+                .write(to: cache.appendingPathComponent("conversation_metadata.json"))
+        }
+        return (brain, cache)
+    }
+
+    func tokenLine(step: Int, input: Int, output: Int, cache: Int = 0, model: String?,
+                   ts: String = "2026-11-10T08:53:14Z") -> String {
+        var parts = ["\"step_index\":\(step)", "\"source\":\"MODEL\"", "\"type\":\"PLANNER_RESPONSE\"",
+                     "\"status\":\"DONE\"", "\"created_at\":\"\(ts)\"",
+                     "\"input_tokens\":\(input)", "\"cache_read_tokens\":\(cache)",
+                     "\"output_tokens\":\(output)", "\"content\":\"synthetic\""]
+        if let model { parts.append("\"model\":\"\(model)\"") }
+        return "{\(parts.joined(separator: ","))}"
+    }
+
+    func testParsesTokensModelAndProject() throws {
+        let metadata = """
+        {"conversations":{\"\(brainUUID)\":{\"summary\":{\"WorkspaceURIs\":[\"file://\(projectPath)\"]}}}}
+        """
+        let lines = [
+            "{\"step_index\":0,\"type\":\"USER_INPUT\",\"content\":\"\(sentinel)\"}",
+            tokenLine(step: 1, input: 100, output: 20, cache: 5, model: "gemini-3.8-flash-medium"),
+            tokenLine(step: 2, input: 200, output: 30, cache: 0, model: nil),
+        ]
+        let (brain, cache) = try writeBrain(lines: lines, metadataJSON: metadata)
+        let adapter = AgyAdapter(brainRoots: [brain],
+                                 conversationMetadataURLs: [cache.appendingPathComponent("conversation_metadata.json")],
+                                 quotaFetcher: { nil })
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+
+        XCTAssertEqual(result.events.count, 2)
+        XCTAssertEqual(result.events[0].id, "ag:\(brainUUID):1")
+        XCTAssertEqual(result.events[0].tokens.input, 100)
+        XCTAssertEqual(result.events[0].tokens.output, 20)
+        XCTAssertEqual(result.events[0].tokens.cacheRead, 5)
+        XCTAssertEqual(result.events[1].tokens.cacheRead, 0)
+        XCTAssertEqual(result.events[0].modelId, "gemini-3.8-flash-medium")
+        XCTAssertEqual(result.events[0].projectId, projectPath)
+        XCTAssertEqual(result.events[0].projectName, "agy-demo")
+        XCTAssertEqual(result.events[0].providerId, "antigravity")
+        XCTAssertEqual(result.events[1].modelId, "gemini-3.8-flash-medium", "model carries across turns")
+        XCTAssertEqual(result.rateLimits.count, 0)
+    }
+
+    func testSkipsZeroTokenLines() throws {
+        let lines = [tokenLine(step: 1, input: 0, output: 0, cache: 0, model: "gemini-3.8-flash-medium")]
+        let (brain, cache) = try writeBrain(lines: lines, metadataJSON: nil)
+        let adapter = AgyAdapter(brainRoots: [brain],
+                                 conversationMetadataURLs: [cache.appendingPathComponent("conversation_metadata.json")],
+                                 quotaFetcher: { nil })
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertTrue(result.events.isEmpty)
+    }
+
+    func testIncrementalEmitsOnlyNewLines() throws {
+        let (brain, cache) = try writeBrain(lines: [tokenLine(step: 1, input: 50, output: 10, model: "m")],
+                                            metadataJSON: nil)
+        let adapter = AgyAdapter(brainRoots: [brain],
+                                 conversationMetadataURLs: [cache.appendingPathComponent("conversation_metadata.json")],
+                                 quotaFetcher: { nil })
+        let (r1, s1) = try adapter.refreshUsage(state: ScanState())
+        let (r2, _) = try adapter.refreshUsage(state: s1)
+        XCTAssertEqual(r1.events.count, 1)
+        XCTAssertTrue(r2.events.isEmpty)
+    }
+
+    func testPrivacySentinelNeverLeaks() throws {
+        let lines = [
+            "{\"step_index\":0,\"type\":\"USER_INPUT\",\"content\":\"\(sentinel)\"}",
+            tokenLine(step: 1, input: 10, output: 1, model: nil),
+        ]
+        let (brain, cache) = try writeBrain(lines: lines, metadataJSON: nil)
+        let adapter = AgyAdapter(brainRoots: [brain],
+                                 conversationMetadataURLs: [cache.appendingPathComponent("conversation_metadata.json")],
+                                 quotaFetcher: { nil })
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        let blob = try JSONEncoder().encode(result.events)
+        XCTAssertFalse(String(data: blob, encoding: .utf8)!.contains(sentinel))
+    }
+
+    func testAvailabilityFollowsRootExistence() {
+        XCTAssertFalse(AgyAdapter(brainRoots: [], conversationMetadataURLs: []).detectAvailability().available)
+    }
+
+    func testOfficialQuotaFetchOptIn() throws {
+        var fetchCalled = false
+        let adapter = AgyAdapter(brainRoots: [], conversationMetadataURLs: [],
+                                 enableOfficialQuotaFetch: false,
+                                 quotaFetcher: { fetchCalled = true; return nil })
+        let (off, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertFalse(fetchCalled)
+        XCTAssertTrue(off.rateLimits.isEmpty)
+        XCTAssertNil(off.antigravityQuota)
+
+        fetchCalled = false
+        let on = AgyAdapter(brainRoots: [], conversationMetadataURLs: [],
+                            enableOfficialQuotaFetch: true,
+                            quotaFetcher: { fetchCalled = true; return nil })
+        _ = try on.refreshUsage(state: ScanState())
+        XCTAssertTrue(fetchCalled)
+    }
+
+    func testListsTranscriptsUnderHiddenSystemGenerated() throws {
+        let lines = [tokenLine(step: 1, input: 42, output: 7, model: "gemini-3.8-flash-medium")]
+        let (brain, _) = try writeBrain(lines: lines, metadataJSON: nil)
+        let listing = JSONLScanner.listFiles(root: brain, pathExtension: "jsonl", includeHiddenFiles: false)
+        XCTAssertTrue(listing.files.isEmpty, "default listFiles must skip .system_generated")
+        let withHidden = JSONLScanner.listFiles(root: brain, pathExtension: "jsonl", includeHiddenFiles: true)
+        XCTAssertEqual(withHidden.files.count, 1)
+        XCTAssertTrue(AgyAdapter.isTranscriptLog(withHidden.files[0].url))
+    }
+
+    func testCacheReadTokensUseDeltasNotCumulativeSum() throws {
+        let lines = [
+            tokenLine(step: 1, input: 10, output: 1, cache: 1000, model: "m"),
+            tokenLine(step: 3, input: 10, output: 1, cache: 2500, model: "m"),
+            tokenLine(step: 5, input: 10, output: 1, cache: 4000, model: "m"),
+        ]
+        let (brain, cache) = try writeBrain(lines: lines, metadataJSON: nil)
+        let adapter = AgyAdapter(brainRoots: [brain],
+                                 conversationMetadataURLs: [cache.appendingPathComponent("conversation_metadata.json")],
+                                 quotaFetcher: { nil })
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertEqual(result.events.map(\.tokens.cacheRead), [1000, 1500, 1500])
+        XCTAssertEqual(result.events.map(\.tokens.cacheRead).reduce(0, +), 4000)
+    }
+
+    func testIgnoresChunkTranscripts() throws {
+        let root = makeTempDir()
+        let brain = root.appendingPathComponent("brain")
+        let chunk = brain.appendingPathComponent(brainUUID)
+            .appendingPathComponent(".system_generated/logs/chunks/transcript/00000000.jsonl")
+        try FileManager.default.createDirectory(at: chunk.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try tokenLine(step: 1, input: 999, output: 1, model: nil).data(using: .utf8)!.write(to: chunk)
+        let adapter = AgyAdapter(brainRoots: [brain], conversationMetadataURLs: [], quotaFetcher: { nil })
+        let (result, _) = try adapter.refreshUsage(state: ScanState())
+        XCTAssertTrue(result.events.isEmpty)
+    }
+}
+
+// MARK: - fmtUSD(千分位金
 
 final class FmtUSDTests: XCTestCase {
     /// 千分位契約(R3):分隔符固定 ,/.,不隨 locale 漂移;decimals 參數化。

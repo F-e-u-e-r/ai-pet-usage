@@ -24,7 +24,7 @@ public struct CoreSettings: Codable, Sendable {
 
     // grok-code 預設啟用:未安裝 grok 時 adapter 回報 unavailable,
     // 由既有的 OnboardingCard 呈現「未偵測到」;已存檔的使用者設定不受預設值影響。
-    public init(enabledProviders: Set<String> = ["codex", "claude-code", "grok-code"],
+    public init(enabledProviders: Set<String> = ["codex", "claude-code", "grok-code", "cursor-ide"],
                 warnThresholdPercent: Double = 80,
                 dangerThresholdPercent: Double = 95,
                 staleAfterMinutes: Int = 30,

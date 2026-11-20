@@ -99,6 +99,11 @@ public struct UsageEvent: Codable, Hashable, Sendable, Identifiable {
         self.providerCostUSD = providerCostUSD
         self.speed = speed
     }
+
+    /// Legacy ledger rows used `agy` before the pricing namespace id `antigravity`.
+    public static func canonicalProviderId(_ providerId: String) -> String {
+        providerId == "agy" ? "antigravity" : providerId
+    }
 }
 
 // MARK: - Provider-reported rate limits (source events, not final truth)
@@ -257,10 +262,29 @@ public struct LimitWindowState: Codable, Sendable, Hashable {
     }
 }
 
+/// Per-model weekly limit from Claude Code statusline (`model_scoped` / Fable bucket).
+public struct ModelScopedLimitWindow: Codable, Sendable, Equatable, Identifiable {
+    public var displayName: String
+    public var usedPercent: Double
+    public var resetsAt: Date?
+    public var observedAt: Date
+
+    public var id: String { displayName }
+
+    public init(displayName: String, usedPercent: Double, resetsAt: Date?, observedAt: Date) {
+        self.displayName = displayName
+        self.usedPercent = min(100, max(0, usedPercent))
+        self.resetsAt = resetsAt
+        self.observedAt = observedAt
+    }
+}
+
 public struct ProviderLimitState: Codable, Sendable, Identifiable {
     public var providerId: String
     public var fiveHour: LimitWindowState
     public var weekly: LimitWindowState
+    /// Claude Code only: Fable / other model-scoped weekly windows from statusline.
+    public var modelScopedWeekly: [ModelScopedLimitWindow]?
     public var burnRateTokensPerHour: Double
     public var projectedExhaustionAt: Date?
     public var lastEventAt: Date?
@@ -272,6 +296,9 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
     /// 與 `fiveHour` / `weekly` 最終是官方值還是估算值無關 —— 直接由 persisted slot + 仲裁旗標決定。
     public var fiveHourOfficial: OfficialWindowStatus
     public var weeklyOfficial: OfficialWindowStatus
+    /// Ring / menu fill from **today's local tokens** when the source provides no usage-% limits
+    /// (Antigravity, Grok Code, etc.). Not a provider quota — scaled by `TokenActivityRing`.
+    public var todayActivityPercent: Double?
 
     public var id: String { providerId }
 
@@ -279,10 +306,12 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
                 burnRateTokensPerHour: Double = 0, projectedExhaustionAt: Date? = nil,
                 lastEventAt: Date? = nil, lastReadingAt: Date? = nil,
                 warning: WarningState = .ok, planType: String? = nil, lastSourceDescription: String? = nil,
-                fiveHourOfficial: OfficialWindowStatus = .absent, weeklyOfficial: OfficialWindowStatus = .absent) {
+                fiveHourOfficial: OfficialWindowStatus = .absent, weeklyOfficial: OfficialWindowStatus = .absent,
+                todayActivityPercent: Double? = nil, modelScopedWeekly: [ModelScopedLimitWindow]? = nil) {
         self.providerId = providerId
         self.fiveHour = fiveHour
         self.weekly = weekly
+        self.modelScopedWeekly = modelScopedWeekly
         self.burnRateTokensPerHour = burnRateTokensPerHour
         self.projectedExhaustionAt = projectedExhaustionAt
         self.lastEventAt = lastEventAt
@@ -292,6 +321,18 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
         self.lastSourceDescription = lastSourceDescription
         self.fiveHourOfficial = fiveHourOfficial
         self.weeklyOfficial = weeklyOfficial
+        self.todayActivityPercent = todayActivityPercent
+    }
+}
+
+/// Visual ring scale for providers without official usage-percent sources.
+public enum TokenActivityRing {
+    public static let fullScaleTokens: Double = 100_000
+    /// Providers without official quota files — pet ring uses today's local tokens.
+    public static let providersWithTokenOnlyMeters: Set<String> = ["grok-code", "cursor-ide", "opencode"]
+    public static func percent(todayTokens: Int) -> Double? {
+        guard todayTokens > 0 else { return nil }
+        return min(100, Double(todayTokens) / fullScaleTokens * 100)
     }
 }
 
@@ -580,14 +621,18 @@ public struct AdapterRefreshResult: Sendable {
     public var scannedFiles: Int
     public var parseErrors: Int
     public var completeness: ScanCompleteness
+    /// Multi-bucket official quota from `agy /usage` (three groups in the Antigravity UI).
+    public var antigravityQuota: AntigravityQuotaSnapshot?
 
     public init(events: [UsageEvent] = [], rateLimits: [RateLimitReading] = [],
-                scannedFiles: Int = 0, parseErrors: Int = 0, completeness: ScanCompleteness) {
+                scannedFiles: Int = 0, parseErrors: Int = 0, completeness: ScanCompleteness,
+                antigravityQuota: AntigravityQuotaSnapshot? = nil) {
         self.events = events
         self.rateLimits = rateLimits
         self.scannedFiles = scannedFiles
         self.parseErrors = parseErrors
         self.completeness = completeness
+        self.antigravityQuota = antigravityQuota
     }
 }
 
@@ -645,6 +690,10 @@ public enum DiagnosticSourceID: String, Codable, Sendable, CaseIterable {
     case claudeStatuslineOurHook
     case claudeStatuslineShared
     case grokSessions
+    /// Agy CLI brain transcripts under ~/.gemini/antigravity-cli/brain.
+    case agyBrain
+    /// Cursor IDE structured logs under ~/Library/Application Support/Cursor/logs.
+    case cursorStructuredLogs
     /// opencode 的 SQLite 資料庫(db + wal 視為同一來源;WAL 活躍不得誤判 stale)。
     case opencodeDb
 }

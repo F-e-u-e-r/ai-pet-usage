@@ -1,0 +1,142 @@
+import Foundation
+
+/// Splits official `agy /usage` into three chrome surfaces (menu badges, pet rings, menu panel).
+public enum AntigravityQuotaDisplay {
+    public static let geminiId = "antigravity-gemini"
+    public static let claudeGptId = "antigravity-claude-gpt"
+    public static let argonId = "antigravity-argon"
+
+    public static let categoryName = "Antigravity"
+
+    public static let quotaChromeOrder = [geminiId, claudeGptId, argonId]
+
+    public static func groupId(forGroupName name: String) -> String? {
+        switch name {
+        case "Gemini Models": return geminiId
+        case "Claude and GPT models": return claudeGptId
+        case "Gemini 4 Argon": return argonId
+        default: return nil
+        }
+    }
+
+    /// Full name (menu-bar badges, sorting, a11y).
+    public static func displayName(forGroupId id: String) -> String? {
+        switch id {
+        case geminiId: return "\(categoryName) · Gemini models"
+        case claudeGptId: return "\(categoryName) · Claude & GPT"
+        case argonId: return "\(categoryName) · Argon"
+        default: return nil
+        }
+    }
+
+    /// Short sub-meter label under the Antigravity category (settings, menu dropdown).
+    public static func meterLabel(forGroupId id: String) -> String? {
+        switch id {
+        case geminiId: return "Gemini models"
+        case claudeGptId: return "Claude & GPT"
+        case argonId: return "Gemini 4 Argon"
+        default: return nil
+        }
+    }
+
+    public static func sortKey(forGroupId id: String) -> String? {
+        switch id {
+        case geminiId: return "\(categoryName.lowercased()) · 1 gemini models"
+        case claudeGptId: return "\(categoryName.lowercased()) · 2 claude & gpt"
+        case argonId: return "\(categoryName.lowercased()) · 3 argon"
+        default: return nil
+        }
+    }
+
+    /// Dashboard / expand order (matches Antigravity Usage UI).
+    public static func orderedGroups(_ groups: [AntigravityQuotaGroup]) -> [AntigravityQuotaGroup] {
+        quotaChromeOrder.compactMap { pid in
+            groups.first { groupId(forGroupName: $0.name) == pid }
+        }
+    }
+
+    public static func shortCode(forGroupId id: String) -> String? {
+        switch id {
+        case geminiId: return "Gm"
+        case claudeGptId: return "3P"
+        case argonId: return "Ar"
+        default: return nil
+        }
+    }
+
+    public static func isQuotaChromeId(_ providerId: String) -> Bool {
+        providerId == geminiId || providerId == claudeGptId || providerId == argonId
+    }
+
+  /// One `ProviderLimitState` per Antigravity quota group (official used % + reset).
+    public static func syntheticLimitStates(from quota: AntigravityQuotaSnapshot,
+                                            base: ProviderLimitState?) -> [ProviderLimitState] {
+        orderedGroups(quota.groups).compactMap { group in
+            guard let pid = groupId(forGroupName: group.name) else { return nil }
+            let five = group.buckets.first { $0.windowMinutes == 300 }
+            let week = group.buckets.first { $0.windowMinutes == 10_080 }
+            return ProviderLimitState(
+                providerId: pid,
+                fiveHour: windowState(from: five, defaultMinutes: 300),
+                weekly: windowState(from: week, defaultMinutes: 10_080),
+                burnRateTokensPerHour: base?.burnRateTokensPerHour ?? 0,
+                lastEventAt: base?.lastEventAt,
+                lastReadingAt: quota.fetchedAt,
+                warning: .ok,
+                planType: base?.planType,
+                lastSourceDescription: "agy:/usage · \(group.name)",
+                fiveHourOfficial: five != nil ? .usable : .absent,
+                weeklyOfficial: week != nil ? .usable : .absent,
+                todayActivityPercent: nil)
+        }
+    }
+
+    /// Pet rings: at most one Antigravity arc (Gemini 5h primary) so Grok/Cursor token rings are not crowded out.
+    public static func collapseForPetRings(_ states: [ProviderLimitState]) -> [ProviderLimitState] {
+        var out: [ProviderLimitState] = []
+        var insertedAntigravity = false
+        for st in states {
+            if isQuotaChromeId(st.providerId) {
+                guard !insertedAntigravity else { continue }
+                if let gemini = states.first(where: { $0.providerId == geminiId }) {
+                    out.append(gemini)
+                } else if let any = states.first(where: { isQuotaChromeId($0.providerId) }) {
+                    out.append(any)
+                }
+                insertedAntigravity = true
+            } else {
+                out.append(st)
+            }
+        }
+        return out
+    }
+
+    /// Replace the single `antigravity` row with three quota rows when snapshot is present.
+    public static func expandLimitStates(_ states: [ProviderLimitState],
+                                         quota: AntigravityQuotaSnapshot?) -> [ProviderLimitState] {
+        var out: [ProviderLimitState] = []
+        for st in states {
+            if st.providerId == "antigravity", let quota, !quota.groups.isEmpty {
+                let synth = syntheticLimitStates(from: quota, base: st)
+                if !synth.isEmpty {
+                    out.append(contentsOf: synth)
+                    continue
+                }
+            }
+            out.append(st)
+        }
+        return out
+    }
+
+    private static func windowState(from bucket: AntigravityQuotaBucket?,
+                                    defaultMinutes: Int) -> LimitWindowState {
+        guard let bucket else {
+            return LimitWindowState(windowMinutes: defaultMinutes, confidence: .high, idle: false)
+        }
+        return LimitWindowState(usedPercent: bucket.usedPercent,
+                                resetAt: bucket.resetsAt,
+                                windowMinutes: bucket.windowMinutes,
+                                confidence: .high,
+                                idle: false)
+    }
+}

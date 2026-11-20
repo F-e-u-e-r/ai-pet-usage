@@ -84,7 +84,7 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
     }
 
     public func explainDataSources() -> String {
-        "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times) when a statusline hook saves it locally, and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never extracted, retained, or emitted."
+        "Reads Claude Code session logs (*.jsonl) under ~/.claude/projects — only per-message token counts, model IDs, project paths, and timestamps. Also reads Claude Code's own statusline payload (rate_limits: official 5h/weekly used percent + reset times; optional model_scoped weekly windows such as Fable) when a statusline hook saves it locally, and the subscription tier label (two keys narrowly decoded from ~/.claude.json; nothing else in that file is parsed). Prompts and message contents are never extracted, retained, or emitted."
     }
 
     public func explainRequiredPermissions() -> String {
@@ -202,6 +202,85 @@ public struct ClaudeCodeAdapter: ProviderAdapter {
                                              planType: nil, sourcePath: s.path))
         }
         return readings
+    }
+
+    // MARK: - Model-scoped weekly limits (e.g. Fable)
+
+  /// Reads `model_scoped` (and legacy `seven_day_overage_included` mapped to Fable) from statusline landing files.
+    public static func readModelScopedLimits(from urls: [URL]) -> [ModelScopedLimitWindow] {
+        struct Candidate {
+            var items: [ModelScopedLimitWindow]
+            var observedAt: Date
+        }
+        var best: Candidate?
+        for url in urls {
+            guard let data = try? Data(contentsOf: url),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject else { continue }
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
+                .flatMap { $0 } ?? Date()
+            let captured = (obj["captured_at"] as? String).flatMap { ISO8601.parse($0) }
+            let observedAt = captured ?? mtime
+            let items = parseModelScopedPayload(obj, observedAt: observedAt)
+            guard !items.isEmpty else { continue }
+            if best.map({ observedAt > $0.observedAt }) ?? true {
+                best = Candidate(items: items, observedAt: observedAt)
+            }
+        }
+        return best?.items ?? []
+    }
+
+    private static func parseModelScopedPayload(_ obj: JSONObject, observedAt: Date) -> [ModelScopedLimitWindow] {
+        var out: [ModelScopedLimitWindow] = []
+        var seen = Set<String>()
+
+        func add(name: String, percent: Double, resetsAt: Date?) {
+            let key = name.lowercased()
+            guard !key.isEmpty, !seen.contains(key) else { return }
+            seen.insert(key)
+            out.append(ModelScopedLimitWindow(displayName: name, usedPercent: percent, resetsAt: resetsAt,
+                                            observedAt: observedAt))
+        }
+
+        func ingestScopedList(_ scoped: [Any]) {
+            for case let item as [String: Any] in scoped {
+                guard let name = (item["display_name"] as? String) ?? (item["displayName"] as? String),
+                      !name.isEmpty else { continue }
+                guard let percent = scopedPercent(item) else { continue }
+                let resets = resetsAt(from: item)
+                add(name: name, percent: percent, resetsAt: resets)
+            }
+        }
+        if let scoped = obj["model_scoped"] as? [Any] {
+            ingestScopedList(scoped)
+        }
+        if let scoped = obj.obj("rate_limits")?["model_scoped"] as? [Any] {
+            ingestScopedList(scoped)
+        }
+
+        if let overage = obj.obj("rate_limits")?.obj("seven_day_overage_included"),
+           let percent = scopedPercent(overage) {
+            let resets = resetsAt(from: overage)
+            if !seen.contains("fable") {
+                add(name: "Fable", percent: percent, resetsAt: resets)
+            }
+        }
+
+        return out
+    }
+
+    private static func scopedPercent(_ dict: [String: Any]) -> Double? {
+        if let p = dict.double("used_percentage") ?? dict.double("used_percent") { return p }
+        guard let util = dict["utilization"] as? Double ?? (dict["utilization"] as? Int).map(Double.init) else {
+            return nil
+        }
+        if dict["used_percentage"] != nil || dict["used_percent"] != nil { return nil }
+        return abs(util) <= 1.0 ? util * 100 : util
+    }
+
+    private static func resetsAt(from dict: [String: Any]) -> Date? {
+        if let unix = dict.double("resets_at") { return Date(timeIntervalSince1970: unix) }
+        if let s = dict["resets_at"] as? String, let d = ISO8601.parse(s) { return d }
+        return nil
     }
 
     // MARK: - 訂閱方案標籤(窄解碼;隱私邊界見 docs/DATA_SOURCES.md)
