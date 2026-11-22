@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 /// Optional user-maintained JWT for Cursor dashboard API — **no Keychain in this app**.
-/// Typical workflow: user runs `Scripts/export-cursor-dashboard-bearer.sh` (their choice) or pastes a token once.
+/// User pastes a dashboard JWT into the bearer file (or sets `CURSOR_ACCESS_TOKEN`).
 public enum CursorBearerFile {
     public static let defaultFileName = "cursor-dashboard-bearer.txt"
     private static let maxBytes = 8192

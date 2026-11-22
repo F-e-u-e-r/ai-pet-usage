@@ -90,7 +90,7 @@ final class CursorQuotaChecker {
             provenanceNote: stale.note,
             recoveryAction: HealthDisplay.recovery(
                 for: health, presence: presence,
-                cli: "Run Scripts/export-cursor-dashboard-bearer.sh (or set a bearer file in Settings) — app does not use Keychain"))
+                cli: "Paste a dashboard JWT into the bearer file (Settings path or default), or set CURSOR_ACCESS_TOKEN"))
     }
 
     private func fetchNow(claimed: Int? = nil) async {

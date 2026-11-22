@@ -621,9 +621,9 @@ struct ProviderSettings: View {
                         Text("""
                         Local token totals come from Cursor structured logs (no network). Plan usage \
                         calls https://api2.cursor.sh about every 15 minutes when the toggle above is on. \
-                        **AI Pet Usage never uses Keychain** — put a JWT in a file (default \
-                        ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt) via \
-                        `Scripts/export-cursor-dashboard-bearer.sh`, then Refresh. Two meters match Cursor: \
+                        **AI Pet Usage never uses Keychain** — paste a dashboard JWT into the bearer file \
+                        (default ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt) \
+                        or set `CURSOR_ACCESS_TOKEN`, then Refresh. Two meters match Cursor: \
                         **Cursor models** and **Other models**.
                         """)
                             .font(.caption).foregroundStyle(.secondary)

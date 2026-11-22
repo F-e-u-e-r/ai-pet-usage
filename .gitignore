@@ -52,6 +52,10 @@ id_rsa.*
 id_ed25519
 id_ed25519.*
 
+# Pre-commit / review gate artifacts (local only)
+checks/.artifacts/
+00-BRIEF.md
+
 # Generated local reports / logs
 *.log
 *.trace
