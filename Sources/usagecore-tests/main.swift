@@ -1338,4 +1338,18 @@ runSuite("ReportPricingDisplayTests", [
     ("testOverlappingPrefixDisplayOrderIndependent_longPrefixFirst", reportPricingDisplay.testOverlappingPrefixDisplayOrderIndependent_longPrefixFirst),
 ])
 
+let widgetSnapshot = WidgetSnapshotTests()
+runSuite("WidgetSnapshotTests", [
+    ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
+    ("testBuilderIgnoresNonFinitePercents", widgetSnapshot.testBuilderIgnoresNonFinitePercents),
+    ("testUnknownProviderEmptyNameFallsBackToId", widgetSnapshot.testUnknownProviderEmptyNameFallsBackToId),
+    ("testWidgetSnapshotDayCheck", widgetSnapshot.testWidgetSnapshotDayCheck),
+    ("testGrokCopiesBothWindows", widgetSnapshot.testGrokCopiesBothWindows),
+    ("testDuplicateProviderStatesKeepFirstRowBeforeCap", widgetSnapshot.testDuplicateProviderStatesKeepFirstRowBeforeCap),
+    ("testPercentMatrixClampsAndRounds", widgetSnapshot.testPercentMatrixClampsAndRounds),
+    ("testProviderOrderAndRowCap", widgetSnapshot.testProviderOrderAndRowCap),
+    ("testCodableRoundTrip", widgetSnapshot.testCodableRoundTrip),
+    ("testBuilderSanitizesNonFiniteTodayCost", widgetSnapshot.testBuilderSanitizesNonFiniteTodayCost),
+])
+
 finishTestRun()
