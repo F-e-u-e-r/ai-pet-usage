@@ -620,6 +620,14 @@ struct ProviderSettings: View {
                                     .foregroundStyle(.orange)
                                 Button("Allow network access…") { showCursorPlanConsent = true }
                                     .font(.caption)
+                            } else if model.cursorPlanQuotaActive {
+                                Label("Official plan % from Cursor — live from api2.cursor.sh (about every 15 minutes and on Refresh).", systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if model.settings.core.enabledProviders.contains("cursor-ide") {
+                                Label("Plan usage % is off — menu bar and Today may show local token activity only, not your Cursor subscription %. Those numbers can look misleading (often high or unlike the dashboard). Turn on plan % and Allow for real plan meters.", systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
                         }
                         .alert("Enable Cursor plan usage?", isPresented: $showCursorPlanConsent) {
