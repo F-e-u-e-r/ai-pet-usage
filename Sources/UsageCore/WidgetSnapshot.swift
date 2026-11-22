@@ -37,6 +37,22 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
         creditRows: []
     )
 
+    /// Xcode / WidgetKit canvas placeholder (must live on the type — stored statics are illegal in extensions).
+    public static let preview = WidgetSnapshot(
+        generatedAt: Date(),
+        todayTokens: 128_400,
+        todayCostUSD: 2.14,
+        todayCostIsEstimated: true,
+        rows: [
+            WidgetSnapshotRow(providerId: "codex", shortName: "Codex", code: "CX", dotColor: 0x3B82F6,
+                              fiveHourPercent: 42, weeklyPercent: 61, idle: false),
+            WidgetSnapshotRow(providerId: "grok-code", shortName: "Grok", code: "GK", dotColor: 0x2E3138,
+                              fiveHourPercent: nil, weeklyPercent: 18, idle: false),
+            WidgetSnapshotRow(providerId: "opencode", shortName: "OpenCode", code: "OC", dotColor: 0xCA8A04,
+                              fiveHourPercent: nil, weeklyPercent: 33, idle: false),
+        ]
+    )
+
     private enum CodingKeys: String, CodingKey {
         case generatedAt, todayTokens, todayCostUSD, todayCostIsEstimated, rows, creditRows
     }

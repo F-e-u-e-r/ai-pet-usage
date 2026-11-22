@@ -80,7 +80,11 @@ enum SharedMirrorGate {
         let tmp = ".\(fileName).\(ProcessInfo.processInfo.globallyUniqueString).tmp"
         let wfd = openat(dirFD, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard wfd >= 0 else { return false }
-        _ = fchmod(wfd, 0o600)
+        guard fchmod(wfd, 0o600) == 0 else {
+            close(wfd)
+            _ = unlinkat(dirFD, tmp, 0)
+            return false
+        }
         guard InstallHook.clearExtendedACL(wfd) else {
             close(wfd)
             _ = unlinkat(dirFD, tmp, 0)
@@ -110,11 +114,9 @@ enum SharedMirrorGate {
             return false
         }
         let outFD = openat(dirFD, fileName, O_RDONLY | O_NOFOLLOW)
-        if outFD >= 0 {
-            _ = fchmod(outFD, 0o600)
-            _ = InstallHook.clearExtendedACL(outFD)
-            close(outFD)
-        }
+        guard outFD >= 0 else { return false }
+        defer { close(outFD) }
+        guard fchmod(outFD, 0o600) == 0, InstallHook.clearExtendedACL(outFD) else { return false }
         return true
     }
 
