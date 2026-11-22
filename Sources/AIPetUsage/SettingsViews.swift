@@ -536,6 +536,20 @@ struct ProviderSettings: View {
     @State private var infos: [(providerId: String, displayName: String, availability: ProviderAvailability, dataSources: String, permissions: String)] = []
     @State private var showCursorPlanConsent = false
 
+    /// Consent copy only inspects bearer *files* — no env, state DB, or network until the user allows.
+    private var cursorPlanConsentMessage: String {
+        let paths = CursorBearerFile.discoverReadableFilePaths(
+            explicitPath: model.settings.cursorQuotaBearerFilePath)
+        let defaultPath = CursorBearerFile.defaultBearerFilePath()
+        let detect = paths.isEmpty
+            ? "No bearer file found yet. After you allow, the app can also use CURSOR_ACCESS_TOKEN or read-only Cursor state (never Keychain). Paste a JWT into:\n\(defaultPath)"
+            : "Found bearer file:\n\(paths[0])\nPlan usage loads immediately after you allow."
+        return """
+        Uses https://api2.cursor.sh for official Cursor models and Other models percentages. \
+        Nothing is sent until you tap Allow. \(detect)
+        """
+    }
+
     var body: some View {
         Form {
             Section {
@@ -601,11 +615,7 @@ struct ProviderSettings: View {
                             }
                             Button("Not Now", role: .cancel) {}
                         } message: {
-                            Text("""
-                            This sends your bearer JWT (from your file only — the app never uses Keychain) to \
-                            https://api2.cursor.sh for official **Cursor models** / **Other models** percentages. \
-                            Nothing else is uploaded.
-                            """)
+                            Text(cursorPlanConsentMessage)
                         }
                         TextField("Bearer file (optional)", text: Binding(
                             get: { model.settings.cursorQuotaBearerFilePath ?? "" },
@@ -623,7 +633,8 @@ struct ProviderSettings: View {
                         calls https://api2.cursor.sh about every 15 minutes when the toggle above is on. \
                         **AI Pet Usage never uses Keychain** — paste a dashboard JWT into the bearer file \
                         (default ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt) \
-                        or set `CURSOR_ACCESS_TOKEN`, then Refresh. Two meters match Cursor: \
+                        or set `CURSOR_ACCESS_TOKEN`. After you **Allow** plan usage, the app auto-detects \
+                        those sources and fetches immediately — no extra step. Two meters match Cursor: \
                         **Cursor models** and **Other models**.
                         """)
                             .font(.caption).foregroundStyle(.secondary)

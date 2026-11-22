@@ -14,6 +14,18 @@ final class CursorBearerFileTests: XCTestCase {
         XCTAssertEqual(CursorSessionToken.loadAccessToken(bearerFilePath: path), "eyJ-test-bearer")
     }
 
+    func testDiscoverReadableFilePaths() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cursor-discover-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("token.txt").path
+        try Data("eyJ-discover".utf8).write(to: URL(fileURLWithPath: path))
+        let found = CursorBearerFile.discoverReadableFilePaths(explicitPath: path)
+        XCTAssertEqual(found, [path])
+        XCTAssertTrue(CursorBearerFile.discoverReadableFilePaths(explicitPath: "/no/such/file").isEmpty)
+    }
+
     func testRejectsSealedCiphertextInFile() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("cursor-bearer-\(UUID().uuidString)", isDirectory: true)

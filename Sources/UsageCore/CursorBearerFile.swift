@@ -7,6 +7,27 @@ public enum CursorBearerFile {
     public static let defaultFileName = "cursor-dashboard-bearer.txt"
     private static let maxBytes = 8192
 
+    /// Bearer **files** with a readable JWT (same rules as `loadAccessToken`), in resolution order — no env var / state DB.
+    public static func discoverReadableFilePaths(explicitPath: String?) -> [String] {
+        var paths: [String] = []
+        func add(_ path: String?) {
+            guard let path, !paths.contains(path), readToken(at: path) != nil else { return }
+            paths.append(path)
+        }
+        if let explicit = explicitPath {
+            let trimmed = explicit.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, let path = normalizedPath(trimmed) { add(path) }
+        }
+        if let env = ProcessInfo.processInfo.environment["CURSOR_DASHBOARD_BEARER_FILE"],
+           let path = normalizedPath(env) { add(path) }
+        add(AppPaths.dataDirectory().appendingPathComponent(defaultFileName).path)
+        return paths
+    }
+
+    public static func defaultBearerFilePath() -> String {
+        AppPaths.dataDirectory().appendingPathComponent(defaultFileName).path
+    }
+
     public static func loadAccessToken(explicitPath: String?) -> String? {
         if let raw = explicitPath {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

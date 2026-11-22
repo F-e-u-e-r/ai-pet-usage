@@ -278,6 +278,10 @@ final class AppModel {
                 $0.cursorQuotaEnabled = false
             }
         }
+        guard settings.cursorQuotaEnabled, settings.cursorPlanQuotaNetworkConsentGiven,
+              settings.core.enabledProviders.contains("cursor-ide"), cursorPlanQuotaActive else { return }
+        cursorQuota.refreshNow()
+        Task { await self.refreshSourceStatuses() }
     }
 
     func userRefresh() async {
