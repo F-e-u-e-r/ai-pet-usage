@@ -94,6 +94,9 @@ final class AppModel {
     func start() {
         // 持久化的 Appearance 偏好在任何視窗/面板建立前先套到 NSApp(整 app 一體繼承)。
         applyAppearancePreference()
+        applyFontStylePreference()
+        applyTextColorPreference()
+        bumpMenuBarChromePresentation()
         // EngineV2 flag 必須在 petPanel 建立前映射(PetPanelController.show() 據此掛 driver)。
         EngineV2.isEnabled = settings.petEngineV2Enabled
         if LaunchAtLogin.available {
@@ -164,6 +167,44 @@ final class AppModel {
         ) { [weak self] _ in
             Task { @MainActor in self?.appearanceTick += 1 }
         }
+    }
+
+    /// `fontStyleTick` 變更時儀表板/設定會重繪以套用 `Theme.FontScale`。
+    private(set) var fontStyleTick = 0
+    /// 文字顏色代次:只讓儀表板重建;設定頁不換 identity,拖 ColorPicker 時才不會被打斷。
+    private(set) var textColorTick = 0
+    /// Menu bar badge 烤圖代次(墨色 / label 設定);`MenuBarExtra` label 需顯式讀取才會重烤。
+    private(set) var menuBarChromeTick = 0
+
+    private func applyFontStylePreference() {
+        Theme.applyFontStyle(design: settings.fontDesign, size: settings.fontSize)
+        fontStyleTick &+= 1
+    }
+
+    private func applyTextColorPreference() {
+        Theme.applyTextColors(preference: settings.dashboardTextColor,
+                              primaryHex: settings.dashboardTextPrimaryHex,
+                              secondaryHex: settings.dashboardTextSecondaryHex)
+        textColorTick &+= 1
+    }
+
+    /// Badge 墨色 / 標籤樣式變更:強制選單列 label 重烤(`MenuBarExtra` 不會只因 `settings` 變就重繪)。
+    func bumpMenuBarChromePresentation() {
+        menuBarChromeTick &+= 1
+        appearanceTick &+= 1
+    }
+
+    func resolveMenuBarBadgeLabel(providerId: String, displayName: String?) -> String {
+        let brand = ProviderBrands.brand(for: providerId, displayName: displayName)
+        let styleDefault: String
+        switch settings.menuBarBadgeLabelStyle {
+        case .code: styleDefault = brand.code
+        case .short: styleDefault = brand.shortName
+        case .full: styleDefault = String(brand.displayName.prefix(14))
+        }
+        return MenuBadgeLabel.resolve(
+            override: settings.chromeBadgeLabelOverrides?[providerId],
+            default: styleDefault)
     }
 
     /// 把 app 外觀偏好套到 NSApp —— 整 app 唯一一處指派,Dashboard / Settings / A1 hover panel /
@@ -394,11 +435,33 @@ final class AppModel {
         let oldORCredits = settings.openRouterCreditsEnabled
         let oldGrokQuota = settings.grokQuotaEnabled
         let oldAppearance = settings.appearance
+        let oldFontDesign = settings.fontDesign
+        let oldFontSize = settings.fontSize
+        let oldTextColor = settings.dashboardTextColor
+        let oldTextPrimary = settings.dashboardTextPrimaryHex
+        let oldTextSecondary = settings.dashboardTextSecondaryHex
+        let oldBadgeInk = settings.menuBarBadgeInk
+        let oldBadgeInkHex = settings.menuBarBadgeInkHex
+        let oldBadgeLabelStyle = settings.menuBarBadgeLabelStyle
+        let oldBadgeOverrides = settings.chromeBadgeLabelOverrides
         settingsStore.update(mutate)
         settings = settingsStore.settings
         // Appearance 偏好變更 → 與啟動套用同一條 apply/refresh 路徑(NSApp.appearance + appearanceTick)。
         if oldAppearance != settings.appearance {
             applyAppearancePreference()
+        }
+        if oldFontDesign != settings.fontDesign || oldFontSize != settings.fontSize {
+            applyFontStylePreference()
+        }
+        if oldTextColor != settings.dashboardTextColor
+            || oldTextPrimary != settings.dashboardTextPrimaryHex
+            || oldTextSecondary != settings.dashboardTextSecondaryHex {
+            applyTextColorPreference()
+        }
+        if oldBadgeInk != settings.menuBarBadgeInk || oldBadgeInkHex != settings.menuBarBadgeInkHex
+            || oldBadgeLabelStyle != settings.menuBarBadgeLabelStyle
+            || oldBadgeOverrides != settings.chromeBadgeLabelOverrides {
+            bumpMenuBarChromePresentation()
         }
         // OpenRouter credits 開關:啟用即抓一次 + 開始 15 分鐘輪詢;停用即取消並清空狀態。
         if oldGrokQuota != settings.grokQuotaEnabled {
@@ -626,11 +689,13 @@ final class AppModel {
     var menuBarBadges: [MenuBadge] {
         guard settings.menuBarDisplayMode != .petOnly else { return [] }
         let states = dashboard.limitStates.map { st in
-            (id: st.providerId,
-             displayName: dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName,
-             fiveHour: st.fiveHour.usedPercent,
-             weekly: st.weekly.usedPercent,
-             idle: st.fiveHour.idle)
+            let displayName = dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName
+            return (id: st.providerId,
+                    displayName: displayName,
+                    badgeLabel: resolveMenuBarBadgeLabel(providerId: st.providerId, displayName: displayName),
+                    fiveHour: st.fiveHour.usedPercent,
+                    weekly: st.weekly.usedPercent,
+                    idle: st.fiveHour.idle)
         }
         return MenuBadgeBuilder.badges(from: states,
                                        warn: settings.core.warnThresholdPercent,
@@ -675,10 +740,10 @@ final class AppModel {
     /// 純文字後備(NSImage 烤製失敗時);不再夾帶心情/警示 emoji(spec P0)。
     var menuBarTitle: String {
         let parts = menuBarBadges.map { badge -> String in
-            if badge.idle { return "\(badge.code) idle" }
+            if badge.idle { return "\(badge.badgeLabel) idle" }
             let a = badge.fiveHour.map { "\($0.percent)%" } ?? "-"
             let b = badge.weekly.map { "\($0.percent)%" } ?? "-"
-            return "\(badge.code)\(a)/\(b)"
+            return "\(badge.badgeLabel)\(a)/\(b)"
         }
         let usage = parts.isEmpty ? (menuBarShowsPlaceholder ? "—" : "") : parts.joined(separator: " ")
         return usage.isEmpty ? menuBarPetEmoji : "\(menuBarPetEmoji) \(usage)"

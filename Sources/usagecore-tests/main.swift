@@ -1295,6 +1295,9 @@ runSuite("AppearanceTests", [
     ("testRawValuesDisplayNamesAndCaseOrder", appearance.testRawValuesDisplayNamesAndCaseOrder),
     ("testPreferenceToAppearanceNameMapping", appearance.testPreferenceToAppearanceNameMapping),
     ("testBadgeInkFollowsInjectedSystemAppearanceOnly", appearance.testBadgeInkFollowsInjectedSystemAppearanceOnly),
+    ("testOutOfRangeRGBHexValuesDecodeAsNilWithoutPoisoningSibling", appearance.testOutOfRangeRGBHexValuesDecodeAsNilWithoutPoisoningSibling),
+    ("testTranslucentSeedColorsFlattenOverBackground", appearance.testTranslucentSeedColorsFlattenOverBackground),
+    ("testBadgeLabelOverrideCollapsesLineBreaksAndTabsBeforeCap", appearance.testBadgeLabelOverrideCollapsesLineBreaksAndTabsBeforeCap),
     ("testSystemAppearanceProviderResolvesThroughInjectedReader", appearance.testSystemAppearanceProviderResolvesThroughInjectedReader),
     ("testLiveProviderReadsGlobalDomainNotProcessDefaults", appearance.testLiveProviderReadsGlobalDomainNotProcessDefaults),
 ])
@@ -1302,12 +1305,18 @@ runSuite("AppearanceTests", [
 let appearanceWiring = AppearanceWiringGuardTests()
 runSuite("AppearanceWiringGuardTests", [
     ("testAppSettingsUsesTolerantAppearanceDecode", appearanceWiring.testAppSettingsUsesTolerantAppearanceDecode),
+    ("testAppSettingsUsesRangeCheckedRGBHexDecode", appearanceWiring.testAppSettingsUsesRangeCheckedRGBHexDecode),
     ("testCoreSettingsAndCLIHaveNoAppearanceCoupling", appearanceWiring.testCoreSettingsAndCLIHaveNoAppearanceCoupling),
     ("testMenuBarBadgeRendererIsPureAndTakesInjectedSystemAppearance", appearanceWiring.testMenuBarBadgeRendererIsPureAndTakesInjectedSystemAppearance),
     ("testAppModelRoutesLaunchAndManualChangeThroughOneApplyPath", appearanceWiring.testAppModelRoutesLaunchAndManualChangeThroughOneApplyPath),
     ("testAppHasSingleAppLevelAppearanceAssignmentAndNoPerViewBranching", appearanceWiring.testAppHasSingleAppLevelAppearanceAssignmentAndNoPerViewBranching),
     ("testMenuBarLabelInjectsSystemAppearanceIntoRenderer", appearanceWiring.testMenuBarLabelInjectsSystemAppearanceIntoRenderer),
     ("testGeneralSettingsHasSegmentedAppearancePicker", appearanceWiring.testGeneralSettingsHasSegmentedAppearancePicker),
+    ("testCustomDashboardTextColorSeedsBothHexesBeforeSwitch", appearanceWiring.testCustomDashboardTextColorSeedsBothHexesBeforeSwitch),
+    ("testDefaultFontScaleMatchesMacOSTextStyles", appearanceWiring.testDefaultFontScaleMatchesMacOSTextStyles),
+    ("testSeedHexFlattensAlphaUnderAppAppearance", appearanceWiring.testSeedHexFlattensAlphaUnderAppAppearance),
+    ("testBadgeLabelFieldKeepsTypingWhitespace", appearanceWiring.testBadgeLabelFieldKeepsTypingWhitespace),
+    ("testTextColorChangeDoesNotReplaceSettingsIdentity", appearanceWiring.testTextColorChangeDoesNotReplaceSettingsIdentity),
 ])
 
 let codexSourceB = CodexSourceBTests()
