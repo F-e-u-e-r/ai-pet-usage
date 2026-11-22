@@ -102,7 +102,7 @@ public enum GrokKeyParser {
 
 /// 額度快照(memory-only;絕不持久化 —— boundary #73 回應資料分類)。
 public struct GrokQuotaSnapshot: Sendable, Equatable {
-    public var usedPercent: Double            // 顯示值(≤100;provider-reported)
+    public var usedPercent: Double            // 顯示值(≤100;多數為 provider-reported;缺雙欄位時可為 imputed 0% 見 parseBillingConfig)
     /// raw 值 >100 時為 true(owner 裁示:clamp 只是顯示強健性,**不得把 upstream
     /// anomaly 靜默變成「正常 100%」**—— UI 據此標示,F17 可記 dataQuality)。
     public var reportedPercentOverflow: Bool
@@ -126,7 +126,7 @@ public struct GrokQuotaSnapshot: Sendable, Equatable {
 /// 抓取結果(封閉;UI 文案與 F17 事件都由此映射,原始錯誤內文永不外洩)。
 public enum GrokQuotaOutcome: Sendable, Equatable {
     case success(GrokQuotaSnapshot)
-    case noUsageData              // 有效 200 但無可用 usage %(欄位實測時有時無)→ 軟降級,非 kill、不造數
+    case noUsageData              // 有效 200 但無可用 %(且不符 imputed-0% 週期條件)→ 軟降級,非 kill
     case noKey                    // 檔案不存在(未登入)→ presence .unavailable(notLoggedIn)
     case credentialUnreadable     // 檔在但讀不了/壞 → transientError;絕不誘導重登(契約 §4)
     case keyRejected              // 401 → health .authExpired(重登提示;§4 重試門檻)
@@ -184,7 +184,7 @@ public enum GrokQuotaEngine {
     /// - root 含 `error`(非 null)→ .badReply(明確 error-envelope,無論 config 是否在)
     /// - 無 `config` 物件 → .badReply(無法辨識/error;transient,不清 401 門檻、不 kill)
     /// - 有 `config` 且可解析 `productUsage[].usagePercent` 或 `creditUsagePercent` → `.success`
-    /// - 有 `config` 但無可用 % → `.noUsageData`
+    /// - 有 `config` 但無可用 % → `.noUsageData`(開放 WEEKLY currentPeriod 且雙欄位皆缺時除外 → imputed 0%)
     /// - JSON 壞 → invalidBody(×3 才 kill,狀態機管);未知欄位 = additive → 容忍。
     public static func parseResponse(statusCode: Int, data: Data, now: Date) -> GrokQuotaOutcome {
         switch statusCode {
@@ -219,8 +219,23 @@ public enum GrokQuotaEngine {
     /// 解析 `GET /v1/billing?format=credits` 的 `config` 窄白名單。
     /// 優先 `productUsage`(GrokBuild 的 `usagePercent`),否則 `creditUsagePercent`;
     /// 兩者在實測上對齊,皆來自同一 billing envelope(provider-reported)。
+    /// 若兩欄位皆缺(key absent)且 `currentPeriod` 為 WEEKLY 且其 `end` > now(start 可在未來;official CLI 1.0.92 `/usage` 面板顯示 0%,
+    /// 2026-11-21 實測)→ imputed `usedPercent: 0`,與任一 `.success` 同樣覆寫 snapshot。
     static func parseBillingConfig(_ config: [String: Any], now: Date) -> GrokQuotaOutcome {
-        guard let raw = extractUsagePercent(from: config) else { return .noUsageData }
+        guard let raw = extractUsagePercent(from: config) else {
+            guard config["creditUsagePercent"] == nil,
+                  config["productUsage"] == nil,
+                  let period = config["currentPeriod"] as? [String: Any],
+                  period["type"] as? String == "USAGE_PERIOD_TYPE_WEEKLY",
+                  let currentPeriodEnd = isoDate(period["end"]), currentPeriodEnd > now else {
+                return .noUsageData
+            }
+            let (start, end) = extractPeriod(from: config)
+            let plan = extractPlanName(from: config)
+            return .success(GrokQuotaSnapshot(usedPercent: 0, reportedPercentOverflow: false,
+                                            periodStart: start, periodEnd: end,
+                                            planName: plan, fetchedAt: now))
+        }
         let overflow = raw > 100
         let display = min(max(raw, 0), 100)
         let (start, end) = extractPeriod(from: config)
