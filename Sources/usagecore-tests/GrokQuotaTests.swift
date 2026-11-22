@@ -8,23 +8,147 @@ final class GrokQuotaTests: XCTestCase {
 
     private func body(_ json: String) -> Data { json.data(using: .utf8)! }
 
-    // MARK: decoder(F3 hotfix 分類;Track A:creditUsagePercent 已撤除為 weekly-quota source)
+    // MARK: decoder(billing config → snapshot)
 
-    func testValidEnvelopeNeverRendersCreditUsagePercentAsQuota() {
-        // Track A 核心 + owner 要求的 regression:creditUsagePercent(Track B 已證 ≠ Grok weekly quota)
-        // 無論何值/在否,一律 → .noUsageData(honestly unavailable),**絕不** render 成 Grok quota N%。
-        for pct in ["100.0", "41.5", "0", "1", "true", "\"41%\"", "-3", "null"] {
+    func testBillingConfigParsesProductUsageAndFallback() {
+        let end = "2026-11-21T15:57:32.752488+00:00"
+        let start = "2026-11-14T15:57:32.752488+00:00"
+        let liveShape = #"""
+        {"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(start)", "end": "\#(end)"},
+        "creditUsagePercent": 30.0, "productUsage": [{"product": "GrokBuild", "usagePercent": 30.0}],
+        "billingPeriodStart": "\#(start)", "billingPeriodEnd": "\#(end)"}}
+        """#
+        guard case .success(let snap) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(liveShape), now: now)
+        else { return XCTAssertTrue(false, "live billing shape → success") }
+        XCTAssertEqual(snap.usedPercent, 30)
+        XCTAssertEqual(snap.planName, "GrokBuild")
+        XCTAssertNotNil(snap.periodEnd)
+        XCTAssertFalse(snap.reportedPercentOverflow)
+
+        guard case .success(let fallback) = GrokQuotaEngine.parseResponse(statusCode: 200,
+            data: body(#"{"config": {"creditUsagePercent": 41.5}}"#), now: now) else {
+            return XCTAssertTrue(false, "numeric creditUsagePercent → success")
+        }
+        XCTAssertEqual(fallback.usedPercent, 41.5)
+
+        // 壞型別不造數
+        for pct in ["true", "\"41%\"", "null"] {
             XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
                 data: body("{\"config\": {\"creditUsagePercent\": \(pct)}}"), now: now), .noUsageData,
-                "creditUsagePercent=\(pct)(有效 config envelope)→ .noUsageData,不得 render 為 quota")
+                "creditUsagePercent=\(pct) → noUsageData")
         }
-        // 缺 creditUsagePercent 的真實 200(currentPeriod/billing 欄在)→ 一樣 .noUsageData(非 kill)
+
         let realAbsent = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-08-06T13:58:47.849415+00:00", "end": "2026-08-13T13:58:47.849415+00:00"}, "onDemandCap": {"val": 0}, "prepaidBalance": {"val": 0}, "billingPeriodEnd": "2026-08-13T13:58:47.849415+00:00"}}"#
-        XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(realAbsent), now: now), .noUsageData)
-        // additive:未知頂層/巢狀欄位不改變分類
+        guard case .success(let absentSnap) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(realAbsent), now: now)
+        else { return XCTAssertTrue(false, "realAbsent → imputed 0% success") }
+        XCTAssertEqual(absentSnap.usedPercent, 0)
+        XCTAssertFalse(absentSnap.reportedPercentOverflow)
+        XCTAssertNil(absentSnap.planName)
+        XCTAssertEqual(absentSnap.periodStart?.timeIntervalSince1970 ?? -1,
+                       date("2026-08-06T13:58:47.849415Z").timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(absentSnap.periodEnd?.timeIntervalSince1970 ?? -1,
+                       date("2026-08-13T13:58:47.849415Z").timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(absentSnap.fetchedAt, now)
+
+        guard case .success(let hi) = GrokQuotaEngine.parseResponse(statusCode: 200,
+            data: body(#"{"config": {"creditUsagePercent": 130.0}}"#), now: now) else {
+            return XCTAssertTrue(false, "overflow → success with flag")
+        }
+        XCTAssertEqual(hi.usedPercent, 100)
+        XCTAssertTrue(hi.reportedPercentOverflow)
+    }
+
+    func testImputedZeroAbsentBothUsageFieldsInOpenWeeklyPeriod() {
+        // A1: live absent payload (now before currentPeriod.start allowed)
+        let liveNow = date("2026-11-21T14:59:00Z")
+        let liveAbsent = #"""
+        {"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-11-21T15:57:32.752488+00:00","end":"2026-11-28T15:57:32.752488+00:00"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0},"billingPeriodStart":"2026-11-21T15:57:32.752488+00:00","billingPeriodEnd":"2026-11-28T15:57:32.752488+00:00"},"subscription_tier":"SuperGrok"}
+        """#
+        guard case .success(let live) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(liveAbsent), now: liveNow)
+        else { return XCTAssertTrue(false, "A1 live absent → success") }
+        XCTAssertEqual(live.usedPercent, 0)
+        XCTAssertFalse(live.reportedPercentOverflow)
+        XCTAssertNil(live.planName)
+        XCTAssertEqual(live.periodStart?.timeIntervalSince1970 ?? -1,
+                       date("2026-11-21T15:57:32.752488Z").timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(live.periodEnd?.timeIntervalSince1970 ?? -1,
+                       date("2026-11-28T15:57:32.752488Z").timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(live.fetchedAt, liveNow)
+
+        let wStart = "2026-08-06T13:58:47.849415+00:00"
+        let wEnd = "2026-08-13T13:58:47.849415+00:00"
+        func absentWeekly(extra: String = "") -> String {
+            #"""
+            {"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(wStart)", "end": "\#(wEnd)"}\#(extra)}}
+            """#
+        }
+
+        // A3: key present (even null/empty/wrong) blocks imputation
+        let a3: [(String, String)] = [
+            (#""creditUsagePercent": null"#, "creditUsagePercent null"),
+            (#""creditUsagePercent": true"#, "creditUsagePercent true"),
+            (#""creditUsagePercent": "41%""#, "creditUsagePercent string"),
+            (#""productUsage": []"#, "productUsage empty array"),
+            (#""productUsage": [{"product": "GrokBuild"}]"#, "productUsage without usagePercent"),
+            (#""productUsage": "x""#, "productUsage string"),
+            (#""productUsage": null"#, "productUsage null"),
+        ]
+        for (extra, label) in a3 {
+            let json = absentWeekly(extra: ", " + extra)
+            XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(json), now: now), .noUsageData, label)
+        }
+
+        // A4: period gates — all noUsageData
+        let a4: [String] = [
+            #"{"config": {"billingPeriodEnd": "\#(wEnd)"}}"#,
+            #"{"config": {"currentPeriod": "weekly", "billingPeriodEnd": "\#(wEnd)"}}"#,
+            #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_MONTHLY", "start": "\#(wStart)", "end": "\#(wEnd)"}}}"#,
+            #"{"config": {"currentPeriod": {"type": 1, "start": "\#(wStart)", "end": "\#(wEnd)"}}}"#,
+            #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(wStart)"}, "billingPeriodEnd": "2027-01-01T00:00:00Z"}}"#,
+            #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(wStart)", "end": "soon"}}}"#,
+            #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(wStart)", "end": "soon"}, "billingPeriodEnd": "2027-01-01T00:00:00Z"}}"#,
+            #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(wStart)", "end": "2026-08-09T10:00:00Z"}}}"#,
+            #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "\#(wStart)", "end": "2026-08-08T10:00:00Z"}}}"#,
+        ]
+        for (i, json) in a4.enumerated() {
+            XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200, data: body(json), now: now), .noUsageData,
+                           "A4 case \(i)")
+        }
+
+        // A4: type missing — weekly object without type key
         XCTAssertEqual(GrokQuotaEngine.parseResponse(statusCode: 200,
-            data: body(#"{"config": {"creditUsagePercent": 42, "future": {"x": 1}}, "unknownTop": true}"#), now: now),
-            .noUsageData)
+            data: body(#"{"config": {"currentPeriod": {"start": "\#(wStart)", "end": "\#(wEnd)"}}}"#), now: now),
+            .noUsageData, "type missing")
+
+        // A5: start missing in currentPeriod → success 0%; periodStart from billingPeriodStart fallback
+        let a5Json = #"""
+        {"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "\#(wEnd)"},
+        "billingPeriodStart": "\#(wStart)", "billingPeriodEnd": "\#(wEnd)"}}
+        """#
+        guard case .success(let a5) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(a5Json), now: now)
+        else { return XCTAssertTrue(false, "A5 start missing → success") }
+        XCTAssertEqual(a5.usedPercent, 0)
+        XCTAssertEqual(a5.periodStart?.timeIntervalSince1970 ?? -1,
+                       date("2026-08-06T13:58:47.849415Z").timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(a5.periodEnd?.timeIntervalSince1970 ?? -1,
+                       date("2026-08-13T13:58:47.849415Z").timeIntervalSince1970, accuracy: 0.001)
+
+        let a5NoBillingStart = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "\#(wEnd)"}}}"#
+        guard case .success(let a5b) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(a5NoBillingStart), now: now)
+        else { return XCTAssertTrue(false, "A5 no billingPeriodStart → success") }
+        XCTAssertEqual(a5b.usedPercent, 0)
+        XCTAssertNil(a5b.periodStart)
+        XCTAssertEqual(a5b.periodEnd?.timeIntervalSince1970 ?? -1,
+                       date("2026-08-13T13:58:47.849415Z").timeIntervalSince1970, accuracy: 0.001)
+
+        // A5: present-but-unusable start does not block imputation
+        for start in [#""bad""#, "null"] {
+            let json = #"{"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": \#(start), "end": "\#(wEnd)"}}}"#
+            guard case .success(let s) = GrokQuotaEngine.parseResponse(statusCode: 200, data: body(json), now: now)
+            else { return XCTAssertTrue(false, "A5 start=\(start) → success") }
+            XCTAssertEqual(s.usedPercent, 0)
+            XCTAssertNil(s.periodStart)
+        }
     }
 
     func testEnvelopeClassification() {

@@ -165,7 +165,8 @@ runSuite("TrustWiringTests", [
 
 let grokQuota = GrokQuotaTests()
 runSuite("GrokQuotaTests", [
-    ("testValidEnvelopeNeverRendersCreditUsagePercentAsQuota", grokQuota.testValidEnvelopeNeverRendersCreditUsagePercentAsQuota),
+    ("testBillingConfigParsesProductUsageAndFallback", grokQuota.testBillingConfigParsesProductUsageAndFallback),
+    ("testImputedZeroAbsentBothUsageFieldsInOpenWeeklyPeriod", grokQuota.testImputedZeroAbsentBothUsageFieldsInOpenWeeklyPeriod),
     ("testEnvelopeClassification", grokQuota.testEnvelopeClassification),
     ("testHTTPStatusAndOversizedMapping", grokQuota.testHTTPStatusAndOversizedMapping),
     ("testObservationEventMappingAndMachineIntegration", grokQuota.testObservationEventMappingAndMachineIntegration),

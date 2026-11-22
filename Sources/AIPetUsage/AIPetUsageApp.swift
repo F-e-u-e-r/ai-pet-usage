@@ -76,6 +76,9 @@ struct MenuBarLabel: View {
         // 讀取 appearanceTick,使系統深/淺色切換與手動 Appearance 偏好變更(同一條 tick 路徑)時重新烤圖;
         // 徽章墨色跟隨解析好的**系統**外觀(選單列是系統的),不隨 app 偏好。
         let _ = model.appearanceTick
+        // Grok 官方額度更新時重烤徽章(與 dashboard 刷新路徑無關)。
+        let _ = model.grokQuota.status.lastAttemptAt
+        let _ = model.grokQuota.status.snapshot?.fetchedAt
         return Group {
             if let image = MenuBarBadgeRenderer.image(petEmoji: model.menuBarPetEmoji,
                                                       badges: model.menuBarBadges,

@@ -102,7 +102,7 @@ public enum GrokKeyParser {
 
 /// 額度快照(memory-only;絕不持久化 —— boundary #73 回應資料分類)。
 public struct GrokQuotaSnapshot: Sendable, Equatable {
-    public var usedPercent: Double            // 顯示值(≤100;provider-reported)
+    public var usedPercent: Double            // 顯示值(≤100;多數為 provider-reported;缺雙欄位時可為 imputed 0% 見 parseBillingConfig)
     /// raw 值 >100 時為 true(owner 裁示:clamp 只是顯示強健性,**不得把 upstream
     /// anomaly 靜默變成「正常 100%」**—— UI 據此標示,F17 可記 dataQuality)。
     public var reportedPercentOverflow: Bool
@@ -126,7 +126,7 @@ public struct GrokQuotaSnapshot: Sendable, Equatable {
 /// 抓取結果(封閉;UI 文案與 F17 事件都由此映射,原始錯誤內文永不外洩)。
 public enum GrokQuotaOutcome: Sendable, Equatable {
     case success(GrokQuotaSnapshot)
-    case noUsageData              // 有效 200 但無可用 usage %(欄位實測時有時無)→ 軟降級,非 kill、不造數
+    case noUsageData              // 有效 200 但無可用 %(且不符 imputed-0% 週期條件)→ 軟降級,非 kill
     case noKey                    // 檔案不存在(未登入)→ presence .unavailable(notLoggedIn)
     case credentialUnreadable     // 檔在但讀不了/壞 → transientError;絕不誘導重登(契約 §4)
     case keyRejected              // 401 → health .authExpired(重登提示;§4 重試門檻)
@@ -183,7 +183,8 @@ public enum GrokQuotaEngine {
     /// - root 非物件 → schemaBreaking(唯一 evidence-backed 結構破壞;立即 kill)
     /// - root 含 `error`(非 null)→ .badReply(明確 error-envelope,無論 config 是否在)
     /// - 無 `config` 物件 → .badReply(無法辨識/error;transient,不清 401 門檻、不 kill)
-    /// - 有 `config` 物件 → .noUsageData —— creditUsagePercent 已證**非** weekly quota(見下),Track A 不 render
+    /// - 有 `config` 且可解析 `productUsage[].usagePercent` 或 `creditUsagePercent` → `.success`
+    /// - 有 `config` 但無可用 % → `.noUsageData`(開放 WEEKLY currentPeriod 且雙欄位皆缺時除外 → imputed 0%)
     /// - JSON 壞 → invalidBody(×3 才 kill,狀態機管);未知欄位 = additive → 容忍。
     public static func parseResponse(statusCode: Int, data: Data, now: Date) -> GrokQuotaOutcome {
         switch statusCode {
@@ -211,18 +212,83 @@ public enum GrokQuotaEngine {
         if let err = root["error"], !(err is NSNull) { return .badReply }
         // 必須是可辨識的 billing envelope(有 `config` 物件);無 config → .badReply(transient:不標健康、
         // 不清 401 門檻、保留 last-good、不 kill)。
-        guard root["config"] is [String: Any] else { return .badReply }
-        // Track B ground truth(2026-08-10):`creditUsagePercent` = credit/product 用量,**不是** Grok
-        // weekly quota —— 實測同 weekly window 內 100%→absent;官方 `grok /usage` 另有 weekly signal
-        // (0% + reset)。故 Track A 一律**不**以 creditUsagePercent 驅動 weekly-% UI(無論在否)→
-        // .noUsageData(honestly unavailable);真正 weekly substrate 由 REDESIGN(定位 grok /usage 之來源)接。
-        // Track A 只撤除此已證偽的 semantic mapping,不定位/實作新 source(見 f3-grok-quota-real-schema memo)。
-        return .noUsageData
+        guard let config = root["config"] as? [String: Any] else { return .badReply }
+        return parseBillingConfig(config, now: now)
     }
 
-    // NOTE:creditUsagePercent 已於 Track A 撤除為 weekly-quota source(見 parseResponse 註)。原本用於
-    // 解析該 % 與 period 的 asDouble/usablePercent/asDate 亦一併移除;REDESIGN 接真正 grok /usage 來源時
-    // 再按該來源實際形狀重寫解析(GrokISO8601 保留,現由 auth 的 expires_at 選擇使用)。
+    /// 解析 `GET /v1/billing?format=credits` 的 `config` 窄白名單。
+    /// 優先 `productUsage`(GrokBuild 的 `usagePercent`),否則 `creditUsagePercent`;
+    /// 兩者在實測上對齊,皆來自同一 billing envelope(provider-reported)。
+    /// 若兩欄位皆缺(key absent)且 `currentPeriod` 為 WEEKLY 且其 `end` > now(start 可在未來;official CLI 1.0.92 `/usage` 面板顯示 0%,
+    /// 2026-11-21 實測)→ imputed `usedPercent: 0`,與任一 `.success` 同樣覆寫 snapshot。
+    static func parseBillingConfig(_ config: [String: Any], now: Date) -> GrokQuotaOutcome {
+        guard let raw = extractUsagePercent(from: config) else {
+            guard config["creditUsagePercent"] == nil,
+                  config["productUsage"] == nil,
+                  let period = config["currentPeriod"] as? [String: Any],
+                  period["type"] as? String == "USAGE_PERIOD_TYPE_WEEKLY",
+                  let currentPeriodEnd = isoDate(period["end"]), currentPeriodEnd > now else {
+                return .noUsageData
+            }
+            let (start, end) = extractPeriod(from: config)
+            let plan = extractPlanName(from: config)
+            return .success(GrokQuotaSnapshot(usedPercent: 0, reportedPercentOverflow: false,
+                                            periodStart: start, periodEnd: end,
+                                            planName: plan, fetchedAt: now))
+        }
+        let overflow = raw > 100
+        let display = min(max(raw, 0), 100)
+        let (start, end) = extractPeriod(from: config)
+        let plan = extractPlanName(from: config)
+        return .success(GrokQuotaSnapshot(usedPercent: display, reportedPercentOverflow: overflow,
+                                        periodStart: start, periodEnd: end,
+                                        planName: plan, fetchedAt: now))
+    }
+
+    private static func extractUsagePercent(from config: [String: Any]) -> Double? {
+        if let products = config["productUsage"] as? [[String: Any]] {
+            let preferred = products.first { ($0["product"] as? String) == "GrokBuild" }
+                ?? products.first
+            if let pct = finiteNumber(preferred?["usagePercent"]) { return pct }
+        }
+        return finiteNumber(config["creditUsagePercent"])
+    }
+
+    private static func extractPlanName(from config: [String: Any]) -> String? {
+        guard let products = config["productUsage"] as? [[String: Any]] else { return nil }
+        let preferred = products.first { ($0["product"] as? String) == "GrokBuild" }
+            ?? products.first
+        guard let name = preferred?["product"] as? String, !name.isEmpty else { return nil }
+        return name
+    }
+
+    private static func extractPeriod(from config: [String: Any]) -> (Date?, Date?) {
+        var start: Date?
+        var end: Date?
+        if let period = config["currentPeriod"] as? [String: Any] {
+            start = isoDate(period["start"])
+            end = isoDate(period["end"])
+        }
+        if start == nil { start = isoDate(config["billingPeriodStart"]) }
+        if end == nil { end = isoDate(config["billingPeriodEnd"]) }
+        return (start, end)
+    }
+
+    /// bool / NaN / Inf / 字串皆拒絕;整數與有限 double 接受。
+    private static func finiteNumber(_ value: Any?) -> Double? {
+        if value is Bool { return nil }
+        if let d = value as? Double, d.isFinite { return d }
+        if let i = value as? Int { return Double(i) }
+        if let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite {
+            return n.doubleValue
+        }
+        return nil
+    }
+
+    private static func isoDate(_ value: Any?) -> Date? {
+        guard let s = value as? String else { return nil }
+        return GrokISO8601.date(from: s)
+    }
 }
 
 // MARK: - credential 讀取結果(契約 §4 生命週期表的三分;r1 三鏡:全塌 noKey 會把
