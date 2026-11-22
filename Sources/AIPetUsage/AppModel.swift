@@ -139,6 +139,7 @@ final class AppModel {
         if cursorPlanQuotaActive { cursorQuota.refreshNow() }
         applyModeSideEffects()
         presentFirstRunWelcomeIfNeeded()
+        presentCursorPlanQuotaConsentRepairIfNeeded()
         observeAppearanceChanges()
         // 排程匯出:啟動時重套(修正 app 被移動後 plist 內失效的絕對路徑);僅 bundle 版有效。
         if ScheduledReportManager.available { applyScheduledExport() }
@@ -263,6 +264,38 @@ final class AppModel {
             alert.addButton(withTitle: "Continue")
             alert.runModal()
             self.updateSettings { $0.usageMonitorWelcomeAcknowledged = true }
+            self.presentCursorPlanQuotaConsentRepairIfNeeded()
+        }
+    }
+
+    /// Plan % toggle on without consent (e.g. pre-consent settings) — network fetch stays off until Allow.
+    private func presentCursorPlanQuotaConsentRepairIfNeeded() {
+        guard settings.usageMonitorWelcomeAcknowledged else { return }
+        guard settings.core.enabledProviders.contains("cursor-ide"),
+              settings.cursorQuotaEnabled,
+              !settings.cursorPlanQuotaNetworkConsentGiven else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.settings.cursorQuotaEnabled,
+                  !self.settings.cursorPlanQuotaNetworkConsentGiven else { return }
+            let alert = NSAlert()
+            alert.messageText = "Allow Cursor plan usage?"
+            alert.informativeText = """
+            Plan usage % is on but network consent was not recorded yet — official Cursor models / \
+            Other models percentages will not load until you allow https://api2.cursor.sh.
+            """
+            alert.addButton(withTitle: "Allow (api2.cursor.sh)")
+            alert.addButton(withTitle: "Turn off plan %")
+            alert.addButton(withTitle: "Not Now")
+            let response = alert.runModal()
+            switch response {
+            case .alertFirstButtonReturn:
+                self.setCursorPlanQuotaEnabled(true, networkConsentGiven: true)
+            case .alertSecondButtonReturn:
+                self.setCursorPlanQuotaEnabled(false, networkConsentGiven: false)
+            default:
+                break
+            }
         }
     }
 

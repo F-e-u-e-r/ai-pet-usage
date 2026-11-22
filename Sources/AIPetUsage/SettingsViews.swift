@@ -597,21 +597,31 @@ struct ProviderSettings: View {
                         }
                     ))
                     if info.providerId == "cursor-ide" {
-                        Toggle("Show plan usage % (Cursor dashboard)", isOn: Binding(
-                            get: { model.settings.cursorQuotaEnabled },
-                            set: { v in
-                                if v {
-                                    if model.settings.cursorPlanQuotaNetworkConsentGiven {
-                                        model.setCursorPlanQuotaEnabled(true, networkConsentGiven: false)
+                        Group {
+                            Toggle("Show plan usage % (Cursor dashboard)", isOn: Binding(
+                                get: { model.settings.cursorQuotaEnabled },
+                                set: { v in
+                                    if v {
+                                        if model.settings.cursorPlanQuotaNetworkConsentGiven {
+                                            model.setCursorPlanQuotaEnabled(true, networkConsentGiven: false)
+                                        } else {
+                                            showCursorPlanConsent = true
+                                        }
                                     } else {
-                                        showCursorPlanConsent = true
+                                        model.setCursorPlanQuotaEnabled(false, networkConsentGiven: false)
                                     }
-                                } else {
-                                    model.setCursorPlanQuotaEnabled(false, networkConsentGiven: false)
                                 }
+                            ))
+                            .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
+                            if model.settings.cursorQuotaEnabled,
+                               !model.settings.cursorPlanQuotaNetworkConsentGiven {
+                                Label("Allow api2.cursor.sh to load plan %", systemImage: "exclamationmark.circle")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.orange)
+                                Button("Allow network access…") { showCursorPlanConsent = true }
+                                    .font(.caption)
                             }
-                        ))
-                        .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
+                        }
                         .alert("Enable Cursor plan usage?", isPresented: $showCursorPlanConsent) {
                             Button("Allow (api2.cursor.sh)") {
                                 model.setCursorPlanQuotaEnabled(true, networkConsentGiven: true)
