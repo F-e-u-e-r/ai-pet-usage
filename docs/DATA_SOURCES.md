@@ -124,9 +124,9 @@ Chunked transcript files under `logs/chunks/` are ignored.
 
 Token counts are **per-turn totals as recorded in the transcript** (confidence: high for shape; pricing uses the `antigravity` / Google model registry).
 
-**Official quota (three buckets, like the Antigravity Usage panel):** opt-in only — Settings → **Antigravity quota (official)** (default **off**). When on and Antigravity is enabled, each refresh runs `agy -p "/usage" --output-format json` if the `agy` binary is on `PATH`, parsing `remaining_fraction` / `reset_time` for **Gemini Models** (5h + weekly), **Claude and GPT models** (5h + weekly), and **Gemini 4 Argon** (weekly only). That call uses your existing CLI login and may open agy OAuth if the session expired; nothing is stored besides the parsed percentages and reset times in `antigravity-quota.json`. Menu-bar rings use the **Gemini Models** 5h window; the Today card lists all three groups.
+**Official quota (three buckets, like the Antigravity Usage panel):** opt-in only — Settings → **Providers → Antigravity**, **Show plan usage % (agy /usage)** (default **off**). When on and Antigravity is enabled, each refresh runs `agy -p "/usage" --output-format json` if the `agy` binary is on `PATH`, parsing `remaining_fraction` / `reset_time` for **Gemini Models** (5h + weekly), **Claude and GPT models** (5h + weekly), and **Gemini 4 Argon** (weekly only). That call uses your existing CLI login and may open agy OAuth if the session expired; nothing is stored besides the parsed percentages and reset times in `antigravity-quota.json`. Menu-bar rings use the **Gemini Models** 5h window; the Today card lists all three groups.
 
-Enable the provider in Settings → Providers (off by default, like OpenCode). Token totals need only the provider toggle; the quota toggle is separate.
+Enable the provider in Settings → Providers (off by default, like OpenCode). Token totals need only **Enabled**; **Show plan usage %** is on the same Antigravity section.
 
 ## Cursor IDE (`providerId: cursor-ide`; on by default)
 

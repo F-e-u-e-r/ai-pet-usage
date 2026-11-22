@@ -404,7 +404,7 @@ struct DataHealthSettings: View {
             } header: {
                 Text("Where every number comes from")
             } footer: {
-                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits, Colab credits, Grok quota, Cursor plan usage (under Cursor on Providers), and Antigravity quota checks — all off by default except where noted. A degraded source never blanks the rest of the dashboard.")
+                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits, Colab credits, Grok quota, Cursor plan usage (under Cursor on Providers), and Antigravity plan % (under Antigravity on Providers) — all off by default except where noted. A degraded source never blanks the rest of the dashboard.")
                     .font(Theme.FontScale.note)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -588,6 +588,9 @@ struct ProviderSettings: View {
                                     if info.providerId == "cursor-ide" {
                                         $0.cursorQuotaEnabled = false
                                     }
+                                    if info.providerId == "antigravity" {
+                                        $0.antigravityQuotaEnabled = false
+                                    }
                                 }
                             }
                             Task { await model.refreshNow() }
@@ -639,26 +642,24 @@ struct ProviderSettings: View {
                         """)
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    if info.providerId == "antigravity" {
+                        Toggle("Show plan usage % (agy /usage)", isOn: Binding(
+                            get: { model.settings.antigravityQuotaEnabled },
+                            set: { v in model.updateSettings { $0.antigravityQuotaEnabled = v } }
+                        ))
+                        .disabled(!model.settings.core.enabledProviders.contains("antigravity"))
+                        Text("""
+                        Off by default. Local token totals still come from agy brain transcripts with no network. \
+                        When on, refresh runs `agy -p "/usage"` for official buckets (Gemini / Claude+GPT / Argon). \
+                        Unsigned-in agy may open browser OAuth — run `agy -p "/usage"` once in Terminal if you prefer. \
+                        Only the agy subprocess talks to Antigravity; transcripts are not uploaded by this toggle.
+                        """)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     LabeledContent("Detected", value: info.availability.available ? "yes — \(info.availability.detail)" : "no")
                     Text(info.dataSources).font(.caption).foregroundStyle(.secondary)
                     Text(info.permissions).font(.caption2).foregroundStyle(.tertiary)
                 }
-            }
-
-            Section("Antigravity quota (official)") {
-                Toggle("Show Antigravity plan usage (agy CLI)", isOn: Binding(
-                    get: { model.settings.antigravityQuotaEnabled },
-                    set: { v in model.updateSettings { $0.antigravityQuotaEnabled = v } }
-                ))
-                Text("""
-                Off by default. When Antigravity is enabled, local token totals still come from agy \
-                brain transcripts with no network. Turning this on runs `agy -p "/usage"` during \
-                refresh to load official quota buckets (Gemini / Claude+GPT / Argon). If agy is not \
-                signed in, the CLI may open a browser OAuth window — complete it once in Terminal \
-                with `agy -p "/usage"` if you prefer to sign in outside the app. Token transcripts \
-                are never uploaded by this toggle; only the agy subprocess talks to Antigravity.
-                """)
-                    .font(.caption).foregroundStyle(.secondary)
             }
 
             // Grok 官方額度(F3;opt-in;boundary #73 —— 揭露文案說清楚讀什麼、送哪裡)。
@@ -697,7 +698,7 @@ struct ProviderSettings: View {
                         Spacer()
                     }
                 }
-                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity (AG) has no local quota rings — enable it under Providers and check Today for token usage.")
+                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity (AG) has no local quota rings — enable Antigravity under Providers and turn on plan % there for official buckets.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
