@@ -642,13 +642,13 @@ struct ProviderSettings: View {
                         .textFieldStyle(.roundedBorder)
                         .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
                         Text("""
-                        Local token totals come from Cursor structured logs (no network). Plan usage \
-                        calls https://api2.cursor.sh about every 15 minutes when the toggle above is on. \
-                        **AI Pet Usage never uses Keychain** — paste a dashboard JWT into the bearer file \
-                        (default ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt) \
-                        or set `CURSOR_ACCESS_TOKEN`. After you **Allow** plan usage, the app auto-detects \
-                        those sources and fetches immediately — no extra step. Two meters match Cursor: \
-                        **Cursor models** and **Other models**.
+                        Local token totals come from Cursor structured logs (no network). Official plan % needs \
+                        the toggle above, a one-time Allow (api2.cursor.sh) — saved across reboots — and a \
+                        dashboard JWT (bearer file, CURSOR_ACCESS_TOKEN, or read-only Cursor state; never \
+                        Keychain in this app). Default bearer file: \
+                        ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt. After Allow, \
+                        the app fetches immediately, then about every 15 minutes. Meters: Cursor models and \
+                        Other models.
                         """)
                             .font(.caption).foregroundStyle(.secondary)
                     }
