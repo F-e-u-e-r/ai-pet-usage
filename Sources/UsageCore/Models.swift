@@ -333,7 +333,8 @@ public struct ProviderLimitState: Codable, Sendable, Identifiable {
 public enum TokenActivityRing {
     public static let fullScaleTokens: Double = 100_000
     /// Providers without official quota files — pet ring uses today's local tokens.
-    public static let providersWithTokenOnlyMeters: Set<String> = ["grok-code", "cursor-ide", "opencode"]
+    /// Cursor plan % is dashboard-only (Models / Other models); never scaled from local token totals.
+    public static let providersWithTokenOnlyMeters: Set<String> = ["grok-code", "opencode"]
     public static func percent(todayTokens: Int) -> Double? {
         guard todayTokens > 0 else { return nil }
         return min(100, Double(todayTokens) / fullScaleTokens * 100)

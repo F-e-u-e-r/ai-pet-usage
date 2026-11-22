@@ -74,7 +74,14 @@ struct AppSettings: Codable {
     var colabCreditsEnabled: Bool = false
     var grokQuotaEnabled: Bool = false
     var grokQuotaKilledAtVersion: String? = nil
+    /// Fetches Cursor models / Other models % from dashboard (opt-in; bearer JWT required).
     var cursorQuotaEnabled: Bool = false
+    /// User approved network calls to api2.cursor.sh for plan usage (one-time per install).
+    var cursorPlanQuotaNetworkConsentGiven: Bool = false
+    /// First-launch privacy / local-only default explained.
+    var usageMonitorWelcomeAcknowledged: Bool = false
+    /// Optional JWT file for Cursor dashboard (app never uses Keychain). Default: `~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt`.
+    var cursorQuotaBearerFilePath: String? = nil
     /// Spawns `agy -p "/usage"` on refresh when Antigravity is enabled (opt-in; may open agy OAuth).
     var antigravityQuotaEnabled: Bool = false
     /// Which providers / Antigravity quota buckets appear in the menu bar, dropdown, and pet rings.
@@ -125,7 +132,8 @@ struct AppSettings: Codable {
         case openRouterCreditsEnabled, colabCreditsEnabled
         case grokQuotaEnabled
         case grokQuotaKilledAtVersion
-        case cursorQuotaEnabled
+        case cursorQuotaEnabled, cursorPlanQuotaNetworkConsentGiven, usageMonitorWelcomeAcknowledged
+        case cursorQuotaBearerFilePath
         case antigravityQuotaEnabled
         case chromeProviderSelection
         case appearance
@@ -166,7 +174,16 @@ struct AppSettings: Codable {
         colabCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .colabCreditsEnabled)) ?? false ?? false
         grokQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .grokQuotaEnabled)) ?? false ?? false
         grokQuotaKilledAtVersion = (try? c.decodeIfPresent(String.self, forKey: .grokQuotaKilledAtVersion)) ?? nil ?? nil
-        cursorQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .cursorQuotaEnabled)) ?? false ?? false
+        cursorQuotaEnabled = c.contains(.cursorQuotaEnabled)
+            ? ((try? c.decode(Bool.self, forKey: .cursorQuotaEnabled)) ?? false)
+            : false
+        cursorPlanQuotaNetworkConsentGiven = c.contains(.cursorPlanQuotaNetworkConsentGiven)
+            ? ((try? c.decode(Bool.self, forKey: .cursorPlanQuotaNetworkConsentGiven)) ?? false)
+            : false
+        usageMonitorWelcomeAcknowledged = c.contains(.usageMonitorWelcomeAcknowledged)
+            ? ((try? c.decode(Bool.self, forKey: .usageMonitorWelcomeAcknowledged)) ?? false)
+            : false
+        cursorQuotaBearerFilePath = try? c.decodeIfPresent(String.self, forKey: .cursorQuotaBearerFilePath)
         antigravityQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .antigravityQuotaEnabled)) ?? false ?? false
         chromeProviderSelection = try? c.decodeIfPresent(Set<String>.self, forKey: .chromeProviderSelection)
         // 先讀 raw 字串再對映:未知值("ocean")→ .system,不拋、不毒化 sibling(PetCore 可測)。
@@ -214,6 +231,9 @@ struct AppSettings: Codable {
         try c.encode(grokQuotaEnabled, forKey: .grokQuotaEnabled)
         try c.encodeIfPresent(grokQuotaKilledAtVersion, forKey: .grokQuotaKilledAtVersion)
         try c.encode(cursorQuotaEnabled, forKey: .cursorQuotaEnabled)
+        try c.encode(cursorPlanQuotaNetworkConsentGiven, forKey: .cursorPlanQuotaNetworkConsentGiven)
+        try c.encode(usageMonitorWelcomeAcknowledged, forKey: .usageMonitorWelcomeAcknowledged)
+        try c.encodeIfPresent(cursorQuotaBearerFilePath, forKey: .cursorQuotaBearerFilePath)
         try c.encode(antigravityQuotaEnabled, forKey: .antigravityQuotaEnabled)
         try c.encodeIfPresent(chromeProviderSelection, forKey: .chromeProviderSelection)
         try c.encode(appearance, forKey: .appearance)

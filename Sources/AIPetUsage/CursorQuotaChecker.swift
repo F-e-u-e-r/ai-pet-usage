@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import UsageCore
 
-/// Cursor IDE monthly plan usage (opt-in). Reads `cursor-access-token` from the macOS Keychain
-/// (written by Cursor / cursor-agent login) and calls `GetCurrentPeriodUsage` on api2.cursor.sh.
+/// Cursor IDE monthly plan usage (opt-in). Bearer file → `state.vscdb` plaintext only — no Keychain in this app.
+/// then calls `GetCurrentPeriodUsage` on api2.cursor.sh.
 @MainActor
 @Observable
 final class CursorQuotaChecker {
@@ -17,6 +17,7 @@ final class CursorQuotaChecker {
     private(set) var status = Status()
 
     private var enabled = false
+    private var bearerFilePath: String?
     private var gate = OpenRouterFetchGate()
     private var loopTask: Task<Void, Never>?
     private var manualFetchTask: Task<Void, Never>?
@@ -34,6 +35,11 @@ final class CursorQuotaChecker {
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return URLSession(configuration: config, delegate: CursorRedirectBlocker(), delegateQueue: nil)
     }()
+
+    func setBearerFilePath(_ path: String?) {
+        let t = path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        bearerFilePath = (t?.isEmpty == false) ? t : nil
+    }
 
     func setEnabled(_ on: Bool) {
         guard on != enabled else { return }
@@ -82,7 +88,9 @@ final class CursorQuotaChecker {
             newestDataAt: lastOk,
             attemptCount: status.lastAttemptAt == nil ? 0 : 1,
             provenanceNote: stale.note,
-            recoveryAction: HealthDisplay.recovery(for: health, presence: presence, cli: "cursor-agent login"))
+            recoveryAction: HealthDisplay.recovery(
+                for: health, presence: presence,
+                cli: "Run Scripts/export-cursor-dashboard-bearer.sh (or set a bearer file in Settings) — app does not use Keychain"))
     }
 
     private func fetchNow(claimed: Int? = nil) async {
@@ -97,7 +105,10 @@ final class CursorQuotaChecker {
         guard enabled, gate.shouldCommit(token), !Task.isCancelled else { return }
         if let until = rateLimitedUntil, Date() < until { return }
 
-        let key = await Task.detached(priority: .utility) { CursorKeychain.loadAccessToken() }.value
+        let path = bearerFilePath
+        let key = await Task.detached(priority: .utility) {
+            CursorSessionToken.loadAccessToken(bearerFilePath: path)
+        }.value
         guard enabled, gate.shouldCommit(token), !Task.isCancelled else { return }
 
         let attemptAt = Date()
@@ -128,7 +139,8 @@ final class CursorQuotaChecker {
         case .success(let snap):
             next.snapshot = snap
         case .keyRejected, .noKey:
-            break
+            // No JWT / expired bearer: must not keep showing last official % (OpenRouter credits uses the same rule).
+            next.snapshot = nil
         case .noUsageData:
             next.snapshot = nil
         case .schemaBreaking:

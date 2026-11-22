@@ -596,7 +596,7 @@ struct TodayView: View {
                                   limit: dash.limitStates.first { $0.providerId == snap.providerId },
                                   reported: dash.reportedLimits.first { $0.providerId == snap.providerId },
                                   antigravityQuota: snap.providerId == "antigravity" ? dash.antigravityQuota : nil,
-                                  cursorQuota: snap.providerId == "cursor-ide" && model.settings.cursorQuotaEnabled
+                                  cursorQuota: snap.providerId == "cursor-ide" && model.cursorPlanQuotaActive
                                     ? model.cursorQuota.status.snapshot : nil,
                                   now: now)
                     }
@@ -1166,7 +1166,7 @@ struct LimitsView: View {
                              snapshot: dash.snapshots.first { $0.providerId == limit.providerId },
                              reported: dash.reportedLimits.first { $0.providerId == limit.providerId },
                              antigravityQuota: limit.providerId == "antigravity" ? dash.antigravityQuota : nil,
-                             cursorQuota: limit.providerId == "cursor-ide" && model.settings.cursorQuotaEnabled
+                             cursorQuota: limit.providerId == "cursor-ide" && model.cursorPlanQuotaActive
                                 ? model.cursorQuota.status.snapshot : nil,
                              now: now,
                              warn: model.settings.core.warnThresholdPercent,

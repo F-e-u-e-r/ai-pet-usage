@@ -95,6 +95,13 @@ Errors render from the fixed closed vocabulary — never raw error/response text
    feed the existing LimitEngine and its persisted `limits-state.json` (an already-allowed class). The
    read-only reset-credits display may share this call's auth; a credit-**consuming** endpoint is never
    called.
+6. *(Phase 1, shipped)* The **opt-in** Cursor plan usage check (Settings → Providers → **Cursor**, **Show plan usage %**;
+   default **off**; no automatic enable when a bearer file exists):
+   `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` about every 15 minutes
+   and on manual Refresh. The JWT is read only from a user-maintained bearer file (or env `CURSOR_ACCESS_TOKEN`,
+   or plaintext `state.vscdb`) — **never Keychain inside the app**. The Bearer header is sent only to
+   `api2.cursor.sh`; response percentages stay in memory and are not persisted. Turn the sub-toggle off to
+   disable network calls entirely while keeping local log metering.
 
 As with any HTTPS request over the system's standard networking, the contacted host also sees ordinary
 connection metadata (e.g. IP) and any system-managed headers. Beyond the opt-in integrations listed above, the app contacts

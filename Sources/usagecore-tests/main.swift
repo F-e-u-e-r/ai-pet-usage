@@ -137,6 +137,19 @@ runSuite("CursorQuotaTests", [
     ("testPartitionAndMenuSegmentsGroupCursorMeters", cursorQuota.testPartitionAndMenuSegmentsGroupCursorMeters),
 ])
 
+let cursorStateAuth = CursorStateAuthTests()
+runSuite("CursorStateAuthTests", [
+    ("testLoadAccessTokenFromItemTable", cursorStateAuth.testLoadAccessTokenFromItemTable),
+    ("testMissingKeyReturnsNil", cursorStateAuth.testMissingKeyReturnsNil),
+    ("testEncryptedAtRestTokenIsRejected", cursorStateAuth.testEncryptedAtRestTokenIsRejected),
+])
+
+let cursorBearerFile = CursorBearerFileTests()
+runSuite("CursorBearerFileTests", [
+    ("testReadsBearerFile", cursorBearerFile.testReadsBearerFile),
+    ("testRejectsSealedCiphertextInFile", cursorBearerFile.testRejectsSealedCiphertextInFile),
+])
+
 let antigravityQuota = AntigravityQuotaFetcherTests()
 runSuite("AntigravityQuotaFetcherTests", [
     ("testParseUsageJSONAndGeminiRateLimit", antigravityQuota.testParseUsageJSONAndGeminiRateLimit),

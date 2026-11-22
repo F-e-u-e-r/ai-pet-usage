@@ -333,9 +333,9 @@ public enum WidgetSnapshotBuilder {
         for st in states {
             let display = names[st.providerId] ?? st.providerId
             // Grok 只用 weekly 欄(credits → weekly,confidence .estimated);5h 永不發佈。
-            let five: Int? = GrokChromeDisplay.usesWeeklyOnlyMeter(st.providerId)
-                ? nil
-                : intPercent(st.fiveHour.usedPercent)
+            let monthlyOnly = GrokChromeDisplay.usesWeeklyOnlyMeter(st.providerId)
+                || CursorChromeDisplay.usesMonthlyOnlyMeter(st.providerId)
+            let five: Int? = monthlyOnly ? nil : intPercent(st.fiveHour.usedPercent)
             let week = intPercent(st.weekly.usedPercent)
             let idle = st.fiveHour.idle && five == nil && week == nil
             if five == nil, week == nil, !idle { continue }

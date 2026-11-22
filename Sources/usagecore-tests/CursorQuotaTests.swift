@@ -19,6 +19,20 @@ final class CursorQuotaTests: XCTestCase {
         XCTAssertNotNil(snap.billingCycleEnd)
     }
 
+    func testExpandWithoutQuotaShowsLocalRowOnly() {
+        let base = ProviderLimitState(
+            providerId: "cursor-ide",
+            fiveHour: LimitWindowState(windowMinutes: 300, confidence: .unknown),
+            weekly: LimitWindowState(windowMinutes: 10_080, confidence: .unknown),
+            burnRateTokensPerHour: 0,
+            lastEventAt: nil,
+            lastReadingAt: now,
+            warning: .ok)
+        let expanded = CursorQuotaDisplay.expandLimitStates([base], quota: nil)
+        XCTAssertEqual(expanded.map(\.providerId), ["cursor-ide"])
+        XCTAssertNil(expanded[0].weekly.usedPercent)
+    }
+
     func testExpandLimitStatesSplitsCursorIde() {
         let base = ProviderLimitState(
             providerId: "cursor-ide",

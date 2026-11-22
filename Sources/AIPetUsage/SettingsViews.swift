@@ -404,7 +404,7 @@ struct DataHealthSettings: View {
             } header: {
                 Text("Where every number comes from")
             } footer: {
-                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits, Colab credits, Grok quota, Cursor quota, and Antigravity quota checks (Providers tab — all off by default except where noted). A degraded source never blanks the rest of the dashboard.")
+                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits, Colab credits, Grok quota, Cursor plan usage (under Cursor on Providers), and Antigravity quota checks — all off by default except where noted. A degraded source never blanks the rest of the dashboard.")
                     .font(Theme.FontScale.note)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -534,6 +534,7 @@ private struct SourceHealthRow: View {
 struct ProviderSettings: View {
     @Environment(AppModel.self) private var model
     @State private var infos: [(providerId: String, displayName: String, availability: ProviderAvailability, dataSources: String, permissions: String)] = []
+    @State private var showCursorPlanConsent = false
 
     var body: some View {
         Form {
@@ -568,11 +569,65 @@ struct ProviderSettings: View {
                         set: { on in
                             model.updateSettings {
                                 if on { $0.core.enabledProviders.insert(info.providerId) }
-                                else { $0.core.enabledProviders.remove(info.providerId) }
+                                else {
+                                    $0.core.enabledProviders.remove(info.providerId)
+                                    if info.providerId == "cursor-ide" {
+                                        $0.cursorQuotaEnabled = false
+                                    }
+                                }
                             }
                             Task { await model.refreshNow() }
                         }
                     ))
+                    if info.providerId == "cursor-ide" {
+                        Toggle("Show plan usage % (Cursor dashboard)", isOn: Binding(
+                            get: { model.settings.cursorQuotaEnabled },
+                            set: { v in
+                                if v {
+                                    if model.settings.cursorPlanQuotaNetworkConsentGiven {
+                                        model.setCursorPlanQuotaEnabled(true, networkConsentGiven: false)
+                                    } else {
+                                        showCursorPlanConsent = true
+                                    }
+                                } else {
+                                    model.setCursorPlanQuotaEnabled(false, networkConsentGiven: false)
+                                }
+                            }
+                        ))
+                        .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
+                        .alert("Enable Cursor plan usage?", isPresented: $showCursorPlanConsent) {
+                            Button("Allow (api2.cursor.sh)") {
+                                model.setCursorPlanQuotaEnabled(true, networkConsentGiven: true)
+                            }
+                            Button("Not Now", role: .cancel) {}
+                        } message: {
+                            Text("""
+                            This sends your bearer JWT (from your file only — the app never uses Keychain) to \
+                            https://api2.cursor.sh for official **Cursor models** / **Other models** percentages. \
+                            Nothing else is uploaded.
+                            """)
+                        }
+                        TextField("Bearer file (optional)", text: Binding(
+                            get: { model.settings.cursorQuotaBearerFilePath ?? "" },
+                            set: { v in
+                                model.updateSettings {
+                                    let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    $0.cursorQuotaBearerFilePath = t.isEmpty ? nil : t
+                                }
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
+                        Text("""
+                        Local token totals come from Cursor structured logs (no network). Plan usage \
+                        calls https://api2.cursor.sh about every 15 minutes when the toggle above is on. \
+                        **AI Pet Usage never uses Keychain** — put a JWT in a file (default \
+                        ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt) via \
+                        `Scripts/export-cursor-dashboard-bearer.sh`, then Refresh. Two meters match Cursor: \
+                        **Cursor models** and **Other models**.
+                        """)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     LabeledContent("Detected", value: info.availability.available ? "yes — \(info.availability.detail)" : "no")
                     Text(info.dataSources).font(.caption).foregroundStyle(.secondary)
                     Text(info.permissions).font(.caption2).foregroundStyle(.tertiary)
@@ -591,23 +646,6 @@ struct ProviderSettings: View {
                 signed in, the CLI may open a browser OAuth window — complete it once in Terminal \
                 with `agy -p "/usage"` if you prefer to sign in outside the app. Token transcripts \
                 are never uploaded by this toggle; only the agy subprocess talks to Antigravity.
-                """)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Cursor quota (official)") {
-                Toggle("Show Cursor plan usage (Cursor IDE)", isOn: Binding(
-                    get: { model.settings.cursorQuotaEnabled },
-                    set: { v in model.updateSettings { $0.cursorQuotaEnabled = v } }
-                ))
-                Text("""
-                Off by default. When on, the app reads the access token Cursor or cursor-agent \
-                saved in the macOS Keychain (service `cursor-access-token`) and asks \
-                https://api2.cursor.sh for your current billing period usage — about every \
-                15 minutes and on manual Refresh. The token is sent only to that host over HTTPS \
-                (redirects refused) and is never stored, logged, or refreshed by this app. \
-                Two meters match the Cursor Usage UI: **Cursor models** (first-party) and \
-                **Other models** (third-party). Token usage from local logs stays separate.
                 """)
                     .font(.caption).foregroundStyle(.secondary)
             }

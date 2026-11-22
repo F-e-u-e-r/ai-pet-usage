@@ -1,8 +1,7 @@
 import Foundation
-import Security
 
 // Cursor IDE monthly plan usage (Cursor models vs Other models) from DashboardService.
-// Pure logic: keychain token read, Connect JSON request, response parse — no logging of secrets.
+// Pure logic: plaintext IDE state DB token read, Connect JSON request, response parse — no Keychain, no logging of secrets.
 
 public struct CursorQuotaSnapshot: Sendable, Equatable {
     public var autoPercentUsed: Double
@@ -59,24 +58,15 @@ public enum CursorQuotaOutcome: Sendable, Equatable {
     }
 }
 
-public enum CursorKeychain {
-    private static let service = "cursor-access-token"
-    private static let account = "cursor-user"
-
-    public static func loadAccessToken() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let token, !token.isEmpty, token.count <= 8192 else { return nil }
-        return token
+/// Session token for dashboard quota — user bearer file, then optional `CURSOR_ACCESS_TOKEN`, then plaintext `state.vscdb`. No Keychain.
+public enum CursorSessionToken {
+    public static func loadAccessToken(bearerFilePath: String? = nil) -> String? {
+        if let file = CursorBearerFile.loadAccessToken(explicitPath: bearerFilePath) { return file }
+        if let env = ProcessInfo.processInfo.environment["CURSOR_ACCESS_TOKEN"] {
+            let t = env.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty, !t.hasPrefix("cursor-safe-storage:"), t.count <= 8192 { return t }
+        }
+        return CursorStateAuth.loadAccessToken()
     }
 }
 

@@ -48,6 +48,13 @@ final class AppModel {
     let colabCredits = ColabCreditsChecker()
     let grokQuota = GrokQuotaChecker()
     let cursorQuota = CursorQuotaChecker()
+
+    /// Plan % fetch runs only when Cursor is enabled and the user opts into dashboard quota under the same provider block.
+    var cursorPlanQuotaActive: Bool {
+        settings.core.enabledProviders.contains("cursor-ide")
+            && settings.cursorQuotaEnabled
+            && settings.cursorPlanQuotaNetworkConsentGiven
+    }
     private let settingsStore: SettingsStore
     private let dataDir: URL
     /// monitor-only(低 RAM)模式下完全不建立;只在 full 模式第一次用到時載入。
@@ -127,8 +134,11 @@ final class AppModel {
             get: { [weak self] in self?.settings.grokQuotaKilledAtVersion },
             set: { [weak self] v in self?.updateSettings { $0.grokQuotaKilledAtVersion = v } })
         grokQuota.setEnabled(settings.grokQuotaEnabled, isUserAction: false)   // bootstrap ≠ 手動 re-enable(r3)
-        cursorQuota.setEnabled(settings.cursorQuotaEnabled)
+        cursorQuota.setBearerFilePath(settings.cursorQuotaBearerFilePath)
+        cursorQuota.setEnabled(cursorPlanQuotaActive)
+        if cursorPlanQuotaActive { cursorQuota.refreshNow() }
         applyModeSideEffects()
+        presentFirstRunWelcomeIfNeeded()
         observeAppearanceChanges()
         // 排程匯出:啟動時重套(修正 app 被移動後 plist 內失效的絕對路徑);僅 bundle 版有效。
         if ScheduledReportManager.available { applyScheduledExport() }
@@ -237,11 +247,44 @@ final class AppModel {
     /// 使用者手動刷新(⌘R / Refresh 鈕專用):credits/grok 的 manual 語義**只**綁真
     /// 使用者動作 —— refreshNow() 也被啟動/輪詢/FSEvents 自動呼叫,在那裡冒用 manual
     /// 會 bypass 401/kill 門檻(r4 ultra;與 bootstrap≠manual 同構)。
+    /// One-time welcome: local-first by default; network only after explicit Provider opt-in + consent.
+    private func presentFirstRunWelcomeIfNeeded() {
+        guard !settings.usageMonitorWelcomeAcknowledged else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.settings.usageMonitorWelcomeAcknowledged else { return }
+            let alert = NSAlert()
+            alert.messageText = "Welcome to AI Pet Usage"
+            alert.informativeText = """
+            By default the app only reads local usage logs on this Mac — your data is not uploaded.
+
+            Optional features (Cursor plan %, Grok quota, OpenRouter credits, and similar) call provider \
+            APIs only after you turn them on under Settings → Providers and confirm when asked.
+            """
+            alert.addButton(withTitle: "Continue")
+            alert.runModal()
+            self.updateSettings { $0.usageMonitorWelcomeAcknowledged = true }
+        }
+    }
+
+    func setCursorPlanQuotaEnabled(_ enabled: Bool, networkConsentGiven: Bool) {
+        updateSettings {
+            if enabled {
+                if networkConsentGiven {
+                    $0.cursorPlanQuotaNetworkConsentGiven = true
+                }
+                guard $0.cursorPlanQuotaNetworkConsentGiven else { return }
+                $0.cursorQuotaEnabled = true
+            } else {
+                $0.cursorQuotaEnabled = false
+            }
+        }
+    }
+
     func userRefresh() async {
         orCredits.refreshNow()
         if settings.colabCreditsEnabled { colabCredits.refreshNow() }
         if settings.grokQuotaEnabled { grokQuota.refreshNow() }
-        if settings.cursorQuotaEnabled { cursorQuota.refreshNow() }
+        if cursorPlanQuotaActive { cursorQuota.refreshNow() }
         requestCodexOfficialFetch()   // ⌘R 亦受統一 60s 閘 + 單流(owner:B spawn 不超過 ~每 60s 一次)
         await refreshNow()
     }
@@ -395,11 +438,13 @@ final class AppModel {
         } else {
             rows.append(api)
         }
-        let cursorApi = cursorQuota.dataSourceStatus()
-        if let i = rows.lastIndex(where: { $0.providerId == "cursor-ide" }) {
-            rows.insert(cursorApi, at: rows.index(after: i))
-        } else {
-            rows.append(cursorApi)
+        if cursorPlanQuotaActive {
+            let cursorApi = cursorQuota.dataSourceStatus()
+            if let i = rows.lastIndex(where: { $0.providerId == "cursor-ide" }) {
+                rows.insert(cursorApi, at: rows.index(after: i))
+            } else {
+                rows.append(cursorApi)
+            }
         }
         rows.append(colabCredits.dataSourceStatus())
         return rows
@@ -520,6 +565,8 @@ final class AppModel {
         let oldColabCredits = settings.colabCreditsEnabled
         let oldGrokQuota = settings.grokQuotaEnabled
         let oldCursorQuota = settings.cursorQuotaEnabled
+        let oldCursorPlanConsent = settings.cursorPlanQuotaNetworkConsentGiven
+        let oldCursorBearerPath = settings.cursorQuotaBearerFilePath
         let oldAntigravityQuota = settings.antigravityQuotaEnabled
         let oldAppearance = settings.appearance
         let oldFontDesign = settings.fontDesign
@@ -555,8 +602,17 @@ final class AppModel {
             grokQuota.setEnabled(settings.grokQuotaEnabled)
             Task { [weak self] in await self?.refreshSourceStatuses() }   // Data Health 立即反映
         }
-        if oldCursorQuota != settings.cursorQuotaEnabled {
-            cursorQuota.setEnabled(settings.cursorQuotaEnabled)
+        if settings.cursorQuotaBearerFilePath != oldCursorBearerPath {
+            cursorQuota.setBearerFilePath(settings.cursorQuotaBearerFilePath)
+            if cursorPlanQuotaActive { cursorQuota.refreshNow() }
+        } else {
+            cursorQuota.setBearerFilePath(settings.cursorQuotaBearerFilePath)
+        }
+        if oldCursorQuota != settings.cursorQuotaEnabled
+            || oldCursorPlanConsent != settings.cursorPlanQuotaNetworkConsentGiven
+            || settings.core.enabledProviders.contains("cursor-ide") != oldProviders.contains("cursor-ide") {
+            cursorQuota.setEnabled(cursorPlanQuotaActive)
+            if cursorPlanQuotaActive { cursorQuota.refreshNow() }
             Task { [weak self] in await self?.refreshSourceStatuses() }
         }
         if oldAntigravityQuota != settings.antigravityQuotaEnabled {
@@ -802,12 +858,19 @@ final class AppModel {
                 ?? ClaudeScopedDisplay.displayName(forChromeId: st.providerId)
                 ?? CursorQuotaDisplay.displayName(forChromeId: st.providerId)
                 ?? dashboard.snapshots.first { $0.providerId == st.providerId }?.displayName
+            let activity: Double? = {
+                if CursorQuotaDisplay.isQuotaChromeId(st.providerId) { return nil }
+                if st.providerId == "cursor-ide", cursorPlanQuotaActive || settings.cursorQuotaEnabled {
+                    return nil
+                }
+                return st.todayActivityPercent
+            }()
             return (id: st.providerId, displayName: name,
                     badgeLabel: resolveMenuBarBadgeLabel(providerId: st.providerId, displayName: name),
                     fiveHour: st.fiveHour.usedPercent,
                     weekly: st.weekly.usedPercent,
                     idle: st.fiveHour.idle,
-                    todayActivityPercent: st.todayActivityPercent)
+                    todayActivityPercent: activity)
         }
         return MenuBadgeBuilder.badges(from: states,
                                        warn: settings.core.warnThresholdPercent,
@@ -902,7 +965,7 @@ final class AppModel {
         let agExpanded = AntigravityQuotaDisplay.expandLimitStates(dashboard.limitStates,
                                                                  quota: dashboard.antigravityQuota)
         let claudeExpanded = ClaudeScopedDisplay.expandLimitStates(agExpanded)
-        let cursorSnap = settings.cursorQuotaEnabled ? cursorQuota.status.snapshot : nil
+        let cursorSnap = cursorPlanQuotaActive ? cursorQuota.status.snapshot : nil
         let expanded = CursorQuotaDisplay.expandLimitStates(claudeExpanded, quota: cursorSnap)
         return expanded.sorted {
             ChromeMenuGrouping.sortKey(for: $0).lowercased() < ChromeMenuGrouping.sortKey(for: $1).lowercased()
