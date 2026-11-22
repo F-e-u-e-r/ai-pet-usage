@@ -43,6 +43,16 @@ else
 fi
 
 ROOT_OWNER="$(stat -f '%u' "$SHARED_ROOT" 2>/dev/null || echo "")"
+# Multi-user ad-hoc widget: sticky root must be root-owned (sol/grok gate). Prompt once when we own it.
+if [ "$ROOT_OWNER" = "$ME" ]; then
+  echo "Promoting $SHARED_ROOT to root:wheel for multi-user widget mirror (sudo once)…"
+  if sudo chown root:wheel "$SHARED_ROOT" 2>/dev/null && sudo chmod 1777 "$SHARED_ROOT" 2>/dev/null; then
+    ROOT_OWNER="0"
+  else
+    echo "Note: mirror stays user-owned (single macOS user only). Or run:" >&2
+    echo "  sudo chown root:wheel \"$SHARED_ROOT\" && sudo chmod 1777 \"$SHARED_ROOT\"" >&2
+  fi
+fi
 if [ -n "$ROOT_OWNER" ] && [ "$ROOT_OWNER" != "$ME" ] && [ "$ROOT_OWNER" != "0" ]; then
   echo "Refusing: $SHARED_ROOT is owned by uid $ROOT_OWNER." >&2
   echo "For another macOS user, fix once as admin:" >&2

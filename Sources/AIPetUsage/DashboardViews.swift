@@ -514,6 +514,43 @@ struct HourlyChart: View {
     }
 }
 
+// MARK: - Colab credits (opt-in Today card)
+
+struct ColabCreditsDashboardCard: View {
+    let status: ColabCreditsStatus
+    let now: Date
+
+    var body: some View {
+        let brand = ProviderBrands.brand(for: "colab")
+        let p = status.presentation(now: now)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                ProviderDot(brand: brand)
+                Text(brand.displayName).font(Theme.FontScale.cardTitle)
+                Spacer()
+                if let age = p.age {
+                    Text(age).font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                }
+            }
+            if let detail = p.detail {
+                Text(p.primary).font(.title3.weight(.semibold)).monospacedDigit()
+                Text("\(detail)\(p.stale ? " · refresh failed or stale" : "")")
+                    .font(Theme.FontScale.secondaryInfo)
+                    .foregroundStyle(p.stale ? .orange : Theme.textSecondary)
+            } else {
+                Text(p.primary)
+                    .font(Theme.FontScale.secondaryInfo)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .help(p.tooltip)
+    }
+}
+
 // MARK: - Page 1: Today
 
 struct TodayView: View {
@@ -563,6 +600,14 @@ struct TodayView: View {
                                     ? model.cursorQuota.status.snapshot : nil,
                                   now: now)
                     }
+                }
+
+                if model.settings.colabCreditsEnabled {
+                    Text("Colab compute credits")
+                        .font(Theme.FontScale.cardTitle)
+                    Text("Account balance from `colab usage` (not token usage from local logs)")
+                        .font(.caption2).foregroundStyle(Theme.textMuted)
+                    ColabCreditsDashboardCard(status: model.colabCredits.status, now: now)
                 }
 
                 HStack(alignment: .top, spacing: 16) {

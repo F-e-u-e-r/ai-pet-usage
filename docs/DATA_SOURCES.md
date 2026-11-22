@@ -2,7 +2,7 @@
 
 This document lists exactly which local files the app reads, what is extracted, and why. It is the source of truth for the in-app "Providers" and "Data & Privacy" settings copy.
 
-Everything is read-only. Your usage data is never uploaded — no telemetry, no account login. Two optional network calls exist, each opt-in and off by default, and neither sends usage data: a GitHub version check for app updates (Settings → General), and an OpenRouter credit-balance check (Settings → Providers; see "OpenRouter credits" below).
+Everything is read-only. Your usage data is never uploaded — no telemetry, no account login. Optional network integrations (each opt-in and off by default; none sends usage data) include a GitHub version check (Settings → General), OpenRouter credits, Colab credits, Grok quota, Cursor quota, and Antigravity quota — see the sections below.
 
 ## Codex (`providerId: codex`)
 
@@ -207,10 +207,30 @@ will honestly show unknown-model rows for models it cannot price). Accepted valu
 "opencode-reported (models.dev rates, est.)" — always **estimated**, never an invoice. OpenCode
 exposes no usage limits locally, so **no usage percent is shown** (same posture as Grok).
 
+## Colab credits (optional, off by default; not a provider adapter)
+
+For people who use the **google-colab-cli** (`colab`) and want compute-unit balance in the menu bar. **Opt-in**
+(Settings → Providers), default **off**; no token ledger, rate-limit readings, or reports.
+
+**What the app does (only while enabled)**
+
+- Resolves `colab` on `PATH` (`~/.local/bin/colab`, Homebrew paths).
+- Does **not** read OAuth material. Current `google-colab-cli` stores tokens in the macOS Keychain
+  (`google-colab-cli`); older installs may still use `~/.config/colab-cli/token.json`. This app only spawns
+  `colab usage` — the CLI loads credentials itself.
+- Spawns `colab usage` (read-only; the CLI performs HTTPS to Google). Parses three lines from stdout:
+  `Current balance`, `Usage rate`, `Active assignments`. Stderr is discarded; output over 64 KiB is refused.
+- Polls about every 15 minutes, once on enable, and on manual Refresh. Balance, burn rate, and active VM
+  count stay **in memory only**; disabling the toggle clears them.
+
+**Honesty**
+
+- Values are **provider-reported** via the Colab CLI (confidence: high for shape). Errors use a closed
+  vocabulary (`not signed in — run colab once`, `colab CLI not found`, etc.) — never raw stderr.
+
 ## OpenRouter credits (optional, off by default; not a provider adapter)
 
-For people who run **opencode** on OpenRouter prepaid credits. This is the app's second (and last)
-network feature; it is **opt-in** (Settings → Providers), default **off**, and lives entirely outside the
+For people who run **opencode** on OpenRouter prepaid credits. This feature is **opt-in** (Settings → Providers), default **off**, and lives entirely outside the
 adapter layer — it produces no usage events, no rate-limit readings, and never feeds the rings, moods,
 notifications, reports, or the CLI.
 

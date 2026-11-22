@@ -83,6 +83,7 @@ struct MenuBarLabel: View {
         return Group {
             if let image = MenuBarBadgeRenderer.image(petEmoji: model.menuBarPetEmoji,
                                                       badges: model.menuBarBadges,
+                                                      creditBadges: model.menuBarCreditBadges,
                                                       showsPlaceholder: model.menuBarShowsPlaceholder,
                                                       ink: ink,
                                                       customInkHex: inkHex,

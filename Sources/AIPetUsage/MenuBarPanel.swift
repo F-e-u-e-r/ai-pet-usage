@@ -129,6 +129,9 @@ private struct PanelHeader: View {
                     if model.settings.openRouterCreditsEnabled {
                         OpenRouterCreditsRow(status: model.orCredits.status, now: context.date)
                     }
+                    if model.settings.colabCreditsEnabled {
+                        ColabCreditsRow(status: model.colabCredits.status, now: context.date)
+                    }
                     if model.settings.grokQuotaEnabled,
                        !model.settings.core.enabledProviders.contains("grok-code") {
                         GrokQuotaRow(status: model.grokQuota.status, now: context.date)
@@ -287,6 +290,66 @@ private struct ProviderStatusRow: View {
         return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly))\(weeklyAge). "
             + ResetLabel.accessibility(fiveHourResetAt: state.fiveHour.resetAt,
                                        weeklyResetAt: state.weekly.resetAt, now: now)
+    }
+}
+
+/// Colab compute-unit balance (opt-in). Layout matches `OpenRouterCreditsRow`.
+private struct ColabCreditsRow: View {
+    let status: ColabCreditsStatus
+    let now: Date
+
+    private static let yellow = Color(red: 0xF9 / 255, green: 0xAB / 255, blue: 0x00 / 255)
+
+    var body: some View {
+        let p = status.presentation(now: now)
+        Group {
+            if p.detail == nil {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Circle().fill(Self.yellow).frame(width: 8, height: 8)
+                        Text("Colab")
+                            .font(.callout.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let age = p.age {
+                            Text(age)
+                                .font(.caption).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(p.detail.map { "\(p.primary) · \($0)" } ?? p.primary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 16)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Circle().fill(Self.yellow).frame(width: 8, height: 8)
+                    Text("Colab")
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(p.primary)
+                            .font(.callout.weight(.semibold)).monospacedDigit()
+                            .lineLimit(1).minimumScaleFactor(0.85)
+                        if let detail = p.detail {
+                            Text(p.stale ? "\(detail) · stale" : detail)
+                                .font(.caption2).monospacedDigit()
+                                .foregroundStyle(p.stale ? .orange : .secondary)
+                                .lineLimit(1).minimumScaleFactor(0.85)
+                        }
+                    }
+                    Text(p.age.map { "\($0)" } ?? "")
+                        .font(.caption).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
+            }
+        }
+        .help(p.tooltip)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(p.tooltip)
     }
 }
 

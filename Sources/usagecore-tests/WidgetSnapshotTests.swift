@@ -2,6 +2,43 @@ import Foundation
 @testable import UsageCore
 
 final class WidgetSnapshotTests: XCTestCase {
+    func testBuilderIncludesColabCreditRowWhenEnabled() {
+        let now = Date()
+        let dash = DashboardState(
+            generatedAt: now,
+            snapshots: [],
+            limitStates: [],
+            todayTotals: .zero,
+            todayCost: .zero,
+            todayByProvider: [],
+            burnRateTokensPerHour: 0,
+            burnCostPerHour: 0,
+            hourly: [],
+            topProjects: [],
+            models: [],
+            dataQuality: [],
+            lastRefreshAt: now
+        )
+        let colab = ColabCreditsSnapshot(balanceUnits: 169.77, consumptionRatePerHour: 6.73,
+                                         activeAssignments: 1, fetchedAt: now)
+        let snap = WidgetSnapshotBuilder.build(
+            dashboard: dash,
+            limitStates: [],
+            enabledProviders: [],
+            colabCreditsEnabled: true,
+            colabSnapshot: colab
+        )
+        XCTAssertEqual(snap.creditRows.count, 1)
+        XCTAssertEqual(snap.creditRows[0].id, "colab")
+        XCTAssertEqual(snap.creditRows[0].primary, "169.77CU")
+        XCTAssertEqual(snap.creditRows[0].secondary, "6.73/h")
+        XCTAssertTrue(WidgetSnapshotStore.isPopulated(snap))
+        let off = WidgetSnapshotBuilder.build(
+            dashboard: dash, limitStates: [], enabledProviders: [],
+            colabCreditsEnabled: false, colabSnapshot: colab)
+        XCTAssertTrue(off.creditRows.isEmpty)
+    }
+
     func testBuilderFiltersDisabledProviders() {
         let now = Date()
         let limits = [
@@ -47,6 +84,9 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(grokOnly.rows.map { $0.providerId }, ["grok-code"])
         XCTAssertNil(grokOnly.rows.first?.fiveHourPercent)
         XCTAssertEqual(grokOnly.rows.first?.weeklyPercent, 30)
+        XCTAssertEqual(grokOnly.rows.first?.weeklyEstimated, true)
+        let codexRow = snap.rows.first { $0.providerId == "codex" }
+        XCTAssertEqual(codexRow?.weeklyEstimated, false)
     }
 
     func testWidgetExtensionReadPrefersSupportBeforeShared() {
@@ -284,7 +324,7 @@ final class WidgetSnapshotTests: XCTestCase {
             weeklyAsOf: nil
         )
         XCTAssertNil(row.weeklyStaleLabel(now: now))
-        XCTAssertFalse(row.isWeeklyStale)
+        XCTAssertFalse(row.isWeeklyStale(now: now))
     }
 
     func testWeeklyStaleLabelNilWhenNoWeeklyPercent() {
@@ -300,7 +340,7 @@ final class WidgetSnapshotTests: XCTestCase {
             weeklyAsOf: now.addingTimeInterval(-3600)
         )
         XCTAssertNil(row.weeklyStaleLabel(now: now))
-        XCTAssertFalse(row.isWeeklyStale)
+        XCTAssertFalse(row.isWeeklyStale(now: now))
     }
 
     func testWeeklyStaleLabelTenHoursAgo() {
@@ -316,7 +356,7 @@ final class WidgetSnapshotTests: XCTestCase {
             weeklyAsOf: now.addingTimeInterval(-10 * 3600)
         )
         XCTAssertEqual(row.weeklyStaleLabel(now: now), "as of 10h ago")
-        XCTAssertTrue(row.isWeeklyStale)
+        XCTAssertTrue(row.isWeeklyStale(now: now))
     }
 
     func testWeeklyStaleLabelFutureSkew() {
@@ -332,7 +372,7 @@ final class WidgetSnapshotTests: XCTestCase {
             weeklyAsOf: now.addingTimeInterval(5 * 60)
         )
         XCTAssertEqual(row.weeklyStaleLabel(now: now), "stale")
-        XCTAssertTrue(row.isWeeklyStale)
+        XCTAssertTrue(row.isWeeklyStale(now: now))
     }
 
     func testWeeklyStaleLabelUnderThreshold() {
@@ -347,8 +387,26 @@ final class WidgetSnapshotTests: XCTestCase {
             idle: false,
             weeklyAsOf: now.addingTimeInterval(-10 * 60)
         )
-        XCTAssertEqual(row.weeklyStaleLabel(now: now), "stale")
-        XCTAssertTrue(row.isWeeklyStale)
+        XCTAssertNil(row.weeklyStaleLabel(now: now))
+        XCTAssertFalse(row.isWeeklyStale(now: now))
+    }
+
+    func testWeeklyStaleLabelAgesAfterSnapshotBuild() {
+        let builtAt = Date(timeIntervalSince1970: 1_000_000)
+        let observed = builtAt.addingTimeInterval(-20 * 60)
+        let row = WidgetSnapshotRow(
+            providerId: "claude-code",
+            shortName: "Claude",
+            code: "cc",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: 39,
+            idle: false,
+            weeklyAsOf: observed
+        )
+        XCTAssertNil(row.weeklyStaleLabel(now: builtAt))
+        let twoHoursLater = builtAt.addingTimeInterval(2 * 3600)
+        XCTAssertEqual(row.weeklyStaleLabel(now: twoHoursLater), "as of 2h ago")
     }
 
     func testWidgetSnapshotRowWeeklyAsOfJSONRoundTrip() throws {

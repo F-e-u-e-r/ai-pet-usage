@@ -70,6 +70,8 @@ struct AppSettings: Codable {
     /// OpenRouter credits 監控(opt-in,**預設關**;boundary 變更見 docs/DATA_SOURCES.md)。
     /// GUI-only 設定,刻意不放 `core` —— CLI 維持零網路。
     var openRouterCreditsEnabled: Bool = false
+    /// Colab compute-unit balance via `colab usage` (opt-in, default off).
+    var colabCreditsEnabled: Bool = false
     var grokQuotaEnabled: Bool = false
     var grokQuotaKilledAtVersion: String? = nil
     var cursorQuotaEnabled: Bool = false
@@ -120,7 +122,7 @@ struct AppSettings: Codable {
         case menuBarDisplayMode, alertsSnoozedUntil
         case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
         case speciesPackIdOverride
-        case openRouterCreditsEnabled
+        case openRouterCreditsEnabled, colabCreditsEnabled
         case grokQuotaEnabled
         case grokQuotaKilledAtVersion
         case cursorQuotaEnabled
@@ -161,6 +163,7 @@ struct AppSettings: Codable {
         dailyExportFolderPath = (try? c.decodeIfPresent(String.self, forKey: .dailyExportFolderPath)) ?? nil
         speciesPackIdOverride = (try? c.decodeIfPresent(String.self, forKey: .speciesPackIdOverride)) ?? nil
         openRouterCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .openRouterCreditsEnabled)) ?? false ?? false
+        colabCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .colabCreditsEnabled)) ?? false ?? false
         grokQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .grokQuotaEnabled)) ?? false ?? false
         grokQuotaKilledAtVersion = (try? c.decodeIfPresent(String.self, forKey: .grokQuotaKilledAtVersion)) ?? nil ?? nil
         cursorQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .cursorQuotaEnabled)) ?? false ?? false
@@ -207,6 +210,7 @@ struct AppSettings: Codable {
         try c.encodeIfPresent(dailyExportFolderPath, forKey: .dailyExportFolderPath)
         try c.encodeIfPresent(speciesPackIdOverride, forKey: .speciesPackIdOverride)
         try c.encode(openRouterCreditsEnabled, forKey: .openRouterCreditsEnabled)
+        try c.encode(colabCreditsEnabled, forKey: .colabCreditsEnabled)
         try c.encode(grokQuotaEnabled, forKey: .grokQuotaEnabled)
         try c.encodeIfPresent(grokQuotaKilledAtVersion, forKey: .grokQuotaKilledAtVersion)
         try c.encode(cursorQuotaEnabled, forKey: .cursorQuotaEnabled)

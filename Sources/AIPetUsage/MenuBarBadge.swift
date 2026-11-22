@@ -38,6 +38,7 @@ func severityColor(_ severity: UsageSeverity) -> Color? {
 struct MenuBarBadgeView: View {
     let petEmoji: String
     let badges: [MenuBadge]
+    let creditBadges: [MenuCreditBadge]
     let showsPlaceholder: Bool
     /// 一般文字色,依選單列深淺決定(烤圖時無法用動態色)。
     let baseColor: Color
@@ -49,7 +50,7 @@ struct MenuBarBadgeView: View {
             // 每個 Text 都明確上色:ImageRenderer 的預設 ink 是固定的淺色配色(黑),不跟 systemIsDark 也不跟 app 外觀
             //(probe G4)。彩色 emoji 不受 foreground 影響;單色 glyph 靠這行在深色選單列上保有對比。
             Text(petEmoji).font(.system(size: 13)).foregroundStyle(baseColor)
-            if badges.isEmpty, showsPlaceholder {
+            if badges.isEmpty, creditBadges.isEmpty, showsPlaceholder {
                 Text("—")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(baseColor.opacity(0.7))
@@ -83,6 +84,20 @@ struct MenuBarBadgeView: View {
                     }
                 }
             }
+            ForEach(creditBadges) { badge in
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(Color(nsColor: NSColor(hex: badge.dotColor)))
+                        .frame(width: 7, height: 7)
+                    Text(badge.badgeLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(baseColor.opacity(0.85))
+                    Text(badge.value)
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(baseColor)
+                }
+            }
         }
         .padding(.horizontal, 2)
         .frame(height: 18)
@@ -113,13 +128,14 @@ enum MenuBarBadgeRenderer {
     ///(會被 app 的 Light/Dark 偏好覆寫,徽章會在系統選單列上失去對比)、不讀繪圖 context、不讀設定;
     /// 上述禁令由 AppearanceWiringGuardTests 以字面掃描鎖住(含註解)。
     /// 選單列深淺以系統外觀近似(罕見的桌布淺色選單列 + 深色系統外觀組合會有對比落差,屬已知限制)。
-    static func image(petEmoji: String, badges: [MenuBadge], showsPlaceholder: Bool,
+    static func image(petEmoji: String, badges: [MenuBadge], creditBadges: [MenuCreditBadge] = [],
+                      showsPlaceholder: Bool,
                       ink: MenuBarBadgeInkPreference, customInkHex: UInt32?,
                       systemIsDark: Bool) -> NSImage? {
         let base = ink.baseColor(systemIsDark: systemIsDark, customHex: customInkHex)
         let uniformInk = ink != .automatic
         let renderer = ImageRenderer(content: MenuBarBadgeView(
-            petEmoji: petEmoji, badges: badges,
+            petEmoji: petEmoji, badges: badges, creditBadges: creditBadges,
             showsPlaceholder: showsPlaceholder, baseColor: base, uniformInk: uniformInk))
         renderer.scale = 2
         guard let image = renderer.nsImage else { return nil }

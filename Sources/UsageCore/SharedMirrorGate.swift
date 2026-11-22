@@ -51,6 +51,7 @@ enum SharedMirrorGate {
                 _ = fchmod(uidFD, 0o700)
             }
         }
+        _ = InstallHook.clearExtendedACL(uidFD)
         guard validateUIDDirectoryFD(uidFD),
               let id = inodeIdentity(fd: uidFD) else { return nil }
         return (uidDirectoryPath(), id)
@@ -79,6 +80,12 @@ enum SharedMirrorGate {
         let tmp = ".\(fileName).\(ProcessInfo.processInfo.globallyUniqueString).tmp"
         let wfd = openat(dirFD, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard wfd >= 0 else { return false }
+        _ = fchmod(wfd, 0o600)
+        guard InstallHook.clearExtendedACL(wfd) else {
+            close(wfd)
+            _ = unlinkat(dirFD, tmp, 0)
+            return false
+        }
         let wrote: Bool = data.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return false }
             var offset = 0
@@ -105,6 +112,7 @@ enum SharedMirrorGate {
         let outFD = openat(dirFD, fileName, O_RDONLY | O_NOFOLLOW)
         if outFD >= 0 {
             _ = fchmod(outFD, 0o600)
+            _ = InstallHook.clearExtendedACL(outFD)
             close(outFD)
         }
         return true
@@ -127,6 +135,8 @@ enum SharedMirrorGate {
         guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
         _ = fcntl(fd, F_SETFL, 0)
         guard st.st_uid == getuid() else { return nil }
+        guard (st.st_mode & 0o0777) == 0o600 else { return nil }
+        guard InstallHook.fdHasNoEffectiveExtendedACL(fd) else { return nil }
         let size = Int(st.st_size)
         guard size >= 0, size <= 4_194_304 else { return nil }
         var data = Data(count: size)
@@ -170,6 +180,8 @@ enum SharedMirrorGate {
     }
 
     private static func ensureRootExists() -> Bool {
+        // Default path: `Scripts/install-local-app.sh` promotes `/Users/Shared/AIPetUsage` to
+        // root:wheel + 01777 so additional macOS users can use per-UID mirrors under ACL checks.
         // Overridden roots (`AIPET_SHARED_MIRROR_ROOT`, e.g. tests) are never created or
         // chmod'ed — they must already exist and pass root validation, else skip the mirror.
         guard rootPath == defaultRootPath else {
@@ -224,8 +236,8 @@ enum SharedMirrorGate {
         let sticky = (mode & 0o1000) != 0
         let worldWritable = (mode & 0o002) != 0
         guard sticky && worldWritable else { return false }
-        // Multi-user: prefer root-owned sticky `/Users/Shared` pattern; allow self-owned for dev installs.
-        return st.st_uid == 0 || st.st_uid == getuid()
+        guard st.st_uid == 0 || st.st_uid == getuid() else { return false }
+        return InstallHook.fdHasNoEffectiveExtendedACL(fd)
     }
 
     private static func validateUIDDirectoryFD(_ fd: Int32) -> Bool {
@@ -233,6 +245,7 @@ enum SharedMirrorGate {
         guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return false }
         guard st.st_uid == getuid() else { return false }
         let mode = st.st_mode & 0o0777
-        return mode == 0o700
+        guard mode == 0o700 else { return false }
+        return InstallHook.fdHasNoEffectiveExtendedACL(fd)
     }
 }

@@ -45,6 +45,7 @@ final class AppModel {
     let coordinator: UsageCoordinator
     /// OpenRouter credits 監控(opt-in;獨立 15 分鐘節奏,刻意不掛 FSEvents 刷新風暴)。
     let orCredits = OpenRouterCreditsChecker()
+    let colabCredits = ColabCreditsChecker()
     let grokQuota = GrokQuotaChecker()
     let cursorQuota = CursorQuotaChecker()
     private let settingsStore: SettingsStore
@@ -117,6 +118,11 @@ final class AppModel {
         }
         if settings.notificationsEnabled { Notifier.requestAuthorization() }
         orCredits.setEnabled(settings.openRouterCreditsEnabled)
+        colabCredits.onDidUpdate = { [weak self] in
+            self?.publishWidgetSnapshot()
+            self?.bumpMenuBarChromePresentation()
+        }
+        colabCredits.setEnabled(settings.colabCreditsEnabled)
         grokQuota.killedAtVersion = (
             get: { [weak self] in self?.settings.grokQuotaKilledAtVersion },
             set: { [weak self] v in self?.updateSettings { $0.grokQuotaKilledAtVersion = v } })
@@ -168,6 +174,7 @@ final class AppModel {
         claudeProbeTask?.cancel()     // 同 codexStopped fence
         claudeProbeHandle?.cancel()   // 同步 SIGKILL 探針整個程序群組(detached 擷取不吃 task 取消;quit 不留孤兒)
         orCredits.setEnabled(false)
+        colabCredits.setEnabled(false)
         grokQuota.setEnabled(false)   // r1 三鏡:stop 漏停 grok 會讓輪詢在 teardown 後殘留
         cursorQuota.setEnabled(false)
     }
@@ -232,6 +239,7 @@ final class AppModel {
     /// 會 bypass 401/kill 門檻(r4 ultra;與 bootstrap≠manual 同構)。
     func userRefresh() async {
         orCredits.refreshNow()
+        if settings.colabCreditsEnabled { colabCredits.refreshNow() }
         if settings.grokQuotaEnabled { grokQuota.refreshNow() }
         if settings.cursorQuotaEnabled { cursorQuota.refreshNow() }
         requestCodexOfficialFetch()   // ⌘R 亦受統一 60s 閘 + 單流(owner:B spawn 不超過 ~每 60s 一次)
@@ -393,6 +401,7 @@ final class AppModel {
         } else {
             rows.append(cursorApi)
         }
+        rows.append(colabCredits.dataSourceStatus())
         return rows
     }
 
@@ -419,7 +428,9 @@ final class AppModel {
         WidgetSnapshotPublisher.publish(
             dashboard: dashboard,
             limitStates: orderedChromeLimitStates,
-            enabledProviders: settings.core.enabledProviders
+            enabledProviders: settings.core.enabledProviders,
+            colabCreditsEnabled: settings.colabCreditsEnabled,
+            colabSnapshot: colabCredits.status.snapshot
         )
     }
 
@@ -506,6 +517,7 @@ final class AppModel {
         let oldEngineV2 = settings.petEngineV2Enabled
         let oldRange = settings.petWanderRangePercent
         let oldORCredits = settings.openRouterCreditsEnabled
+        let oldColabCredits = settings.colabCreditsEnabled
         let oldGrokQuota = settings.grokQuotaEnabled
         let oldCursorQuota = settings.cursorQuotaEnabled
         let oldAntigravityQuota = settings.antigravityQuotaEnabled
@@ -560,6 +572,11 @@ final class AppModel {
         }
         if oldORCredits != settings.openRouterCreditsEnabled {
             orCredits.setEnabled(settings.openRouterCreditsEnabled)
+        }
+        if oldColabCredits != settings.colabCreditsEnabled {
+            colabCredits.setEnabled(settings.colabCreditsEnabled)
+            bumpMenuBarChromePresentation()
+            Task { [weak self] in await self?.refreshSourceStatuses() }
         }
         // Pet Engine V2 切換:flag 先映射;面板重建整合進下方的單一分派
         //(避免重建後又走一次 apply 的雙重 restart;grok P2-6)。
@@ -798,6 +815,17 @@ final class AppModel {
                                        onlyWarnings: settings.menuBarDisplayMode == .compact)
     }
 
+    /// Colab compute units on the menu bar icon (opt-in; not a 5h/wk ring).
+    var menuBarCreditBadges: [MenuCreditBadge] {
+        guard settings.menuBarDisplayMode != .petOnly else { return [] }
+        guard settings.colabCreditsEnabled, let snap = colabCredits.status.snapshot else { return [] }
+        let bal = ColabCreditsStatus.fmtUnits(snap.balanceUnits)
+        let brand = ProviderBrands.brand(for: "colab")
+        let label = resolveMenuBarBadgeLabel(providerId: "colab", displayName: brand.shortName) ?? brand.code
+        return [MenuCreditBadge(id: "colab", badgeLabel: label, dotColor: brand.dotColor,
+                                needsOutline: brand.needsOutline, value: "\(bal)CU")]
+    }
+
     /// 選單列開頭標記:full 模式用所選物種,monitor-only 用 🐾。
     /// pack id 先查 displayInfo(bird 無 enum case,resolvedSpecies 會錯落到 dog)。
     var menuBarPetEmoji: String {
@@ -819,14 +847,19 @@ final class AppModel {
 
     /// Full 模式且完全無資料時顯示「—」佔位;Compact/PetOnly 留空是語意本身。
     var menuBarShowsPlaceholder: Bool {
-        settings.menuBarDisplayMode == .full && menuBarBadges.isEmpty
+        settings.menuBarDisplayMode == .full
+            && menuBarBadges.isEmpty && menuBarCreditBadges.isEmpty
     }
 
     /// 輔助功能全句(spec §11):全名 + severity,不得只給短代號。
     var menuBarAccessibilityLabel: String {
-        let base = MenuBadgeBuilder.accessibilitySummary(
+        var base = MenuBadgeBuilder.accessibilitySummary(
             petName: settings.appMode == .full ? settings.resolvedSpecies.displayName : "AI Pet Usage",
             badges: menuBarBadges)
+        if !menuBarCreditBadges.isEmpty {
+            let credits = menuBarCreditBadges.map { "\($0.badgeLabel) \($0.value)" }.joined(separator: ", ")
+            base = base + " Credits: \(credits)."
+        }
         // 心情原因只在全模式附上(monitor-only 不建立寵物、mood 不更新)。
         guard settings.appMode == .full else { return base }
         return "\(base) Pet mood: \(mood.mood.rawValue) — \(mood.reason)"
@@ -850,7 +883,9 @@ final class AppModel {
             }
             return "\(tag)\(a)/\(b)"
         }
-        let usage = parts.isEmpty ? (menuBarShowsPlaceholder ? "—" : "") : parts.joined(separator: " ")
+        let creditParts = menuBarCreditBadges.map { "\($0.badgeLabel)\($0.value)" }
+        let combined = (parts + creditParts).joined(separator: " ")
+        let usage = combined.isEmpty ? (menuBarShowsPlaceholder ? "—" : "") : combined
         return usage.isEmpty ? menuBarPetEmoji : "\(menuBarPetEmoji) \(usage)"
     }
 

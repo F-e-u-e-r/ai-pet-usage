@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import UsageCore
 
@@ -566,6 +567,25 @@ final class InstallHookTests: XCTestCase {
         }
         // EOPNOTSUPP 與 ENOTSUP 在 Darwin 上是不同值(grok code-r13 實測),兩者都要涵蓋
         XCTAssertTrue(EOPNOTSUPP != ENOTSUP, "Darwin 上兩者不同值,分類必須各自涵蓋")
+    }
+
+    func testEmptyExtendedACLObjectAllowed() throws {
+        let dir = plainTempDir()
+        let path = dir.appendingPathComponent("probe").path
+        FileManager.default.createFile(atPath: path, contents: Data([0x41]), attributes: nil)
+        let fd = open(path, O_RDWR)
+        guard fd >= 0 else {
+            print("  ⓘ testEmptyExtendedACLObjectAllowed skipped — open failed"); return
+        }
+        defer { close(fd) }
+        guard let empty = acl_init(0) else {
+            print("  ⓘ testEmptyExtendedACLObjectAllowed skipped — acl_init failed"); return
+        }
+        defer { acl_free(UnsafeMutableRawPointer(empty)) }
+        guard acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0 else {
+            print("  ⓘ testEmptyExtendedACLObjectAllowed skipped — acl_set_fd_np unsupported"); return
+        }
+        XCTAssertTrue(InstallHook.fdHasNoEffectiveExtendedACL(fd))
     }
 
     func testAlreadyInstalledHardlinkToHookRefused() throws {

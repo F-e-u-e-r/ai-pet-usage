@@ -18,7 +18,7 @@ PANEL_REVIEW=1 PRE_COMMIT_REVIEW=1 bash checks/precommit-review-gate.sh
 ```
 
 **Panel vs gate:** only **sol** and **grok-4.7** lines can block a commit when `PRE_COMMIT_REVIEW=1`.  
-Nim and TypeSafe AI are listed for future adapter work; they are not app providers yet.
+Nim and TypeSafe AI are listed for future adapter work; they are not app providers yet. When `PANEL_REVIEW=1`, **typesafe** runs as an extra nim dispatch (TypeSafe lens prompt).
 
 **Env**
 

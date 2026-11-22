@@ -60,6 +60,8 @@ public enum ProviderBrands {
                       dotColor: 0x1E1E1E, needsOutline: true),
         ProviderBrand(id: "cursor-ide-api", code: "C3", shortName: "Cursor", displayName: "Cursor · other models",
                       dotColor: 0x1E1E1E, needsOutline: true),
+        ProviderBrand(id: "colab", code: "Co", shortName: "Colab", displayName: "Colab credits",
+                      dotColor: 0xF9AB00, needsOutline: false),
     ]
 
     public static func brand(for providerId: String, displayName: String? = nil) -> ProviderBrand {
@@ -142,6 +144,23 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
         if severities.contains(.danger) { return .danger }
         if severities.contains(.warn) { return .warn }
         return .normal
+    }
+}
+
+/// Opt-in account credit on the menu bar (Colab CU, etc.) — single value, not 5h/wk.
+public struct MenuCreditBadge: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let badgeLabel: String
+    public let dotColor: UInt32
+    public let needsOutline: Bool
+    public let value: String
+
+    public init(id: String, badgeLabel: String, dotColor: UInt32, needsOutline: Bool = false, value: String) {
+        self.id = id
+        self.badgeLabel = badgeLabel
+        self.dotColor = dotColor
+        self.needsOutline = needsOutline
+        self.value = value
     }
 }
 

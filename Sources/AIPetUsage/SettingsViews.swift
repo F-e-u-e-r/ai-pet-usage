@@ -404,7 +404,7 @@ struct DataHealthSettings: View {
             } header: {
                 Text("Where every number comes from")
             } footer: {
-                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits and Grok quota checks (Providers tab, both off by default). A degraded source never blanks the rest of the dashboard.")
+                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits, Colab credits, Grok quota, Cursor quota, and Antigravity quota checks (Providers tab — all off by default except where noted). A degraded source never blanks the rest of the dashboard.")
                     .font(Theme.FontScale.note)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -537,6 +537,30 @@ struct ProviderSettings: View {
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Show Colab compute-unit balance (colab CLI)", isOn: Binding(
+                    get: { model.settings.colabCreditsEnabled },
+                    set: { v in model.updateSettings { $0.colabCreditsEnabled = v } }
+                ))
+            } header: {
+                Text("Colab credits")
+            } footer: {
+                Text("Runs `colab usage` about every 15 minutes. Also appears on Today, menu bar, and Data Health when enabled.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+
+            Section("OpenRouter credits") {
+                Toggle("Show OpenRouter credit balance (opencode)", isOn: Binding(
+                    get: { model.settings.openRouterCreditsEnabled },
+                    set: { v in model.updateSettings { $0.openRouterCreditsEnabled = v } }
+                ))
+                Text("""
+                Off by default. Reads opencode's OpenRouter API key and asks openrouter.ai for prepaid \
+                credit totals — about every 15 minutes and on manual Refresh.
+                """)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             ForEach(infos, id: \.providerId) { info in
                 Section(info.displayName) {
                     Toggle("Enabled", isOn: Binding(
@@ -608,25 +632,6 @@ struct ProviderSettings: View {
                 changes or you press Refresh. Quota responses stay in memory (only this toggle and a \
                 format-protection marker are saved in settings — never the token or quota). Source health appears under Data Health as its \
                 own row, separate from Grok local logs.
-                """)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            // OpenRouter credits(opt-in;boundary 變更 —— 揭露文案必須說清楚讀什麼、送哪裡)。
-            Section("OpenRouter credits") {
-                Toggle("Show OpenRouter credit balance (opencode)", isOn: Binding(
-                    get: { model.settings.openRouterCreditsEnabled },
-                    set: { v in model.updateSettings { $0.openRouterCreditsEnabled = v } }
-                ))
-                Text("""
-                Off by default. When on, the app reads the OpenRouter API key that opencode saved in \
-                ~/.local/share/opencode/auth.json (or $XDG_DATA_HOME/opencode/auth.json when set; the \
-                file is read as bytes and only the "openrouter" entry is decoded) and asks \
-                https://openrouter.ai for your prepaid credit totals — about every 15 minutes and on \
-                manual Refresh. The key is sent only to openrouter.ai as the \
-                Authorization header over HTTPS (system TLS, redirects refused) and is never stored, \
-                logged, exported, or displayed. The balance appears in the menu-bar dropdown and the \
-                pet's bubble; nothing about it is written to disk. No other account data is fetched.
                 """)
                     .font(.caption).foregroundStyle(.secondary)
             }

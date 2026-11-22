@@ -225,17 +225,18 @@ PROMPT
 
 if [ "${PANEL_REVIEW:-0}" = "1" ]; then
   echo "== Phase 3a: panel ratings (non-authoritative) =="
-  while IFS=':' read -r tool model tag role; do
+  while IFS='|' read -r tool model tag role; do
     [ -n "$tool" ] || continue
     role="${role:-$tag}"
     verdict="$(review "$tool" "$model" "$tag" "$role" || echo error)"
     echo "  panel $tag → $verdict"
   done <<'PANEL'
-codex:gpt-5.6-luna:panel-codex:Codex implementer
-agy:gemini-3.8-flash-medium:panel-agy:Antigravity agy
-grok:grok-4.7:panel-grok:Grok
-opencode:opencode/glm-5.3-flash-free:panel-opencode:OpenCode
-nim:nvidia/z-ai/glm-5.3-flash:panel-nim:NIM
+codex|gpt-5.6-luna|panel-codex|Codex implementer
+agy|gemini-3.8-flash-medium|panel-agy|Antigravity agy
+grok|grok-4.7|panel-grok|Grok
+opencode|opencode/glm-5.3-flash-free|panel-opencode|OpenCode
+nim|nvidia/z-ai/glm-5.3-flash|panel-nim|NIM
+nim|nvidia/z-ai/glm-5.3-flash|panel-typesafe|TypeSafe AI lens
 PANEL
 fi
 

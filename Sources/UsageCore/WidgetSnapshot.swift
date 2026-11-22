@@ -9,19 +9,23 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
     public var todayCostUSD: Double?
     public var todayCostIsEstimated: Bool
     public var rows: [WidgetSnapshotRow]
+    /// Opt-in account credits (Colab compute units, etc.) — not 5h/wk limit meters.
+    public var creditRows: [WidgetCreditRow]
 
     public init(
         generatedAt: Date,
         todayTokens: Int,
         todayCostUSD: Double?,
         todayCostIsEstimated: Bool,
-        rows: [WidgetSnapshotRow]
+        rows: [WidgetSnapshotRow],
+        creditRows: [WidgetCreditRow] = []
     ) {
         self.generatedAt = generatedAt
         self.todayTokens = todayTokens
         self.todayCostUSD = todayCostUSD
         self.todayCostIsEstimated = todayCostIsEstimated
         self.rows = rows
+        self.creditRows = creditRows
     }
 
     public static let empty = WidgetSnapshot(
@@ -29,8 +33,35 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
         todayTokens: 0,
         todayCostUSD: nil,
         todayCostIsEstimated: false,
-        rows: []
+        rows: [],
+        creditRows: []
     )
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedAt, todayTokens, todayCostUSD, todayCostIsEstimated, rows, creditRows
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try c.decode(Date.self, forKey: .generatedAt)
+        todayTokens = try c.decode(Int.self, forKey: .todayTokens)
+        todayCostUSD = try c.decodeIfPresent(Double.self, forKey: .todayCostUSD)
+        todayCostIsEstimated = try c.decodeIfPresent(Bool.self, forKey: .todayCostIsEstimated) ?? false
+        rows = try c.decode([WidgetSnapshotRow].self, forKey: .rows)
+        creditRows = try c.decodeIfPresent([WidgetCreditRow].self, forKey: .creditRows) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(generatedAt, forKey: .generatedAt)
+        try c.encode(todayTokens, forKey: .todayTokens)
+        try c.encodeIfPresent(todayCostUSD, forKey: .todayCostUSD)
+        try c.encode(todayCostIsEstimated, forKey: .todayCostIsEstimated)
+        try c.encode(rows, forKey: .rows)
+        if !creditRows.isEmpty {
+            try c.encode(creditRows, forKey: .creditRows)
+        }
+    }
 
     /// `todayTokens` / `todayCostUSD` describe the day the snapshot was generated; once the app stops
     /// publishing, a snapshot from an earlier day must not be rendered as "today".
@@ -47,9 +78,10 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
     public var fiveHourPercent: Int?
     public var weeklyPercent: Int?
     public var idle: Bool
-    /// 週窗值的讀數時間 —— 僅在讀數已超過 `StatuslineAge.labelThreshold` 時設定(Claude 列),
-    /// widget 據此顯示「as of …」;nil = 即時值或非 Claude 列。
+    /// 週窗讀數時間(Claude / Cursor / Antigravity 列);widget 在 render 時依 `now` 決定是否顯示「as of …」。
     public var weeklyAsOf: Date?
+    /// Grok billing credits on the weekly column (`LimitWindowState.confidence == .estimated`).
+    public var weeklyEstimated: Bool
 
     public var id: String { providerId }
 
@@ -61,7 +93,8 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         fiveHourPercent: Int?,
         weeklyPercent: Int?,
         idle: Bool,
-        weeklyAsOf: Date? = nil
+        weeklyAsOf: Date? = nil,
+        weeklyEstimated: Bool = false
     ) {
         self.providerId = providerId
         self.shortName = shortName
@@ -71,16 +104,75 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         self.weeklyPercent = weeklyPercent
         self.idle = idle
         self.weeklyAsOf = weeklyAsOf
+        self.weeklyEstimated = weeklyEstimated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerId, shortName, code, dotColor, fiveHourPercent, weeklyPercent, idle, weeklyAsOf
+        case weeklyEstimated
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        providerId = try c.decode(String.self, forKey: .providerId)
+        shortName = try c.decode(String.self, forKey: .shortName)
+        code = try c.decode(String.self, forKey: .code)
+        dotColor = try c.decode(UInt32.self, forKey: .dotColor)
+        fiveHourPercent = try c.decodeIfPresent(Int.self, forKey: .fiveHourPercent)
+        weeklyPercent = try c.decodeIfPresent(Int.self, forKey: .weeklyPercent)
+        idle = try c.decode(Bool.self, forKey: .idle)
+        weeklyAsOf = try c.decodeIfPresent(Date.self, forKey: .weeklyAsOf)
+        weeklyEstimated = try c.decodeIfPresent(Bool.self, forKey: .weeklyEstimated) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(providerId, forKey: .providerId)
+        try c.encode(shortName, forKey: .shortName)
+        try c.encode(code, forKey: .code)
+        try c.encode(dotColor, forKey: .dotColor)
+        try c.encodeIfPresent(fiveHourPercent, forKey: .fiveHourPercent)
+        try c.encodeIfPresent(weeklyPercent, forKey: .weeklyPercent)
+        try c.encode(idle, forKey: .idle)
+        try c.encodeIfPresent(weeklyAsOf, forKey: .weeklyAsOf)
+        if weeklyEstimated { try c.encode(true, forKey: .weeklyEstimated) }
     }
 
     /// a11y/age text for a stale weekly value; nil when the weekly value is live or absent.
     public func weeklyStaleLabel(now: Date) -> String? {
-        guard weeklyAsOf != nil else { return nil }
-        guard weeklyPercent != nil else { return nil }
-        return StatuslineAge.asOfLabel(observedAt: weeklyAsOf, now: now) ?? "stale"
+        guard let observed = weeklyAsOf, weeklyPercent != nil else { return nil }
+        let age = now.timeIntervalSince(observed)
+        if age < 0 { return "stale" }
+        return StatuslineAge.asOfLabel(observedAt: observed, now: now)
     }
 
-    public var isWeeklyStale: Bool { weeklyAsOf != nil && weeklyPercent != nil }
+    public func isWeeklyStale(now: Date) -> Bool { weeklyStaleLabel(now: now) != nil }
+
+    /// Providers whose weekly column can age out while the widget re-renders on a frozen JSON snapshot.
+    static func carryWeeklyObservation(providerId: String, weeklyPercent: Int?) -> Bool {
+        guard weeklyPercent != nil else { return false }
+        return ClaudeScopedDisplay.isClaudeChromeId(providerId)
+            || AntigravityQuotaDisplay.isQuotaChromeId(providerId)
+            || CursorQuotaDisplay.isQuotaChromeId(providerId)
+    }
+}
+
+public struct WidgetCreditRow: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var shortName: String
+    public var dotColor: UInt32
+    /// Primary value, e.g. `169 CU`.
+    public var primary: String
+    /// Secondary detail, e.g. `6.73/hr · 1 active`.
+    public var secondary: String?
+
+    public init(id: String, shortName: String, dotColor: UInt32, primary: String, secondary: String?) {
+        self.id = id
+        self.shortName = shortName
+        self.dotColor = dotColor
+        self.primary = primary
+        self.secondary = secondary
+    }
 }
 
 public enum WidgetSnapshotPaths {
@@ -190,7 +282,8 @@ public enum WidgetSnapshotStore {
     }
 
     public static func isPopulated(_ snap: WidgetSnapshot) -> Bool {
-        snap.generatedAt != .distantPast && (!snap.rows.isEmpty || snap.todayTokens > 0)
+        snap.generatedAt != .distantPast
+            && (!snap.rows.isEmpty || !snap.creditRows.isEmpty || snap.todayTokens > 0)
     }
 }
 
@@ -215,6 +308,8 @@ public enum WidgetSnapshotBuilder {
         dashboard: DashboardState,
         limitStates: [ProviderLimitState],
         enabledProviders: Set<String>,
+        colabCreditsEnabled: Bool = false,
+        colabSnapshot: ColabCreditsSnapshot? = nil,
         maxRows: Int = 12
     ) -> WidgetSnapshot {
         let rowCap = max(0, maxRows)
@@ -253,8 +348,9 @@ public enum WidgetSnapshotBuilder {
                 fiveHourPercent: five,
                 weeklyPercent: week,
                 idle: idle,
-                weeklyAsOf: StatuslineAge.weeklyAsOfLabel(for: st, now: dashboard.generatedAt) != nil
-                    ? st.weekly.observedAt : nil
+                weeklyAsOf: WidgetSnapshotRow.carryWeeklyObservation(providerId: st.providerId, weeklyPercent: week)
+                    ? st.weekly.observedAt : nil,
+                weeklyEstimated: st.weekly.confidence == .estimated && week != nil
             ))
         }
 
@@ -268,13 +364,28 @@ public enum WidgetSnapshotBuilder {
             rows = Array(rows.prefix(rowCap))
         }
 
+        var creditRows: [WidgetCreditRow] = []
+        if colabCreditsEnabled, let snap = colabSnapshot {
+            let bal = ColabCreditsStatus.fmtUnits(snap.balanceUnits)
+            let rate = ColabCreditsStatus.fmtUnits(snap.consumptionRatePerHour)
+            // Widget columns are 30pt like 5h/wk — keep strings short; menu bar keeps full detail.
+            creditRows.append(WidgetCreditRow(
+                id: "colab",
+                shortName: "Colab",
+                dotColor: 0xF9AB00,
+                primary: "\(bal)CU",
+                secondary: "\(rate)/h"
+            ))
+        }
+
         let cost = dashboard.todayCost
         return WidgetSnapshot(
             generatedAt: dashboard.generatedAt,
             todayTokens: dashboard.todayTotals.total,
             todayCostUSD: cost.knownUSD,
             todayCostIsEstimated: cost.isEstimated,
-            rows: rows
+            rows: rows,
+            creditRows: creditRows
         )
     }
 

@@ -61,6 +61,7 @@ runSuite("InstallHookTests", [
     ("testAlreadyInstalledCanonicalAliasToHookRefused", installHook.testAlreadyInstalledCanonicalAliasToHookRefused),
     ("testHookACLRepairedWhenPresent", installHook.testHookACLRepairedWhenPresent),
     ("testACLAbsentErrnoClassification", installHook.testACLAbsentErrnoClassification),
+    ("testEmptyExtendedACLObjectAllowed", installHook.testEmptyExtendedACLObjectAllowed),
     ("testAlreadyInstalledHardlinkToHookRefused", installHook.testAlreadyInstalledHardlinkToHookRefused),
     ("testHookACLLookupErrorFailsClosed", installHook.testHookACLLookupErrorFailsClosed),
     ("testCLIUnknownArgWritesNothing", installHook.testCLIUnknownArgWritesNothing),
@@ -839,6 +840,17 @@ runSuite("OpenCodeAdapterTests", [
     ("testPricingPrecedenceProviderReportedCost", openCode.testPricingPrecedenceProviderReportedCost),
 ])
 
+let colabCredits = ColabCreditsTests()
+runSuite("ColabCreditsTests", [
+    ("testParseHappyPath", colabCredits.testParseHappyPath),
+    ("testParseFailClosed", colabCredits.testParseFailClosed),
+    ("testPresentationSuccessAndStale", colabCredits.testPresentationSuccessAndStale),
+    ("testPresentationErrors", colabCredits.testPresentationErrors),
+    ("testFetcherInjectedRun", colabCredits.testFetcherInjectedRun),
+    ("testFetcherMissingBinaryNeverSpawns", colabCredits.testFetcherMissingBinaryNeverSpawns),
+    ("testBubbleComposeWithColabExtra", colabCredits.testBubbleComposeWithColabExtra),
+])
+
 let openRouter = OpenRouterCreditsTests()
 runSuite("OpenRouterCreditsTests", [
     ("testKeyParserHappyPathAndForeignEntriesIgnored", openRouter.testKeyParserHappyPathAndForeignEntriesIgnored),
@@ -1397,6 +1409,7 @@ runSuite("ReportPricingDisplayTests", [
 
 let widgetSnapshot = WidgetSnapshotTests()
 runSuite("WidgetSnapshotTests", [
+    ("testBuilderIncludesColabCreditRowWhenEnabled", widgetSnapshot.testBuilderIncludesColabCreditRowWhenEnabled),
     ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
     ("testBuilderIgnoresNonFinitePercents", widgetSnapshot.testBuilderIgnoresNonFinitePercents),
     ("testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders", widgetSnapshot.testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders),
@@ -1481,6 +1494,19 @@ runSuite("SurfRound5Tests", [
     ("testMirrorReadRejectsRootFailingPolicy", surf5.testMirrorReadRejectsRootFailingPolicy),
     ("testAgyUnknownWindowIsSkippedNotWeekly", surf5.testAgyUnknownWindowIsSkippedNotWeekly),
     ("testCursorNullBillingEndIsSchemaBreaking", surf5.testCursorNullBillingEndIsSchemaBreaking),
+])
+
+let surf6 = SurfRound6Tests()
+runSuite("SurfRound6Tests", [
+    ("testColabFailureMapsNotLoggedInFromStderr", surf6.testColabFailureMapsNotLoggedInFromStderr),
+    ("testColabFailureMapsAuthExpiredFromStderr", surf6.testColabFailureMapsAuthExpiredFromStderr),
+    ("testColabFailureMapsTimeoutFromStderr", surf6.testColabFailureMapsTimeoutFromStderr),
+])
+
+let surf7 = SurfRound7Tests()
+runSuite("SurfRound7Tests", [
+    ("testMirrorRootStickyOwnedBySelf", surf7.testMirrorRootStickyOwnedBySelf),
+    ("testWidgetRowEncodesWeeklyEstimatedForGrok", surf7.testWidgetRowEncodesWeeklyEstimatedForGrok),
 ])
 
 finishTestRun()

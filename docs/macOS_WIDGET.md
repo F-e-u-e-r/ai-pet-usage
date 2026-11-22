@@ -35,7 +35,7 @@ A WidgetKit extension (small, medium, large) that shows each provider's limits o
 
 | Environment | Widget entitlements | Snapshot source | PlugInKit |
 |-------------|---------------------|-----------------|-----------|
-| **Ad‑hoc** (`DEVELOPMENT_TEAM` unset) | `AIPetUsageWidget.adhoc.entitlements` | **`/Users/Shared/AIPetUsage/<uid>/widget-snapshot.json`** | `pluginkit -a` after install to `/Applications` |
+| **Ad‑hoc** (`DEVELOPMENT_TEAM` unset) | `AIPetUsageWidget.adhoc.entitlements` | **`/Users/Shared/AIPetUsage/<uid>/widget-snapshot.json`** | `Scripts/install-local-app.sh` (promotes shared root to `root:wheel` + `01777` when possible) |
 | **Personal Team / Dev ID** | `AIPetUsageWidget.entitlements` + same team on app | **App Group** `group.dev.aipetusage.app` | Normal discovery once app is signed |
 
 ```bash

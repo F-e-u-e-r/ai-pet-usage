@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// `aipet install-hook`:把內嵌的 statusline hook 落地到資料目錄,並把
@@ -313,8 +314,8 @@ public enum InstallHook {
         // 回 nil 也必須是 errno==ENOENT(無此 ACL);其他 errno = 讀取出錯 → 失敗(不 fail-open)。
         errno = 0
         if let remaining = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) {
-            acl_free(UnsafeMutableRawPointer(remaining))
-            return false
+            defer { acl_free(UnsafeMutableRawPointer(remaining)) }
+            return !extendedACLHasEntries(remaining)
         }
         return errno == ENOENT
     }
@@ -326,6 +327,24 @@ public enum InstallHook {
     /// 釘死:codex code-r16 #1 —— EOPNOTSUPP 被當失敗會讓不支援 ACL 的磁碟區每次都重寫、破壞冪等。
     public static func aclAbsentErrno(_ e: Int32) -> Bool {
         return e == ENOENT || e == EOPNOTSUPP || e == ENOTSUP
+    }
+
+    /// True when the ACL has at least one ACE (`acl_get_entry` succeeds for `ACL_FIRST_ENTRY`).
+    private static func extendedACLHasEntries(_ acl: acl_t) -> Bool {
+        var entry: acl_entry_t?
+        return acl_get_entry(acl, 0, &entry) == 0 // ACL_FIRST_ENTRY
+    }
+
+    /// True when there is no **effective** extended ACL (zero entries). macOS may leave an empty
+    /// extended ACL object after `acl_set_fd_np` with `acl_init(0)`; that must not block hardened paths.
+    /// Query failures → false (fail closed).
+    public static func fdHasNoEffectiveExtendedACL(_ fd: Int32) -> Bool {
+        errno = 0
+        if let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) {
+            defer { acl_free(UnsafeMutableRawPointer(acl)) }
+            return !extendedACLHasEntries(acl)
+        }
+        return aclAbsentErrno(errno)
     }
 
     enum NoFollowRead {
@@ -501,7 +520,10 @@ public enum InstallHook {
             // 磁碟區會每次都重寫、破壞冪等(codex code-r16 #1)。分類集中在 aclAbsentErrno。
             let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED)
             let aclErrno = errno
-            if let a = acl { acl_free(UnsafeMutableRawPointer(a)); return true }   // 有擴充 ACL → 重寫清除
+            if let a = acl {
+                defer { acl_free(UnsafeMutableRawPointer(a)) }
+                if extendedACLHasEntries(a) { return true }   // 有有效擴充 ACE → 重寫清除
+            }
             if !aclAbsentErrno(aclErrno) { return true }                          // 真查詢失敗 → fail closed
             return false
         }
