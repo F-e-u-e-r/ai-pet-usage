@@ -34,6 +34,25 @@ final class AppearanceTests: XCTestCase {
         }
     }
 
+    private struct RGBHexProbe: Decodable {
+        var primary: UInt32?
+        var secondary: UInt32?
+        var badge: UInt32?
+        var sibling: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case primary, secondary, badge, sibling
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            primary = RGBHexValue.decodeTolerant(from: c, forKey: .primary)
+            secondary = RGBHexValue.decodeTolerant(from: c, forKey: .secondary)
+            badge = RGBHexValue.decodeTolerant(from: c, forKey: .badge)
+            sibling = (try? c.decodeIfPresent(Int.self, forKey: .sibling)) ?? 7
+        }
+    }
+
     private func decode(_ json: String) throws -> Probe {
         try JSONDecoder().decode(Probe.self, from: Data(json.utf8))
     }
@@ -114,6 +133,62 @@ final class AppearanceTests: XCTestCase {
             XCTAssertEqual(MenuBarBadgeInk.baseWhite(systemIsDark: true), 0.98)
             XCTAssertEqual(MenuBarBadgeInk.baseWhite(systemIsDark: false), 0.15)
         }
+    }
+
+    // A1-F2:0xRRGGBB 以外的值 fail-soft 為 nil,不毒化 sibling。
+    func testTranslucentSeedColorsFlattenOverBackground() {
+        let bg = 236.0 / 255  // 0xECECEC
+        // light labelColor ≈ 黑 84.7%、secondaryLabel ≈ 黑 49.8%:疊底後主/次必須不同,不能都變 0x000000。
+        let primary = RGBHexValue.flattened(red: 0, green: 0, blue: 0, alpha: 0.847,
+                                            overRed: bg, overGreen: bg, overBlue: bg)
+        let secondary = RGBHexValue.flattened(red: 0, green: 0, blue: 0, alpha: 0.498,
+                                              overRed: bg, overGreen: bg, overBlue: bg)
+        XCTAssertEqual(primary, 0x242424)
+        XCTAssertEqual(secondary, 0x767676)
+        // 不透明色四捨五入往返(0xE6 不可因截斷變 0xE5)。
+        XCTAssertEqual(RGBHexValue.flattened(red: 230.0 / 255, green: 232.0 / 255, blue: 234.0 / 255, alpha: 1,
+                                             overRed: 0, overGreen: 0, overBlue: 0), 0xE6E8EA)
+        XCTAssertEqual(RGBHexValue.flattened(red: 1, green: 1, blue: 1, alpha: 0.5,
+                                             overRed: 0, overGreen: 0, overBlue: 0), 0x808080)  // 127.5 → 128
+        XCTAssertNil(RGBHexValue.flattened(red: .nan, green: 0, blue: 0, alpha: 1,
+                                           overRed: 0, overGreen: 0, overBlue: 0))
+        XCTAssertEqual(RGBHexValue.flattened(red: 1, green: 1, blue: 1, alpha: 2,
+                                             overRed: 0, overGreen: 0, overBlue: 0), 0xFFFFFF)
+    }
+
+    func testOutOfRangeRGBHexValuesDecodeAsNilWithoutPoisoningSibling() throws {
+        let json = #"{"primary":16777216,"secondary":4294967295,"badge":16777217,"sibling":42}"#
+        let probe = try JSONDecoder().decode(RGBHexProbe.self, from: Data(json.utf8))
+        XCTAssertNil(probe.primary)
+        XCTAssertNil(probe.secondary)
+        XCTAssertNil(probe.badge)
+        XCTAssertEqual(probe.sibling, 42)
+
+        let boundary = #"{"primary":0,"secondary":16777215,"badge":66051,"sibling":9}"#
+        let valid = try JSONDecoder().decode(RGBHexProbe.self, from: Data(boundary.utf8))
+        XCTAssertEqual(valid.primary, 0)
+        XCTAssertEqual(valid.secondary, 0xFF_FF_FF)
+        XCTAssertEqual(valid.badge, 0x01_02_03)
+        XCTAssertEqual(valid.sibling, 9)
+    }
+
+    // A1-F3:自訂 badge label 必須單行、trim、最多 14 字;空白值回退預設代號。
+    func testBadgeLabelOverrideCollapsesLineBreaksAndTabsBeforeCap() {
+        let badges = MenuBadgeBuilder.badges(from: [
+            (id: "claude-code", displayName: nil,
+             badgeLabel: "  Alpha\n\tBeta\tGamma Delta  ",
+             fiveHour: 1, weekly: nil, idle: false),
+        ], warn: 80, danger: 95)
+        XCTAssertEqual(badges.first?.badgeLabel, "Alpha Beta Gam")
+
+        let fallback = MenuBadgeBuilder.badges(from: [
+            (id: "claude-code", displayName: nil, badgeLabel: " \n\t ",
+             fiveHour: 1, weekly: nil, idle: false),
+        ], warn: 80, danger: 95)
+        XCTAssertEqual(fallback.first?.badgeLabel, "CC")
+
+        XCTAssertEqual(MenuBadgeLabel.sanitizedOverride("Alpha\r\nBeta"), "Alpha Beta")
+        XCTAssertEqual(MenuBadgeLabel.sanitizedOverride("A\rB\nC\r\n\tD"), "A B C D")
     }
 
     // test 6:SystemAppearanceProvider 透過注入的 reader 解析;問的鍵必須是全域 AppleInterfaceStyle。
@@ -217,6 +292,16 @@ final class AppearanceWiringGuardTests: XCTestCase {
         XCTAssertTrue(keys.contains("appearance"), "CodingKeys must carry the appearance key")
     }
 
+    // A1-F2 app wiring:三個持久化 RGB 欄位都必須經 24-bit range checker,不能直接 decode UInt32。
+    func testAppSettingsUsesRangeCheckedRGBHexDecode() throws {
+        let text = try read(appSource("AppSettings.swift"))
+        for key in ["dashboardTextPrimaryHex", "dashboardTextSecondaryHex", "menuBarBadgeInkHex"] {
+            XCTAssertTrue(
+                text.contains("\(key) = RGBHexValue.decodeTolerant(from: c, forKey: .\(key))"),
+                "\(key) must use RGBHexValue.decodeTolerant")
+        }
+    }
+
     // CoreSettings(UsageCore)與 CLI 零耦合:appearance 是 GUI-only。
     func testCoreSettingsAndCLIHaveNoAppearanceCoupling() throws {
         let core = try read(coreSource("LimitEngine.swift"))
@@ -232,8 +317,8 @@ final class AppearanceWiringGuardTests: XCTestCase {
     func testMenuBarBadgeRendererIsPureAndTakesInjectedSystemAppearance() throws {
         let text = try read(appSource("MenuBarBadge.swift"))
         XCTAssertTrue(text.contains("systemIsDark: Bool"), "renderer must take the resolved system appearance as input")
-        XCTAssertTrue(text.contains("MenuBarBadgeInk.baseWhite(systemIsDark: systemIsDark)"),
-                      "ink must come from the pure PetCore decision")
+        XCTAssertTrue(text.contains("ink.baseColor(systemIsDark: systemIsDark"),
+                      "renderer must resolve the selected ink preference")
         for forbidden in ["effectiveAppearance", "currentDrawing", "AppleInterfaceStyle",
                           "UserDefaults", "CFPreferences", "NSApp.", "AppearancePreference"] {
             XCTAssertFalse(text.contains(forbidden), "MenuBarBadge.swift must not contain `\(forbidden)`")
@@ -316,6 +401,68 @@ final class AppearanceWiringGuardTests: XCTestCase {
         let picker = try section(text, from: "Picker(\"Appearance\"", to: ".pickerStyle(.segmented)")
         XCTAssertTrue(picker.contains("AppearancePreference.allCases"))
         XCTAssertTrue(picker.contains("model.updateSettings { $0.appearance = "))
+    }
+
+    // A1-F1:切到 custom 的同一次 update 先以目前 Theme token 補齊兩色,避免 picker 與 Theme 顯示不同色。
+    func testCustomDashboardTextColorSeedsBothHexesBeforeSwitch() throws {
+        let text = try read(appSource("SettingsViews.swift"))
+        let picker = try section(
+            text,
+            from: "Picker(\"Dashboard text color\"",
+            to: "if model.settings.dashboardTextColor == .custom")
+        XCTAssertTrue(picker.contains("if v == .custom"))
+        XCTAssertTrue(picker.contains(
+            "s.dashboardTextPrimaryHex = ColorHexCodec.hex(from: Theme.textPrimary)"))
+        XCTAssertTrue(picker.contains(
+            "s.dashboardTextSecondaryHex = ColorHexCodec.hex(from: Theme.textSecondary)"))
+        guard let primarySeed = picker.range(of: "s.dashboardTextPrimaryHex = ColorHexCodec"),
+              let secondarySeed = picker.range(of: "s.dashboardTextSecondaryHex = ColorHexCodec"),
+              let switchWrite = picker.range(of: "s.dashboardTextColor = v") else {
+            throw GuardError.anchorMissing("custom dashboard text color seeding")
+        }
+        XCTAssertTrue(primarySeed.lowerBound < switchWrite.lowerBound)
+        XCTAssertTrue(secondarySeed.lowerBound < switchWrite.lowerBound)
+    }
+
+    func testSeedHexFlattensAlphaUnderAppAppearance() throws {
+        let text = try read(appSource("ColorPreferences.swift"))
+        let codec = try section(text, from: "static func hex(from color: Color)", to: "return result")
+        XCTAssertTrue(codec.contains("NSApp.effectiveAppearance.performAsCurrentDrawingAppearance"))
+        XCTAssertTrue(codec.contains("RGBHexValue.flattened("))
+        XCTAssertTrue(codec.contains("alpha: Double(c.alphaComponent)"))
+    }
+
+    func testDefaultFontScaleMatchesMacOSTextStyles() throws {
+        // 預設(standard / system)要等於 main 的 Font.title2.semibold(17pt)與 Font.headline(13pt bold)。
+        let theme = try read(appSource("Theme.swift"))
+        XCTAssertTrue(theme.contains("static var metric: Font { Theme.sized(17, weight: .semibold) }"))
+        XCTAssertTrue(theme.contains("static var cardTitle: Font { Theme.sized(13, weight: .bold) }"))
+    }
+
+    func testBadgeLabelFieldKeepsTypingWhitespace() throws {
+        let text = try read(appSource("SettingsViews.swift"))
+        let binding = try section(
+            text,
+            from: "private func badgeLabelBinding",
+            to: "settings.chromeBadgeLabelOverrides = overrides")
+        XCTAssertFalse(binding.contains("sanitizedOverride"))
+        XCTAssertTrue(binding.contains("overrides[providerId] = newValue"))
+        XCTAssertEqual(MenuBadgeLabel.resolve(override: "Alpha ", default: "CC"), "Alpha")
+    }
+
+    func testTextColorChangeDoesNotReplaceSettingsIdentity() throws {
+        let model = try read(appSource("AppModel.swift"))
+        let apply = try section(
+            model,
+            from: "private func applyTextColorPreference",
+            to: "func bumpMenuBarChromePresentation")
+        XCTAssertTrue(apply.contains("textColorTick &+= 1"))
+        XCTAssertFalse(apply.contains("fontStyleTick"))
+        let app = try read(appSource("AIPetUsageApp.swift"))
+        let settings = try section(app, from: "SettingsRoot()", to: "final class AppDelegate")
+        XCTAssertFalse(settings.contains("textColorTick"))
+        let dashboard = try section(app, from: "DashboardRoot()", to: ".defaultSize")
+        XCTAssertTrue(dashboard.contains("model.textColorTick"))
     }
 
     // MARK: 路徑

@@ -59,6 +59,62 @@ public enum ProviderBrands {
     }
 }
 
+/// GUI appearance settings shared with the testable core.
+public enum RGBHexValue {
+    public static func decodeTolerant<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) -> UInt32? {
+        guard let value = (try? container.decodeIfPresent(UInt32.self, forKey: key)) ?? nil,
+              value <= 0xFF_FF_FF else { return nil }
+        return value
+    }
+
+    /// sRGB 分量(0...1)疊到不透明底色後轉 0xRRGGBB(四捨五入);任一分量非有限值 → nil。
+    public static func flattened(
+        red: Double, green: Double, blue: Double, alpha: Double,
+        overRed: Double, overGreen: Double, overBlue: Double
+    ) -> UInt32? {
+        let values = [red, green, blue, alpha, overRed, overGreen, overBlue]
+        guard values.allSatisfy(\.isFinite) else { return nil }
+        let a = min(1, max(0, alpha))
+        func channel(_ value: Double, _ background: Double) -> UInt32 {
+            let mixed = value * a + background * (1 - a)
+            return UInt32((min(1, max(0, mixed)) * 255).rounded())
+        }
+        return (channel(red, overRed) << 16) | (channel(green, overGreen) << 8) | channel(blue, overBlue)
+    }
+}
+
+public enum MenuBadgeLabel {
+    /// Overrides are one line and at most 14 characters. Empty values mean "use the style default".
+    public static func sanitizedOverride(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        var oneLine = ""
+        var replacingBreaks = false
+        for character in raw {
+            if character.isNewline || character == "\t" {
+                replacingBreaks = true
+                continue
+            }
+            if replacingBreaks {
+                if !oneLine.isEmpty, oneLine.last != " ", character != " " {
+                    oneLine.append(" ")
+                }
+                replacingBreaks = false
+            }
+            oneLine.append(character)
+        }
+        let trimmed = oneLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(14))
+    }
+
+    public static func resolve(override raw: String?, default defaultLabel: String) -> String {
+        sanitizedOverride(raw) ?? defaultLabel
+    }
+}
+
 /// 百分比 severity → 文字顏色(閾值來自使用者設定,預設 warn 80 / danger 95;
 /// spec 的固定 90 改綁設定值,避免與可調整的 danger 閾值互相矛盾)。
 public enum UsageSeverity: String, Sendable, Equatable {
@@ -95,6 +151,8 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
 
     public let providerId: String
     public let code: String
+    /// Text beside the dot in the menu bar badge (may differ from `code` when the user customizes labels).
+    public let badgeLabel: String
     public let displayName: String
     public let dotColor: UInt32
     public let needsOutline: Bool
@@ -107,10 +165,11 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
 
     public var id: String { providerId }
 
-    public init(providerId: String, code: String, displayName: String, dotColor: UInt32,
+    public init(providerId: String, code: String, badgeLabel: String? = nil, displayName: String, dotColor: UInt32,
                 needsOutline: Bool, fiveHour: Window?, weekly: Window?, idle: Bool = false) {
         self.providerId = providerId
         self.code = code
+        self.badgeLabel = badgeLabel ?? code
         self.displayName = displayName
         self.dotColor = dotColor
         self.needsOutline = needsOutline
@@ -139,22 +198,41 @@ public enum MenuBadgeBuilder {
         warn: Double, danger: Double,
         onlyWarnings: Bool = false
     ) -> [MenuBadge] {
+        badges(
+            from: states.map {
+                (id: $0.id, displayName: $0.displayName, badgeLabel: nil,
+                 fiveHour: $0.fiveHour, weekly: $0.weekly, idle: $0.idle)
+            },
+            warn: warn,
+            danger: danger,
+            onlyWarnings: onlyWarnings)
+    }
+
+    public static func badges(
+        from states: [(id: String, displayName: String?, badgeLabel: String?,
+                       fiveHour: Double?, weekly: Double?, idle: Bool)],
+        warn: Double, danger: Double,
+        onlyWarnings: Bool = false
+    ) -> [MenuBadge] {
         func window(_ percent: Double?) -> MenuBadge.Window? {
             percent.map { MenuBadge.Window(percent: Int($0.rounded()),
                                            severity: .of(percent: $0, warn: warn, danger: danger)) }
         }
         return states.compactMap { st -> MenuBadge? in
             let brand = ProviderBrands.brand(for: st.id, displayName: st.displayName)
+            let badgeLabel = MenuBadgeLabel.resolve(override: st.badgeLabel, default: brand.code)
             let fiveHour = window(st.fiveHour)
             let weekly = window(st.weekly)
             // 兩窗皆無資料:idle 顯示中性徽章(compact 除外);否則整筆略過(無資料)。
             if fiveHour == nil, weekly == nil {
                 guard st.idle, !onlyWarnings else { return nil }
-                return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+                return MenuBadge(providerId: st.id, code: brand.code, badgeLabel: badgeLabel,
+                                 displayName: brand.displayName,
                                  dotColor: brand.dotColor, needsOutline: brand.needsOutline,
                                  fiveHour: nil, weekly: nil, idle: true)
             }
-            let badge = MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+            let badge = MenuBadge(providerId: st.id, code: brand.code, badgeLabel: badgeLabel,
+                                  displayName: brand.displayName,
                                   dotColor: brand.dotColor, needsOutline: brand.needsOutline,
                                   fiveHour: fiveHour, weekly: weekly, idle: false)
             // compact:任一窗達 warn 才顯示。

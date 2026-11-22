@@ -51,6 +51,54 @@ struct GeneralSettings: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                Picker("Font style", selection: Binding(
+                    get: { model.settings.fontDesign },
+                    set: { v in model.updateSettings { $0.fontDesign = v } }
+                )) {
+                    ForEach(FontDesignPreference.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Picker("Text size", selection: Binding(
+                    get: { model.settings.fontSize },
+                    set: { v in model.updateSettings { $0.fontSize = v } }
+                )) {
+                    ForEach(FontSizePreference.allCases, id: \.self) { size in
+                        Text(size.displayName).tag(size)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Dashboard text color", selection: Binding(
+                    get: { model.settings.dashboardTextColor },
+                    set: { v in
+                        model.updateSettings { s in
+                            if v == .custom {
+                                if s.dashboardTextPrimaryHex == nil {
+                                    s.dashboardTextPrimaryHex = ColorHexCodec.hex(from: Theme.textPrimary)
+                                }
+                                if s.dashboardTextSecondaryHex == nil {
+                                    s.dashboardTextSecondaryHex = ColorHexCodec.hex(from: Theme.textSecondary)
+                                }
+                            }
+                            s.dashboardTextColor = v
+                        }
+                    }
+                )) {
+                    ForEach(DashboardTextColorPreference.allCases, id: \.self) { pref in
+                        Text(pref.displayName).tag(pref)
+                    }
+                }
+                if model.settings.dashboardTextColor == .custom {
+                    ColorPicker("Main text", selection: hexColorBinding(
+                        get: { model.settings.dashboardTextPrimaryHex },
+                        set: { v in model.updateSettings { $0.dashboardTextPrimaryHex = v } }))
+                    ColorPicker("Secondary text", selection: hexColorBinding(
+                        get: { model.settings.dashboardTextSecondaryHex },
+                        set: { v in model.updateSettings { $0.dashboardTextSecondaryHex = v } }))
+                }
+                Text("Font and colors apply to the dashboard, limits, and trends. Menu bar badge options are below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -62,8 +110,46 @@ struct GeneralSettings: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
-                Text("Full lists every detected provider (● CC 91%). Compact keeps only providers at or above the warning threshold. Percent colors: orange ≥ warn, red ≥ alert threshold.")
+                Picker("Badge label", selection: Binding(
+                    get: { model.settings.menuBarBadgeLabelStyle },
+                    set: { v in model.updateSettings { $0.menuBarBadgeLabelStyle = v } }
+                )) {
+                    ForEach(MenuBarBadgeLabelStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Picker("Badge text color", selection: Binding(
+                    get: { model.settings.menuBarBadgeInk },
+                    set: { v in
+                        model.updateSettings { s in
+                            s.menuBarBadgeInk = v
+                            if v == .custom, s.menuBarBadgeInkHex == nil {
+                                s.menuBarBadgeInkHex = model.systemIsDark ? 0xF2F4F6 : 0x1A1A1A
+                            }
+                        }
+                    }
+                )) {
+                    ForEach(MenuBarBadgeInkPreference.allCases, id: \.self) { ink in
+                        Text(ink.displayName).tag(ink)
+                    }
+                }
+                if model.settings.menuBarBadgeInk == .custom {
+                    ColorPicker("Badge ink", selection: hexColorBinding(
+                        get: { model.settings.menuBarBadgeInkHex },
+                        set: { v in model.updateSettings { $0.menuBarBadgeInkHex = v } }))
+                }
+                Text("Full lists every detected provider. Override badge labels per provider below. Percent colors (Match menu bar ink): orange ≥ warn, red ≥ alert.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Badge labels") {
+                ForEach(["codex", "claude-code", "grok-code", "opencode"], id: \.self) { providerId in
+                    LabeledContent(ProviderBrands.brand(for: providerId).displayName) {
+                        TextField("Optional", text: badgeLabelBinding(providerId))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                    }
+                }
             }
 
             Section {
@@ -105,6 +191,32 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func badgeLabelBinding(_ providerId: String) -> Binding<String> {
+        Binding(
+            get: { model.settings.chromeBadgeLabelOverrides?[providerId] ?? "" },
+            set: { newValue in
+                model.updateSettings { settings in
+                    var overrides = settings.chromeBadgeLabelOverrides ?? [:]
+                    // 存原字串(打字中的空白要保留);顯示時由 MenuBadgeLabel.resolve 清理。
+                    if !newValue.isEmpty {
+                        overrides[providerId] = newValue
+                    } else {
+                        overrides.removeValue(forKey: providerId)
+                    }
+                    settings.chromeBadgeLabelOverrides = overrides.isEmpty ? nil : overrides
+                }
+            })
+    }
+
+    private func hexColorBinding(
+        get: @escaping () -> UInt32?,
+        set: @escaping (UInt32?) -> Void
+    ) -> Binding<Color> {
+        Binding(
+            get: { ColorHexCodec.color(from: get()) ?? Color.primary },
+            set: { set(ColorHexCodec.hex(from: $0)) })
     }
 }
 

@@ -75,6 +75,18 @@ struct AppSettings: Codable {
     /// App 外觀偏好(Appearance V1):System / Light / Dark,經 `NSApp.appearance` 整 app 套用。
     /// GUI-only,刻意不放 `core`(CLI 無外觀);缺鍵 / 未知值 fail-soft → `.system`。
     var appearance: AppearancePreference = .system
+    /// 儀表板 / 設定 / 趨勢頁字體設計(Theme.FontScale);選單列徽章固定系統字體。
+    var fontDesign: FontDesignPreference = .system
+    var fontSize: FontSizePreference = .standard
+    var dashboardTextColor: DashboardTextColorPreference = .system
+    /// RGB 0xRRGGBB when `dashboardTextColor == .custom`.
+    var dashboardTextPrimaryHex: UInt32?
+    var dashboardTextSecondaryHex: UInt32?
+    var menuBarBadgeInk: MenuBarBadgeInkPreference = .automatic
+    var menuBarBadgeInkHex: UInt32?
+    var menuBarBadgeLabelStyle: MenuBarBadgeLabelStyle = .code
+    /// Per-provider override shown on menu bar badges.
+    var chromeBadgeLabelOverrides: [String: String]? = nil
     var core = CoreSettings()
 
     // MARK: - EngineV2 pack id 相容 facade(M2 §3-A;語意委派 PetSpecies,PetCore 端可測)
@@ -105,6 +117,9 @@ struct AppSettings: Codable {
         case grokQuotaEnabled
         case grokQuotaKilledAtVersion
         case appearance
+        case fontDesign, fontSize
+        case dashboardTextColor, dashboardTextPrimaryHex, dashboardTextSecondaryHex
+        case menuBarBadgeInk, menuBarBadgeInkHex, menuBarBadgeLabelStyle, chromeBadgeLabelOverrides
         case core
     }
 
@@ -140,6 +155,16 @@ struct AppSettings: Codable {
         grokQuotaKilledAtVersion = (try? c.decodeIfPresent(String.self, forKey: .grokQuotaKilledAtVersion)) ?? nil ?? nil
         // 先讀 raw 字串再對映:未知值("ocean")→ .system,不拋、不毒化 sibling(PetCore 可測)。
         appearance = AppearancePreference.decodeTolerant(from: c, forKey: .appearance)
+        fontDesign = FontDesignPreference.decodeTolerant(from: c, forKey: .fontDesign)
+        fontSize = FontSizePreference.decodeTolerant(from: c, forKey: .fontSize)
+        dashboardTextColor = DashboardTextColorPreference.decodeTolerant(from: c, forKey: .dashboardTextColor)
+        dashboardTextPrimaryHex = RGBHexValue.decodeTolerant(from: c, forKey: .dashboardTextPrimaryHex)
+        dashboardTextSecondaryHex = RGBHexValue.decodeTolerant(from: c, forKey: .dashboardTextSecondaryHex)
+        menuBarBadgeInk = MenuBarBadgeInkPreference.decodeTolerant(from: c, forKey: .menuBarBadgeInk)
+        menuBarBadgeInkHex = RGBHexValue.decodeTolerant(from: c, forKey: .menuBarBadgeInkHex)
+        menuBarBadgeLabelStyle = MenuBarBadgeLabelStyle.decodeTolerant(from: c, forKey: .menuBarBadgeLabelStyle)
+        chromeBadgeLabelOverrides = try? c.decodeIfPresent([String: String].self,
+                                                           forKey: .chromeBadgeLabelOverrides)
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
     }
 }
