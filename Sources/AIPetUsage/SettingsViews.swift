@@ -404,7 +404,12 @@ struct DataHealthSettings: View {
             } header: {
                 Text("Where every number comes from")
             } footer: {
-                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits, Colab credits, Grok quota, Cursor plan usage (under Cursor on Providers), and Antigravity plan % (under Antigravity on Providers) — all off by default except where noted. A degraded source never blanks the rest of the dashboard.")
+                Text("""
+                Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. \
+                Cursor local logs use the provider toggle (on by default); official Cursor plan % is opt-in under Providers → Cursor (toggle + Allow). \
+                Other network sources (OpenRouter, Colab, Grok credit %, Antigravity plan %) are opt-in under Providers. \
+                A degraded source never blanks the rest of the dashboard.
+                """)
                     .font(Theme.FontScale.note)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -591,6 +596,9 @@ struct ProviderSettings: View {
                                     if info.providerId == "antigravity" {
                                         $0.antigravityQuotaEnabled = false
                                     }
+                                    if info.providerId == "grok-code" {
+                                        $0.grokQuotaEnabled = false
+                                    }
                                 }
                             }
                             Task { await model.refreshNow() }
@@ -674,34 +682,24 @@ struct ProviderSettings: View {
                         """)
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    if info.providerId == "grok-code" {
+                        Toggle("Show credit usage % (grok CLI)", isOn: Binding(
+                            get: { model.settings.grokQuotaEnabled },
+                            set: { v in model.updateSettings { $0.grokQuotaEnabled = v } }
+                        ))
+                        .disabled(!model.settings.core.enabledProviders.contains("grok-code"))
+                        Text("""
+                        Off by default. Uses the API key from your grok CLI `auth.json` (active account only) \
+                        and asks cli-chat-proxy.grok.com for weekly credit % — about every 15 minutes and on \
+                        Refresh. Token is sent only there over HTTPS; not stored by this app. On 401, run \
+                        `grok` once to re-log in. Appears on the Grok weekly meter and in Data Health.
+                        """)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     LabeledContent("Detected", value: info.availability.available ? "yes — \(info.availability.detail)" : "no")
                     Text(info.dataSources).font(.caption).foregroundStyle(.secondary)
                     Text(info.permissions).font(.caption2).foregroundStyle(.tertiary)
                 }
-            }
-
-            // Grok 官方額度(F3;opt-in;boundary #73 —— 揭露文案說清楚讀什麼、送哪裡)。
-            Section("Grok quota (official)") {
-                Toggle("Show Grok credit usage (grok CLI)", isOn: Binding(
-                    get: { model.settings.grokQuotaEnabled },
-                    set: { v in model.updateSettings { $0.grokQuotaEnabled = v } }
-                ))
-                Text("""
-                Off by default. When Grok Code is enabled, quota appears on that same row (weekly \
-                column only — no separate "Grok quota" line). When on, the app reads the session token the grok CLI saved in \
-                ~/.grok/auth.json (or $GROK_HOME/auth.json; an issuer→account store read as bytes, from \
-                which only the nested "key" field — plus its expiry, to pick the active account — is \
-                decoded, never the refresh token or profile fields) and asks \
-                https://cli-chat-proxy.grok.com for your credit usage and reset time — about every \
-                15 minutes and on manual Refresh. The token is sent only to that host as auth \
-                headers over HTTPS (system TLS, redirects refused) and is never stored, logged, \
-                exported, displayed, or refreshed — if it expires (401), the app only shows a \
-                "run grok once to re-log in" hint and stops calling until the credential file \
-                changes or you press Refresh. Quota responses stay in memory (only this toggle and a \
-                format-protection marker are saved in settings — never the token or quota). Source health appears under Data Health as its \
-                own row, separate from Grok local logs.
-                """)
-                    .font(.caption).foregroundStyle(.secondary)
             }
 
             // 選單列/量表短代號圖例(UIUX spec P2):dot = 身分色,恆定不變
@@ -716,7 +714,11 @@ struct ProviderSettings: View {
                         Spacer()
                     }
                 }
-                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity (AG) has no local quota rings — enable Antigravity under Providers and turn on plan % there for official buckets.")
+                Text("""
+                Dot color = provider identity (fixed). Percent text uses orange/red for severity. Cursor: without \
+                plan % + Allow, badge % is local token activity, not subscription %. Antigravity: no local quota \
+                rings — turn on plan % under Providers → Antigravity for official buckets.
+                """)
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
