@@ -38,15 +38,6 @@ private struct WidgetHeader: View {
     var compact = false
     var showLegend = false
 
-    private var legendCaption: String {
-        let anyFive = snapshot.rows.contains { !$0.widgetSinglePeriodColumn && !$0.idle }
-        let est = snapshot.rows.contains(where: \.weeklyEstimated)
-        if !anyFive {
-            return est ? "~wk" : "wk"
-        }
-        return est ? "5h · ~wk" : "5h · wk"
-    }
-
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("🐾 AI Usage")
@@ -54,7 +45,7 @@ private struct WidgetHeader: View {
                 .lineLimit(1)
                 .fixedSize()
             if showLegend {
-                Text(legendCaption)
+                Text(snapshot.legendCaption)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
@@ -552,11 +543,21 @@ private struct WidgetRowLine: View {
     var body: some View {
         HStack(spacing: 6) {
             ProviderDot(color: row.dotColor, size: 7)
-            Text(row.shortName)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: showBars ? 96 : nil, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(row.shortName)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if row.periodWindowName == "month" && !row.idle {
+                    // Shares the "wk" column, so say it is a monthly number.
+                    Text("mo")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: showBars ? 96 : nil, alignment: .leading)
             if !showBars { Spacer(minLength: 2) }
             if row.idle {
                 Text("idle")

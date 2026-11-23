@@ -1432,6 +1432,7 @@ runSuite("WidgetSnapshotTests", [
     ("testOtherProvidersNearCountsProvidersNotWindows", widgetSnapshot.testOtherProvidersNearCountsProvidersNotWindows),
     ("testResetTimesRoundTripAndOldJSONDecodes", widgetSnapshot.testResetTimesRoundTripAndOldJSONDecodes),
     ("testBuilderCarriesResetTimes", widgetSnapshot.testBuilderCarriesResetTimes),
+    ("testLegendNamesMonthlyColumn", widgetSnapshot.testLegendNamesMonthlyColumn),
     ("testBuilderIgnoresNonFinitePercents", widgetSnapshot.testBuilderIgnoresNonFinitePercents),
     ("testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders", widgetSnapshot.testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders),
     ("testUnknownProviderEmptyNameFallsBackToId", widgetSnapshot.testUnknownProviderEmptyNameFallsBackToId),

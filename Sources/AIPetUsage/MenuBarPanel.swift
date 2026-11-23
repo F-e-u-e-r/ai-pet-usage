@@ -331,7 +331,8 @@ private struct ColabCreditsRow: View {
                         .font(.callout.weight(.medium))
                         .lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    VStack(alignment: .trailing, spacing: 1) {
+                    // One line (balance, then burn rate) so the row is as tall as a provider row.
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(p.primary)
                             .font(.callout.weight(.semibold)).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.85)
@@ -342,6 +343,9 @@ private struct ColabCreditsRow: View {
                                 .lineLimit(1).minimumScaleFactor(0.85)
                         }
                     }
+                    // Never squeeze the values: "Colab" has room to give, the rate text did not.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     Text(p.age.map { "\($0)" } ?? "")
                         .font(.caption).monospacedDigit()
                         .foregroundStyle(.secondary)

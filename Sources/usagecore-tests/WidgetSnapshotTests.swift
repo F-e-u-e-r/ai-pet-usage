@@ -562,4 +562,16 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertNil(grok?.fiveHourResetAt)
         XCTAssertEqual(grok?.weeklyResetAt, rw)
     }
+
+    func testLegendNamesMonthlyColumn() {
+        XCTAssertEqual(usnap([urow("codex", five: 5, week: 100),
+                              urow("cursor-ide-api", five: nil, week: 75)]).legendCaption, "5h · wk · mo")
+        XCTAssertEqual(usnap([urow("grok-code", five: nil, week: 7, hides: true),
+                              urow("cursor-ide-auto", five: nil, week: 41)]).legendCaption, "wk · mo")
+        XCTAssertEqual(usnap([urow("cursor-ide-api", five: nil, week: 75)]).legendCaption, "mo")
+        XCTAssertEqual(usnap([urow("codex", five: 5, week: 10),
+                              urow("claude-code", five: nil, week: 30, est: true)]).legendCaption, "5h · ~wk")
+        XCTAssertEqual(usnap([urow("cursor-ide-api", five: nil, week: nil, idle: true)]).legendCaption, "wk")
+        XCTAssertEqual(usnap([]).legendCaption, "wk")
+    }
 }

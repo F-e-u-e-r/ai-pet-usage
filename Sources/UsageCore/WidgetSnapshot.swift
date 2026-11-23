@@ -558,3 +558,21 @@ extension WidgetSnapshot {
             .count
     }
 }
+
+extension WidgetSnapshot {
+    /// Header legend naming the columns actually on screen: `5h · wk · mo`, `wk · mo`, `5h · ~wk`, …
+    /// Idle rows show no values, so they don't add a column name. Falls back to `wk` when nothing shows.
+    public var legendCaption: String {
+        let active = rows.filter { !$0.idle }
+        func tag(_ name: String, _ short: String) -> String? {
+            let hits = active.filter { $0.periodWindowName == name }
+            guard !hits.isEmpty else { return nil }
+            return (hits.contains(where: \.weeklyEstimated) ? "~" : "") + short
+        }
+        var parts: [String] = []
+        if active.contains(where: { !$0.widgetSinglePeriodColumn }) { parts.append("5h") }
+        if let wk = tag("week", "wk") { parts.append(wk) }
+        if let mo = tag("month", "mo") { parts.append(mo) }
+        return parts.isEmpty ? "wk" : parts.joined(separator: " · ")
+    }
+}
