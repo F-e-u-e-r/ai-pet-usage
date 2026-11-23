@@ -52,7 +52,7 @@ public enum UsageRingModel {
         for st in limits {
             if let p = st.fiveHour.usedPercent {
                 official.append(Entry(providerId: st.providerId, percent: p))
-            } else if GrokChromeDisplay.usesWeeklyOnlyMeter(st.providerId),
+            } else if LimitMeterChrome.skipsFiveHourMeter(st.providerId),
                       let w = st.weekly.usedPercent {
                 official.append(Entry(providerId: st.providerId, percent: w))
             } else if let act = st.todayActivityPercent {

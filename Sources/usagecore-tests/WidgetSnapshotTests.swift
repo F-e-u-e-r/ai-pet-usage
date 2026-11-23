@@ -85,6 +85,24 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertNil(grokOnly.rows.first?.fiveHourPercent)
         XCTAssertEqual(grokOnly.rows.first?.weeklyPercent, 30)
         XCTAssertEqual(grokOnly.rows.first?.weeklyEstimated, true)
+        XCTAssertEqual(grokOnly.rows.first?.hidesFiveHourMeter, true)
+        XCTAssertTrue(grokOnly.rows.first?.widgetSinglePeriodColumn ?? false)
+        // A missing 5h value on a two-window provider must keep its 5h slot ("–"), not collapse.
+        let missingFive = WidgetSnapshotRow(providerId: "opencode", shortName: "OpenCode", code: "OC",
+                                            dotColor: 0xCA8A04, fiveHourPercent: nil, weeklyPercent: 33, idle: false)
+        XCTAssertFalse(missingFive.widgetSinglePeriodColumn)
+        let claudeNoFive = WidgetSnapshotRow(providerId: "claude-code", shortName: "Claude", code: "CC",
+                                             dotColor: 0xD97757, fiveHourPercent: nil, weeklyPercent: 20, idle: false)
+        XCTAssertFalse(claudeNoFive.widgetSinglePeriodColumn)
+        let cursorPlan = WidgetSnapshotRow(providerId: "cursor-ide-auto", shortName: "Cursor", code: "CU",
+                                           dotColor: 0x000000, fiveHourPercent: nil, weeklyPercent: 40, idle: false)
+        XCTAssertTrue(cursorPlan.widgetSinglePeriodColumn)
+        XCTAssertEqual(cursorPlan.periodWindowName, "month")
+        XCTAssertEqual(WidgetSnapshotRow(providerId: "cursor-ide-api", shortName: "Cursor API", code: "CA",
+                                         dotColor: 0, fiveHourPercent: nil, weeklyPercent: 75, idle: false)
+                        .periodWindowName, "month")
+        XCTAssertEqual(grokOnly.rows.first?.periodWindowName, "week")
+        XCTAssertEqual(claudeNoFive.periodWindowName, "week")
         let codexRow = snap.rows.first { $0.providerId == "codex" }
         XCTAssertEqual(codexRow?.weeklyEstimated, false)
     }
@@ -425,5 +443,123 @@ final class WidgetSnapshotTests: XCTestCase {
         let decoded = try JSONDecoder().decode(WidgetSnapshotRow.self, from: data)
         XCTAssertEqual(decoded.weeklyAsOf, asOf)
         XCTAssertEqual(decoded.weeklyPercent, 39)
+    }
+
+    // MARK: small widget — most urgent limit
+
+    private func urow(_ id: String, five: Int?, week: Int?, idle: Bool = false, est: Bool = false,
+                      fiveReset: Date? = nil, weekReset: Date? = nil, asOf: Date? = nil,
+                      hides: Bool = false) -> WidgetSnapshotRow {
+        WidgetSnapshotRow(providerId: id, shortName: id, code: "XX", dotColor: 0,
+                          fiveHourPercent: five, weeklyPercent: week, idle: idle, weeklyAsOf: asOf,
+                          weeklyEstimated: est, hidesFiveHourMeter: hides,
+                          fiveHourResetAt: fiveReset, weeklyResetAt: weekReset)
+    }
+
+    private func usnap(_ rows: [WidgetSnapshotRow]) -> WidgetSnapshot {
+        WidgetSnapshot(generatedAt: Date(), todayTokens: 0, todayCostUSD: nil, todayCostIsEstimated: false,
+                       rows: rows, creditRows: [])
+    }
+
+    func testMostUrgentPicksHighestLiveWindow() {
+        let now = Date()
+        let s = usnap([urow("codex", five: 3, week: 100), urow("claude-code", five: 7, week: 31),
+                       urow("grok-code", five: nil, week: 7, est: true, hides: true)])
+        let u = s.mostUrgentLimit(now: now)
+        XCTAssertEqual(u?.row.providerId, "codex")
+        XCTAssertEqual(u?.window, .period)
+        XCTAssertEqual(u?.percent, 100)
+        XCTAssertEqual(u?.windowTag, "wk")
+        // Cursor plan quota reads as monthly.
+        let c = usnap([urow("cursor-ide-auto", five: nil, week: 41, hides: true)]).mostUrgentLimit(now: now)
+        XCTAssertEqual(c?.windowTag, "mo")
+        // Weekly-only provider's 5h value never competes.
+        let g = usnap([urow("grok-code", five: 99, week: 10, hides: true)]).mostUrgentLimit(now: now)
+        XCTAssertEqual(g?.percent, 10)
+    }
+
+    func testMostUrgentTieGoesToEarlierReset() {
+        let now = Date()
+        let s = usnap([urow("b", five: nil, week: 90, weekReset: now.addingTimeInterval(3 * 86400)),
+                       urow("a", five: 90, week: 10, fiveReset: now.addingTimeInterval(3600))])
+        XCTAssertEqual(s.mostUrgentLimit(now: now)?.row.providerId, "a")
+        XCTAssertEqual(s.mostUrgentLimit(now: now)?.window, .fiveHour)
+        // Known reset beats unknown; full tie keeps row order.
+        let t = usnap([urow("x", five: 50, week: nil), urow("y", five: 50, week: nil, fiveReset: now)])
+        XCTAssertEqual(t.mostUrgentLimit(now: now)?.row.providerId, "y")
+        let f = usnap([urow("x", five: 50, week: nil), urow("y", five: 50, week: nil)])
+        XCTAssertEqual(f.mostUrgentLimit(now: now)?.row.providerId, "x")
+    }
+
+    func testMostUrgentSkipsStaleWeeklyWhenLiveExists() {
+        let now = Date()
+        let old = now.addingTimeInterval(-3 * 86400)
+        let s = usnap([urow("claude-code", five: nil, week: 99, asOf: old), urow("codex", five: 50, week: nil)])
+        let u = s.mostUrgentLimit(now: now)
+        XCTAssertEqual(u?.row.providerId, "codex")
+        XCTAssertEqual(u?.stale, false)
+        // Only stale data left → still shown, flagged stale.
+        let only = usnap([urow("claude-code", five: nil, week: 99, asOf: old)]).mostUrgentLimit(now: now)
+        XCTAssertEqual(only?.percent, 99)
+        XCTAssertEqual(only?.stale, true)
+    }
+
+    func testMostUrgentNilWhenNoReadings() {
+        let now = Date()
+        XCTAssertNil(usnap([]).mostUrgentLimit(now: now))
+        XCTAssertNil(usnap([urow("codex", five: nil, week: nil, idle: true)]).mostUrgentLimit(now: now))
+        // Out-of-range percents clamp.
+        XCTAssertEqual(usnap([urow("codex", five: 140, week: nil)]).mostUrgentLimit(now: now)?.percent, 100)
+    }
+
+    func testOtherProvidersNearCountsProvidersNotWindows() {
+        let now = Date()
+        let old = now.addingTimeInterval(-3 * 86400)
+        let s = usnap([urow("codex", five: 3, week: 100),
+                       urow("claude-code", five: 85, week: 90),                    // two windows → counts once
+                       urow("cursor-ide-auto", five: nil, week: 80, hides: true),  // boundary 80 counts
+                       urow("opencode", five: 79, week: nil),                      // below
+                       urow("claude-code-fable", five: nil, week: 95, asOf: old)]) // stale → excluded
+        XCTAssertNotNil(s.mostUrgentLimit(now: now)); guard let u = s.mostUrgentLimit(now: now) else { return }
+        XCTAssertEqual(u.row.providerId, "codex")
+        XCTAssertEqual(s.otherProvidersNear(limit: u, now: now), 2)
+    }
+
+    func testResetTimesRoundTripAndOldJSONDecodes() throws {
+        let r = Date(timeIntervalSince1970: 1_800_000_000)
+        let row = urow("codex", five: 10, week: 20, fiveReset: r, weekReset: r.addingTimeInterval(60))
+        let back = try JSONDecoder().decode(WidgetSnapshotRow.self, from: JSONEncoder().encode(row))
+        XCTAssertEqual(back.fiveHourResetAt, r)
+        XCTAssertEqual(back.weeklyResetAt, r.addingTimeInterval(60))
+        let legacy = #"{"providerId":"codex","shortName":"Codex","code":"CX","dotColor":1,"idle":false}"#
+        let old = try JSONDecoder().decode(WidgetSnapshotRow.self, from: Data(legacy.utf8))
+        XCTAssertNil(old.fiveHourResetAt)
+        XCTAssertNil(old.weeklyResetAt)
+    }
+
+    func testBuilderCarriesResetTimes() {
+        let now = Date()
+        let r5 = now.addingTimeInterval(3600), rw = now.addingTimeInterval(86400)
+        let limits = [
+            ProviderLimitState(providerId: "codex",
+                fiveHour: LimitWindowState(usedPercent: 40, resetAt: r5, windowMinutes: 300, confidence: .high),
+                weekly: LimitWindowState(usedPercent: 55, resetAt: rw, windowMinutes: 10_080, confidence: .high)),
+            // Grok: 5h never published, so its 5h reset must not leak either.
+            ProviderLimitState(providerId: "grok-code",
+                fiveHour: LimitWindowState(usedPercent: 10, resetAt: r5, windowMinutes: 300, confidence: .estimated),
+                weekly: LimitWindowState(usedPercent: 30, resetAt: rw, windowMinutes: 10_080, confidence: .estimated)),
+        ]
+        let dash = DashboardState(generatedAt: now, snapshots: [], limitStates: limits, todayTotals: .zero,
+                                  todayCost: .zero, todayByProvider: [], burnRateTokensPerHour: 0,
+                                  burnCostPerHour: 0, hourly: [], topProjects: [], models: [],
+                                  dataQuality: [], lastRefreshAt: now)
+        let snap = WidgetSnapshotBuilder.build(dashboard: dash, limitStates: limits,
+                                               enabledProviders: ["codex", "grok-code"])
+        let codex = snap.rows.first { $0.providerId == "codex" }
+        XCTAssertEqual(codex?.fiveHourResetAt, r5)
+        XCTAssertEqual(codex?.weeklyResetAt, rw)
+        let grok = snap.rows.first { $0.providerId == "grok-code" }
+        XCTAssertNil(grok?.fiveHourResetAt)
+        XCTAssertEqual(grok?.weeklyResetAt, rw)
     }
 }

@@ -39,7 +39,12 @@ private struct WidgetHeader: View {
     var showLegend = false
 
     private var legendCaption: String {
-        snapshot.rows.contains(where: \.weeklyEstimated) ? "5h · ~wk" : "5h · wk"
+        let anyFive = snapshot.rows.contains { !$0.widgetSinglePeriodColumn && !$0.idle }
+        let est = snapshot.rows.contains(where: \.weeklyEstimated)
+        if !anyFive {
+            return est ? "~wk" : "wk"
+        }
+        return est ? "5h · ~wk" : "5h · wk"
     }
 
     var body: some View {
@@ -75,6 +80,15 @@ private struct WidgetSmallView: View {
     private var live: Bool { WidgetSnapshotStore.isPopulated(entry.snapshot) }
 
     var body: some View {
+        if live, let urgent = entry.snapshot.mostUrgentLimit(now: entry.date) {
+            WidgetSmallUrgentView(snapshot: entry.snapshot, urgent: urgent, now: entry.date)
+        } else {
+            listBody
+        }
+    }
+
+    /// Fallback when no provider has a limit reading (or the snapshot is not live yet).
+    private var listBody: some View {
         VStack(alignment: .leading, spacing: 3) {
             WidgetHeader(snapshot: entry.snapshot, now: entry.date, compact: true, showLegend: true)
             if !live || (entry.snapshot.rows.isEmpty && entry.snapshot.creditRows.isEmpty) {
@@ -92,6 +106,99 @@ private struct WidgetSmallView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Shared wording for the most-urgent limit (small widget body, large widget header).
+private struct UrgentLimitText {
+    let snapshot: WidgetSnapshot
+    let urgent: WidgetUrgentLimit
+    let now: Date
+
+    static let nearThreshold = 80
+
+    var others: Int {
+        snapshot.otherProvidersNear(limit: urgent, threshold: Self.nearThreshold, now: now)
+    }
+
+    var percentString: String {
+        (urgent.estimated ? "~" : "") + "\(urgent.percent)%"
+    }
+
+    /// `resets in 2d 4h`, or the stale age; nil when there is nothing useful to say.
+    var detailLine: String? {
+        if urgent.stale { return urgent.row.weeklyStaleLabel(now: now) }
+        guard let r = urgent.resetAt, r > now else { return nil }
+        return "resets in \(ResetLabel.countdown(to: r, now: now))"
+    }
+
+    var othersLine: String? {
+        others > 0 ? "+\(others) other ≥ \(Self.nearThreshold)%" : nil
+    }
+
+    private var spokenWindow: String {
+        urgent.window == .fiveHour ? "5 hour" : urgent.row.periodWindowName
+    }
+
+    var accessibilityText: String {
+        var parts = ["Most urgent limit: \(urgent.row.shortName) \(spokenWindow) "
+            + (urgent.estimated ? "about " : "") + "\(urgent.percent) percent"]
+        if let detailLine { parts.append(detailLine) }
+        if others > 0 {
+            parts.append("\(others) other provider\(others == 1 ? "" : "s") at or above \(Self.nearThreshold) percent")
+        }
+        return parts.joined(separator: ". ")
+    }
+}
+
+/// Small widget: the one limit closest to running out, its reset, and how many others are near.
+private struct WidgetSmallUrgentView: View {
+    let snapshot: WidgetSnapshot
+    let urgent: WidgetUrgentLimit
+    let now: Date
+
+    private var text: UrgentLimitText { UrgentLimitText(snapshot: snapshot, urgent: urgent, now: now) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            WidgetHeader(snapshot: snapshot, now: now, compact: true)
+            Spacer(minLength: 2)
+            HStack(spacing: 4) {
+                ProviderDot(color: urgent.row.dotColor, size: 7)
+                Text(urgent.row.shortName)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(text.percentString)
+                    .font(.system(size: 34, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(percentColor(urgent.percent))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(urgent.windowTag)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .opacity(urgent.stale ? 0.55 : 1)
+            if let detailLine = text.detailLine {
+                Text(detailLine)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 2)
+            if let othersLine = text.othersLine {
+                Text(othersLine)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text.accessibilityText)
     }
 }
 
@@ -119,6 +226,54 @@ private struct WidgetMediumView: View {
     }
 }
 
+/// Large widget header card: the most urgent limit on one line, above the per-provider bars.
+private struct WidgetLargeUrgentHero: View {
+    let text: UrgentLimitText
+
+    var body: some View {
+        let urgent = text.urgent
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    ProviderDot(color: urgent.row.dotColor, size: 7)
+                    Text(urgent.row.shortName)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                }
+                if let detailLine = text.detailLine {
+                    Text(detailLine)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let othersLine = text.othersLine {
+                    Text(othersLine)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(text.percentString)
+                    .font(.system(size: 28, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(percentColor(urgent.percent))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(urgent.windowTag)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .opacity(urgent.stale ? 0.55 : 1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text.accessibilityText)
+    }
+}
+
 private struct WidgetLargeView: View {
     let entry: UsageEntry
 
@@ -136,7 +291,11 @@ private struct WidgetLargeView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Divider()
+            if live, let urgent = entry.snapshot.mostUrgentLimit(now: entry.date) {
+                WidgetLargeUrgentHero(text: UrgentLimitText(snapshot: entry.snapshot, urgent: urgent, now: entry.date))
+            } else {
+                Divider()
+            }
             if entry.snapshot.rows.isEmpty && entry.snapshot.creditRows.isEmpty {
                 Text("No providers with limit data.")
                     .font(.caption)
@@ -187,7 +346,8 @@ private struct FittingRows<Row: View, Footer: View>: View {
     }
 }
 
-/// Medium widget: Colab sits in the left column so value columns line up with 5h/wk.
+/// Medium widget: Colab sits at the bottom of the right column; the left column takes the
+/// extra provider so both columns end at the same height.
 private struct FittingMediumRows: View {
     let rows: [WidgetSnapshotRow]
     let creditRows: [WidgetCreditRow]
@@ -197,19 +357,19 @@ private struct FittingMediumRows: View {
         ViewThatFits(in: .vertical) {
             ForEach(Array(stride(from: rows.count, through: 0, by: -1)), id: \.self) { n in
                 VStack(alignment: .leading, spacing: 3) {
-                    let half = (n + 1) / 2
+                    let left = min(n, (n + creditRows.count + 1) / 2)
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
-                            ForEach(rows.prefix(half)) { row in
+                            ForEach(rows.prefix(left)) { row in
+                                WidgetRowLine(row: row, showBars: false, now: now)
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(rows.dropFirst(left).prefix(n - left)) { row in
                                 WidgetRowLine(row: row, showBars: false, now: now)
                             }
                             ForEach(creditRows) { row in
                                 WidgetCreditRowLine(row: row, showBars: false)
-                            }
-                        }
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(rows.dropFirst(half).prefix(n - half)) { row in
-                                WidgetRowLine(row: row, showBars: false, now: now)
                             }
                         }
                     }
@@ -246,10 +406,18 @@ private struct WidgetRowCompact: View {
         }
     }
 
+    private var singlePeriod: Bool { row.widgetSinglePeriodColumn }
+
     @ViewBuilder
     private var usageValues: some View {
         if row.idle {
             Text("idle")
+        } else if singlePeriod {
+            if row.isWeeklyStale(now: now) {
+                Text(weeklyText).foregroundColor(.primary.opacity(0.55))
+            } else {
+                Text(weeklyText)
+            }
         } else if row.isWeeklyStale(now: now) {
             // One Text (not an HStack) so layout and the a11y label match the live case.
             Text("\(fiveHourText)/") + Text(weeklyText).foregroundColor(.primary.opacity(0.55))
@@ -269,9 +437,15 @@ private struct WidgetRowCompact: View {
 
     private var usageAccessibilityLabel: String {
         if row.idle { return "idle" }
-        let a = row.fiveHourPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
         let b = row.weeklyPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
         let age = row.weeklyStaleLabel(now: now).map { " (\($0))" } ?? ""
+        if singlePeriod {
+            if row.weeklyEstimated {
+                return "billing period about \(b) estimated\(age)"
+            }
+            return "\(row.periodWindowName) \(b)\(age)"
+        }
+        let a = row.fiveHourPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
         if row.weeklyEstimated {
             return "5 hour \(a), billing period about \(b) estimated\(age)"
         }
@@ -321,8 +495,12 @@ private struct WidgetCreditRowLine: View {
                 .frame(width: showBars ? WidgetRowMetrics.labelWidthLarge : nil, alignment: .leading)
             if !showBars { Spacer(minLength: 2) }
             if showBars {
-                CreditMeterColumn(text: row.primary, secondary: false)
-                CreditMeterColumn(text: row.secondary ?? "—", secondary: true)
+                // Large widget: credits are not a limit window, so they sit at the right edge.
+                Spacer(minLength: 2)
+                CreditPercentColumn(text: row.primary, secondary: false)
+                if let secondary = row.secondary {
+                    CreditPercentColumn(text: secondary, secondary: true)
+                }
             } else {
                 CreditPercentColumn(text: row.primary, secondary: false)
                 CreditPercentColumn(text: row.secondary ?? "—", secondary: true)
@@ -352,28 +530,6 @@ private struct CreditPercentColumn: View {
     }
 }
 
-/// Mirrors `MeterBar` footprint so the credit row matches large-widget provider height.
-private struct CreditMeterColumn: View {
-    let text: String
-    var secondary: Bool
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Color.clear
-                .frame(height: 5)
-                .frame(maxWidth: .infinity)
-            Text(text)
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(secondary ? .secondary : .primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .fixedSize()
-                .frame(width: WidgetRowMetrics.meterValueWidth, alignment: .trailing)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
 /// One line per provider: dot · name · 5h · wk. `showBars` adds meter bars (large widget).
 private struct WidgetRowLine: View {
     let row: WidgetSnapshotRow
@@ -381,6 +537,17 @@ private struct WidgetRowLine: View {
     let now: Date
 
     private var weeklyStaleLabel: String? { row.weeklyStaleLabel(now: now) }
+    private var singlePeriod: Bool { row.widgetSinglePeriodColumn }
+
+    private var weeklyPercentText: some View {
+        PercentText(
+            percent: row.weeklyPercent,
+            window: row.periodWindowName,
+            weeklyStale: row.isWeeklyStale(now: now),
+            weeklyStaleLabel: weeklyStaleLabel,
+            weeklyEstimated: row.weeklyEstimated
+        )
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -396,24 +563,30 @@ private struct WidgetRowLine: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 if showBars { Spacer(minLength: 0) }
+            } else if singlePeriod && showBars {
+                // No 5h window: the week/month bar takes the full meter width.
+                MeterBar(
+                    percent: row.weeklyPercent,
+                    window: row.periodWindowName,
+                    weeklyStale: row.isWeeklyStale(now: now),
+                    weeklyStaleLabel: weeklyStaleLabel,
+                    weeklyEstimated: row.weeklyEstimated
+                )
+            } else if singlePeriod {
+                weeklyPercentText
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             } else if showBars {
                 MeterBar(percent: row.fiveHourPercent, window: "5 hour")
                 MeterBar(
                     percent: row.weeklyPercent,
-                    window: "week",
+                    window: row.periodWindowName,
                     weeklyStale: row.isWeeklyStale(now: now),
                     weeklyStaleLabel: weeklyStaleLabel,
                     weeklyEstimated: row.weeklyEstimated
                 )
             } else {
                 PercentText(percent: row.fiveHourPercent, window: "5 hour")
-                PercentText(
-                    percent: row.weeklyPercent,
-                    window: "week",
-                    weeklyStale: row.isWeeklyStale(now: now),
-                    weeklyStaleLabel: weeklyStaleLabel,
-                    weeklyEstimated: row.weeklyEstimated
-                )
+                weeklyPercentText
             }
         }
     }

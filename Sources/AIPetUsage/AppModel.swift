@@ -976,6 +976,10 @@ final class AppModel {
         let parts = menuBarBadges.map { badge -> String in
             let tag = badge.badgeLabel
             if badge.idle { return "\(tag) idle" }
+            if LimitMeterChrome.skipsFiveHourMeter(badge.providerId) {
+                let p = (badge.weekly ?? badge.fiveHour).map { "\($0.percent)%" } ?? "-"
+                return "\(tag)\(p)"
+            }
             let a = badge.fiveHour.map { "\($0.percent)%" } ?? "-"
             let b = badge.weekly.map { "\($0.percent)%" } ?? "-"
             if let fab = fableByProvider[badge.providerId] {

@@ -47,7 +47,7 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
             WidgetSnapshotRow(providerId: "codex", shortName: "Codex", code: "CX", dotColor: 0x3B82F6,
                               fiveHourPercent: 42, weeklyPercent: 61, idle: false),
             WidgetSnapshotRow(providerId: "grok-code", shortName: "Grok", code: "GK", dotColor: 0x2E3138,
-                              fiveHourPercent: nil, weeklyPercent: 18, idle: false),
+                              fiveHourPercent: nil, weeklyPercent: 18, idle: false, hidesFiveHourMeter: true),
             WidgetSnapshotRow(providerId: "opencode", shortName: "OpenCode", code: "OC", dotColor: 0xCA8A04,
                               fiveHourPercent: nil, weeklyPercent: 33, idle: false),
         ]
@@ -98,6 +98,11 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
     public var weeklyAsOf: Date?
     /// Grok billing credits on the weekly column (`LimitWindowState.confidence == .estimated`).
     public var weeklyEstimated: Bool
+    /// Publisher marks weekly/monthly-only chrome (Grok, Cursor plan, Argon); widget must not reserve a 5h column.
+    public var hidesFiveHourMeter: Bool
+    /// Window reset times (small widget "resets in …"); nil when the source gives none.
+    public var fiveHourResetAt: Date?
+    public var weeklyResetAt: Date?
 
     public var id: String { providerId }
 
@@ -110,7 +115,10 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         weeklyPercent: Int?,
         idle: Bool,
         weeklyAsOf: Date? = nil,
-        weeklyEstimated: Bool = false
+        weeklyEstimated: Bool = false,
+        hidesFiveHourMeter: Bool = false,
+        fiveHourResetAt: Date? = nil,
+        weeklyResetAt: Date? = nil
     ) {
         self.providerId = providerId
         self.shortName = shortName
@@ -121,11 +129,25 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         self.idle = idle
         self.weeklyAsOf = weeklyAsOf
         self.weeklyEstimated = weeklyEstimated
+        self.hidesFiveHourMeter = hidesFiveHourMeter
+        self.fiveHourResetAt = fiveHourResetAt
+        self.weeklyResetAt = weeklyResetAt
     }
 
     private enum CodingKeys: String, CodingKey {
         case providerId, shortName, code, dotColor, fiveHourPercent, weeklyPercent, idle, weeklyAsOf
-        case weeklyEstimated
+        case weeklyEstimated, hidesFiveHourMeter, fiveHourResetAt, weeklyResetAt
+    }
+
+    /// Single week/month column in the widget (no 5h slot, no empty bar track).
+    /// Only for weekly/monthly-only providers; a missing 5h value elsewhere keeps its "–" slot.
+    public var widgetSinglePeriodColumn: Bool {
+        hidesFiveHourMeter || LimitMeterChrome.skipsFiveHourMeter(providerId)
+    }
+
+    /// Spoken name of the weekly column: Cursor's plan quota is monthly, everything else weekly.
+    public var periodWindowName: String {
+        CursorChromeDisplay.usesMonthlyOnlyMeter(providerId) ? "month" : "week"
     }
 
     public init(from decoder: Decoder) throws {
@@ -139,6 +161,9 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         idle = try c.decode(Bool.self, forKey: .idle)
         weeklyAsOf = try c.decodeIfPresent(Date.self, forKey: .weeklyAsOf)
         weeklyEstimated = try c.decodeIfPresent(Bool.self, forKey: .weeklyEstimated) ?? false
+        hidesFiveHourMeter = try c.decodeIfPresent(Bool.self, forKey: .hidesFiveHourMeter) ?? false
+        fiveHourResetAt = try c.decodeIfPresent(Date.self, forKey: .fiveHourResetAt)
+        weeklyResetAt = try c.decodeIfPresent(Date.self, forKey: .weeklyResetAt)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -152,6 +177,9 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         try c.encode(idle, forKey: .idle)
         try c.encodeIfPresent(weeklyAsOf, forKey: .weeklyAsOf)
         if weeklyEstimated { try c.encode(true, forKey: .weeklyEstimated) }
+        if hidesFiveHourMeter { try c.encode(true, forKey: .hidesFiveHourMeter) }
+        try c.encodeIfPresent(fiveHourResetAt, forKey: .fiveHourResetAt)
+        try c.encodeIfPresent(weeklyResetAt, forKey: .weeklyResetAt)
     }
 
     /// a11y/age text for a stale weekly value; nil when the weekly value is live or absent.
@@ -349,8 +377,7 @@ public enum WidgetSnapshotBuilder {
         for st in states {
             let display = names[st.providerId] ?? st.providerId
             // Grok 只用 weekly 欄(credits → weekly,confidence .estimated);5h 永不發佈。
-            let monthlyOnly = GrokChromeDisplay.usesWeeklyOnlyMeter(st.providerId)
-                || CursorChromeDisplay.usesMonthlyOnlyMeter(st.providerId)
+            let monthlyOnly = LimitMeterChrome.skipsFiveHourMeter(st.providerId)
             let five: Int? = monthlyOnly ? nil : intPercent(st.fiveHour.usedPercent)
             let week = intPercent(st.weekly.usedPercent)
             let idle = st.fiveHour.idle && five == nil && week == nil
@@ -366,7 +393,10 @@ public enum WidgetSnapshotBuilder {
                 idle: idle,
                 weeklyAsOf: WidgetSnapshotRow.carryWeeklyObservation(providerId: st.providerId, weeklyPercent: week)
                     ? st.weekly.observedAt : nil,
-                weeklyEstimated: st.weekly.confidence == .estimated && week != nil
+                weeklyEstimated: st.weekly.confidence == .estimated && week != nil,
+                hidesFiveHourMeter: monthlyOnly,
+                fiveHourResetAt: five == nil ? nil : st.fiveHour.resetAt,
+                weeklyResetAt: week == nil ? nil : st.weekly.resetAt
             ))
         }
 
@@ -458,5 +488,73 @@ enum WidgetProviderChrome {
             let code = String(name.prefix(2)).uppercased()
             return Meta(shortName: name, code: code.isEmpty ? "?" : code, dotColor: 0x9AA1AB)
         }
+    }
+}
+/// The single limit closest to running out (small widget hero).
+public struct WidgetUrgentLimit: Equatable, Sendable {
+    public enum Window: Equatable, Sendable { case fiveHour, period }
+    public var row: WidgetSnapshotRow
+    public var window: Window
+    public var percent: Int
+    public var resetAt: Date?
+    public var estimated: Bool
+    /// Weekly reading past its as-of age; only chosen when no live reading exists.
+    public var stale: Bool
+
+    /// Short window tag: `5h`, `wk`, or `mo` (Cursor plan quota).
+    public var windowTag: String {
+        switch window {
+        case .fiveHour: return "5h"
+        case .period: return row.periodWindowName == "month" ? "mo" : "wk"
+        }
+    }
+}
+
+extension WidgetSnapshot {
+    /// Live (and stale) window readings per row; idle rows contribute nothing.
+    static func urgentCandidates(_ row: WidgetSnapshotRow, now: Date) -> [WidgetUrgentLimit] {
+        guard !row.idle else { return [] }
+        var out: [WidgetUrgentLimit] = []
+        if !row.widgetSinglePeriodColumn, let p = row.fiveHourPercent {
+            out.append(WidgetUrgentLimit(row: row, window: .fiveHour, percent: min(100, max(0, p)),
+                                         resetAt: row.fiveHourResetAt, estimated: false, stale: false))
+        }
+        if let p = row.weeklyPercent {
+            out.append(WidgetUrgentLimit(row: row, window: .period, percent: min(100, max(0, p)),
+                                         resetAt: row.weeklyResetAt, estimated: row.weeklyEstimated,
+                                         stale: row.isWeeklyStale(now: now)))
+        }
+        return out
+    }
+
+    /// Highest percent wins; ties → earlier reset (nil last) → earlier row. Stale weekly readings
+    /// count only when no live reading exists. nil when no row has a reading.
+    public func mostUrgentLimit(now: Date) -> WidgetUrgentLimit? {
+        let all = rows.flatMap { Self.urgentCandidates($0, now: now) }
+        let live = all.filter { !$0.stale }
+        let pool = live.isEmpty ? all : live
+        var best: WidgetUrgentLimit?
+        for c in pool {
+            guard let b = best else { best = c; continue }
+            if c.percent != b.percent {
+                if c.percent > b.percent { best = c }
+                continue
+            }
+            switch (c.resetAt, b.resetAt) {
+            case let (cr?, br?) where cr < br: best = c
+            case (_?, nil): best = c
+            default: break
+            }
+        }
+        return best
+    }
+
+    /// Other providers (not windows) with a live reading at or above `threshold`.
+    public func otherProvidersNear(limit: WidgetUrgentLimit, threshold: Int = 80, now: Date) -> Int {
+        rows.filter { $0.providerId != limit.row.providerId }
+            .filter { row in
+                Self.urgentCandidates(row, now: now).contains { !$0.stale && $0.percent >= threshold }
+            }
+            .count
     }
 }

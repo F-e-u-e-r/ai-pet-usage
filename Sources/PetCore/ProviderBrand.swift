@@ -1,4 +1,5 @@
 import Foundation
+import UsageCore
 
 // Provider 識別徽章系統(UIUX spec):
 //   dot 顏色 = provider 身分,恆定不變,絕不隨用量改色;
@@ -186,15 +187,17 @@ public enum MenuBadgeBuilder {
                 let trimmed = st.badgeLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 return trimmed.isEmpty ? brand.code : String(trimmed.prefix(14))
             }()
-            let fiveHour = window(st.fiveHour)
+            let weeklyOnly = LimitMeterChrome.skipsFiveHourMeter(st.id)
+            var fiveHour = weeklyOnly ? nil : window(st.fiveHour)
             let weekly = window(st.weekly)
-            // 兩窗皆無資料:本機今日 token 刻度 → 5h 槽顯示 activity%;否則 idle 徽章或略過。
+            // 兩窗皆無資料:本機今日 token 刻度 → 5h 槽顯示 activity%;週/月-only provider 改放 weekly 槽。
             if fiveHour == nil, weekly == nil {
                 if let act = st.todayActivityPercent, let w = window(act) {
                     let badge = MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
                                           displayName: brand.displayName,
                                           dotColor: brand.dotColor, needsOutline: brand.needsOutline,
-                                          fiveHour: w, weekly: nil, idle: false)
+                                          fiveHour: weeklyOnly ? nil : w,
+                                          weekly: weeklyOnly ? w : nil, idle: false)
                     if onlyWarnings, badge.aggregateSeverity == .normal { return nil }
                     return badge
                 }
@@ -228,6 +231,10 @@ public enum MenuBadgeBuilder {
                 func say(_ label: String, _ w: MenuBadge.Window?) -> String {
                     w.map { "\(label) \($0.percent) percent, \($0.severity.accessibilityWord)" }
                         ?? "\(label) no data"
+                }
+                if LimitMeterChrome.skipsFiveHourMeter(badge.providerId) {
+                    let label = CursorChromeDisplay.usesMonthlyOnlyMeter(badge.providerId) ? "monthly" : "weekly"
+                    return "\(badge.displayName) \(say(label, badge.weekly))"
                 }
                 return "\(badge.displayName) \(say("5-hour", badge.fiveHour)), \(say("weekly", badge.weekly))"
             })

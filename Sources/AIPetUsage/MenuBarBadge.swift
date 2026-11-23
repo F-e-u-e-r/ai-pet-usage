@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import PetCore
+import UsageCore
 
 // 選單列彩色徽章(UIUX spec P0):
 //   🐶 ● CC 91% ● CX 53%
@@ -72,6 +73,8 @@ struct MenuBarBadgeView: View {
                         Text("idle")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(baseColor.opacity(0.55))
+                    } else if LimitMeterChrome.skipsFiveHourMeter(badge.providerId) {
+                        windowText(badge.weekly ?? badge.fiveHour)
                     } else {
                         // 5h / weekly 兩窗:各自依自身 severity 上色;nil 窗顯示 "-"。
                         HStack(spacing: 1) {

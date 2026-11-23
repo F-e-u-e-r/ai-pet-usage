@@ -537,6 +537,7 @@ runSuite("ProviderBrandTests", [
     ("testFiveHourMissingWithWeeklyPresentShowsDash", brandTests.testFiveHourMissingWithWeeklyPresentShowsDash),
     ("testSeverityThresholdsAndCompactFilter", brandTests.testSeverityThresholdsAndCompactFilter),
     ("testAccessibilitySummaryUsesFullNames", brandTests.testAccessibilitySummaryUsesFullNames),
+    ("testGrokWeeklyOnlyBadgeDropsFiveHourSlot", brandTests.testGrokWeeklyOnlyBadgeDropsFiveHourSlot),
     ("testIdentityDotsAreStableAndDistinct", brandTests.testIdentityDotsAreStableAndDistinct),
     ("testSpeciesFoodsKeepStableIds", brandTests.testSpeciesFoodsKeepStableIds),
 ])
@@ -1424,6 +1425,13 @@ let widgetSnapshot = WidgetSnapshotTests()
 runSuite("WidgetSnapshotTests", [
     ("testBuilderIncludesColabCreditRowWhenEnabled", widgetSnapshot.testBuilderIncludesColabCreditRowWhenEnabled),
     ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
+    ("testMostUrgentPicksHighestLiveWindow", widgetSnapshot.testMostUrgentPicksHighestLiveWindow),
+    ("testMostUrgentTieGoesToEarlierReset", widgetSnapshot.testMostUrgentTieGoesToEarlierReset),
+    ("testMostUrgentSkipsStaleWeeklyWhenLiveExists", widgetSnapshot.testMostUrgentSkipsStaleWeeklyWhenLiveExists),
+    ("testMostUrgentNilWhenNoReadings", widgetSnapshot.testMostUrgentNilWhenNoReadings),
+    ("testOtherProvidersNearCountsProvidersNotWindows", widgetSnapshot.testOtherProvidersNearCountsProvidersNotWindows),
+    ("testResetTimesRoundTripAndOldJSONDecodes", widgetSnapshot.testResetTimesRoundTripAndOldJSONDecodes),
+    ("testBuilderCarriesResetTimes", widgetSnapshot.testBuilderCarriesResetTimes),
     ("testBuilderIgnoresNonFinitePercents", widgetSnapshot.testBuilderIgnoresNonFinitePercents),
     ("testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders", widgetSnapshot.testBuilderKeepsBothCursorQuotaRowsAfterOtherProviders),
     ("testUnknownProviderEmptyNameFallsBackToId", widgetSnapshot.testUnknownProviderEmptyNameFallsBackToId),

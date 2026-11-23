@@ -300,6 +300,16 @@ final class ProviderBrandTests: XCTestCase {
         XCTAssertEqual(badges[0].weekly?.percent, 18)
     }
 
+    func testGrokWeeklyOnlyBadgeDropsFiveHourSlot() {
+        let badges = MenuBadgeBuilder.badges(from: [
+            (id: "grok-code", displayName: "Grok", badgeLabel: nil, fiveHour: 18, weekly: 30,
+             idle: false, todayActivityPercent: nil),
+        ], warn: 80, danger: 95)
+        XCTAssertEqual(badges.count, 1)
+        XCTAssertNil(badges[0].fiveHour, "Grok 無 5h 配額 — 不得塞進 fiveHour 槽")
+        XCTAssertEqual(badges[0].weekly?.percent, 30)
+    }
+
     func testIdentityDotsAreStableAndDistinct() {
         // Chrome-split ids (AG/Cursor buckets) intentionally share parent identity colors.
         let primaryIds = ["antigravity", "claude-code", "codex", "grok-code", "opencode", "cursor-ide"]

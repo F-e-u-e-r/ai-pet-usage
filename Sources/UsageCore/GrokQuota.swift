@@ -381,7 +381,7 @@ public enum GrokChromeDisplay {
     }
 
     public static func normalizeLimitState(_ state: ProviderLimitState,
-                                         officialQuota: GrokQuotaSnapshot?) -> ProviderLimitState {
+                                           officialQuota: GrokQuotaSnapshot?) -> ProviderLimitState {
         guard state.providerId == providerId else { return state }
         var s = state
         // Grok 無 5h 配額:不論有無官方 credits,5h 一律清空(契約:永不發佈 5h %)
@@ -400,5 +400,26 @@ public enum GrokChromeDisplay {
             s.todayActivityPercent = nil
         }
         return s
+    }
+}
+
+/// Menu bar, widget, and badges: providers that never show a 5-hour meter column.
+public enum LimitMeterChrome {
+    public static func skipsFiveHourMeter(_ providerId: String) -> Bool {
+        GrokChromeDisplay.usesWeeklyOnlyMeter(providerId)
+            || CursorChromeDisplay.usesMonthlyOnlyMeter(providerId)
+            || providerId == AntigravityQuotaDisplay.argonId
+    }
+
+    /// Chrome + reported capability: hide the 5h row/bar when the source never reports that window.
+    public static func showsFiveHourLimitUI(providerId: String, reported: ProviderReportedLimits?) -> Bool {
+        if skipsFiveHourMeter(providerId) { return false }
+        if let reported, case .notProvidedBySource = reported.fiveHour { return false }
+        return true
+    }
+
+    public static func periodLimitLabel(providerId: String) -> String {
+        if CursorChromeDisplay.usesMonthlyOnlyMeter(providerId) { return "monthly" }
+        return "weekly"
     }
 }

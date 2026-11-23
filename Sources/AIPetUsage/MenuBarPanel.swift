@@ -208,13 +208,7 @@ private struct ProviderStatusRow: View {
                 .padding(.leading, nestedUnderCategory ? 10 : 0)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if GrokChromeDisplay.usesWeeklyOnlyMeter(state.providerId)
-                || CursorChromeDisplay.usesMonthlyOnlyMeter(state.providerId) {
-                Text("—")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
-            } else {
+            if !LimitMeterChrome.skipsFiveHourMeter(state.providerId) {
                 windowText("5h", state.fiveHour, activityPercent: state.todayActivityPercent)
                     .frame(width: MenuPanelMetrics.windowColumnWidth, alignment: .trailing)
             }
@@ -287,8 +281,16 @@ private struct ProviderStatusRow: View {
             w.idle ? "idle" : (w.usedPercent.map { "\(Int($0.rounded())) percent" } ?? "no data")
         }
         let weeklyAge = StatuslineAge.weeklyAsOfLabel(for: state, now: now).map { " (\($0))" } ?? ""
-        return "\(brand.displayName): 5 hour \(win(state.fiveHour)), weekly \(win(state.weekly))\(weeklyAge). "
-            + ResetLabel.accessibility(fiveHourResetAt: state.fiveHour.resetAt,
+        let windows: String
+        if LimitMeterChrome.skipsFiveHourMeter(state.providerId) {
+            let period = CursorChromeDisplay.usesMonthlyOnlyMeter(state.providerId) ? "monthly" : "weekly"
+            windows = "\(period) \(win(state.weekly))\(weeklyAge)"
+        } else {
+            windows = "5 hour \(win(state.fiveHour)), weekly \(win(state.weekly))\(weeklyAge)"
+        }
+        return "\(brand.displayName): \(windows). "
+            + ResetLabel.accessibility(fiveHourResetAt: LimitMeterChrome.skipsFiveHourMeter(state.providerId)
+                                        ? nil : state.fiveHour.resetAt,
                                        weeklyResetAt: state.weekly.resetAt, now: now)
     }
 }

@@ -337,5 +337,22 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertEqual(noFiveHour.fiveHour.windowMinutes, 300)
         XCTAssertEqual(noFiveHour.fiveHour.confidence, .unknown)
         XCTAssertEqual(noFiveHour.weekly.usedPercent, 30)
+
+        XCTAssertTrue(LimitMeterChrome.skipsFiveHourMeter("grok-code"))
+        XCTAssertTrue(LimitMeterChrome.skipsFiveHourMeter("cursor-ide-auto"))
+        XCTAssertTrue(LimitMeterChrome.skipsFiveHourMeter(AntigravityQuotaDisplay.argonId))
+        XCTAssertFalse(LimitMeterChrome.skipsFiveHourMeter("claude-code"))
+        let grokReported = ProviderReportedLimits(
+            providerId: "grok-code",
+            fiveHour: .notProvidedBySource,
+            weekly: .provided(percent: 12, resetsAt: nil, confidence: .estimated, corrected: false),
+            cue: .none, statuslinePresent: nil, fiveHourEstimateActive: false, weeklyEstimateActive: false)
+        XCTAssertFalse(LimitMeterChrome.showsFiveHourLimitUI(providerId: "grok-code", reported: grokReported))
+        let claudeReported = ProviderReportedLimits(
+            providerId: "claude-code",
+            fiveHour: .provided(percent: 40, resetsAt: nil, confidence: .high, corrected: false),
+            weekly: .provided(percent: 20, resetsAt: nil, confidence: .high, corrected: false),
+            cue: .none, statuslinePresent: true, fiveHourEstimateActive: false, weeklyEstimateActive: false)
+        XCTAssertTrue(LimitMeterChrome.showsFiveHourLimitUI(providerId: "claude-code", reported: claudeReported))
     }
 }

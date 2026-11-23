@@ -782,7 +782,7 @@ struct AntigravityQuotaGroupsView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .padding(.leading, 8)
-                ForEach(group.buckets) { bucket in
+                ForEach(visibleBuckets(group)) { bucket in
                     compactBucketRow(bucket)
                 }
             }
@@ -793,12 +793,20 @@ struct AntigravityQuotaGroupsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(group.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
                 HStack(alignment: .top, spacing: 24) {
-                    ForEach(group.buckets) { bucket in
+                    ForEach(visibleBuckets(group)) { bucket in
                         limitBucketBar(bucket)
                     }
                 }
             }
         }
+    }
+
+    private func visibleBuckets(_ group: AntigravityQuotaGroup) -> [AntigravityQuotaBucket] {
+        let gid = AntigravityQuotaDisplay.groupId(forGroupName: group.name)
+        if gid == AntigravityQuotaDisplay.argonId {
+            return group.buckets.filter { $0.windowMinutes != 300 }
+        }
+        return group.buckets
     }
 
     private func compactBucketRow(_ bucket: AntigravityQuotaBucket) -> some View {
@@ -1097,8 +1105,11 @@ struct AgentCard: View {
                 .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    limitRow("5h", reportedInline(\.fiveHour))
-                    limitRow("weekly", reportedInline(\.weekly))
+                    if LimitMeterChrome.showsFiveHourLimitUI(providerId: snapshot.providerId, reported: reported) {
+                        limitRow("5h", reportedInline(\.fiveHour))
+                    }
+                    limitRow(LimitMeterChrome.periodLimitLabel(providerId: snapshot.providerId),
+                             reportedInline(\.weekly))
                 }
                 .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textSecondary)
             }
@@ -1232,8 +1243,11 @@ struct LimitRow: View {
                 Text(ReportedLimitText.header(providerId: limit.providerId))
                     .font(.caption2).foregroundStyle(Theme.textMuted)
                 HStack(alignment: .top, spacing: 24) {
-                    reportedBar("5-hour window", reported?.fiveHour ?? .unknownCapability)
-                    reportedBar("Weekly window", reported?.weekly ?? .unknownCapability)
+                    if LimitMeterChrome.showsFiveHourLimitUI(providerId: limit.providerId, reported: reported) {
+                        reportedBar("5-hour window", reported?.fiveHour ?? .unknownCapability)
+                    }
+                    reportedBar("\(LimitMeterChrome.periodLimitLabel(providerId: limit.providerId).capitalized) window",
+                                reported?.weekly ?? .unknownCapability)
                 }
             }
             // 本機估算 bar(v0.8 A2b:新 EstimateBar,文字全來自 EstimateRowText、reset 由注入 now 控制):
