@@ -1427,6 +1427,8 @@ runSuite("WidgetSnapshotTests", [
     ("testBuilderFiltersDisabledProviders", widgetSnapshot.testBuilderFiltersDisabledProviders),
     ("testMostUrgentPicksHighestLiveWindow", widgetSnapshot.testMostUrgentPicksHighestLiveWindow),
     ("testMostUrgentTieGoesToEarlierReset", widgetSnapshot.testMostUrgentTieGoesToEarlierReset),
+    ("testMostUrgentSkipsExpiredWeeklyResetWhenLiveFiveHourExists", widgetSnapshot.testMostUrgentSkipsExpiredWeeklyResetWhenLiveFiveHourExists),
+    ("testMostUrgentPicksLiveFiveHourOverExpiredFiveHourReading", widgetSnapshot.testMostUrgentPicksLiveFiveHourOverExpiredFiveHourReading),
     ("testMostUrgentSkipsStaleWeeklyWhenLiveExists", widgetSnapshot.testMostUrgentSkipsStaleWeeklyWhenLiveExists),
     ("testMostUrgentNilWhenNoReadings", widgetSnapshot.testMostUrgentNilWhenNoReadings),
     ("testOtherProvidersNearCountsProvidersNotWindows", widgetSnapshot.testOtherProvidersNearCountsProvidersNotWindows),
@@ -1444,6 +1446,11 @@ runSuite("WidgetSnapshotTests", [
     ("testWidgetExtensionReadPrefersSupportBeforeShared", widgetSnapshot.testWidgetExtensionReadPrefersSupportBeforeShared),
     ("testStoreRoundTripInSupportPath", widgetSnapshot.testStoreRoundTripInSupportPath),
     ("testWeeklyStaleLabelNilWhenNoAsOf", widgetSnapshot.testWeeklyStaleLabelNilWhenNoAsOf),
+    ("testWeeklyStaleWhenResetPassedAndNoAsOf", widgetSnapshot.testWeeklyStaleWhenResetPassedAndNoAsOf),
+    ("testFiveHourStaleAtResetBoundary", widgetSnapshot.testFiveHourStaleAtResetBoundary),
+    ("testPeriodStaleDetailPastResetWithoutAsOf", widgetSnapshot.testPeriodStaleDetailPastResetWithoutAsOf),
+    ("testUrgentStaleDetailFiveHourVersusWeekly", widgetSnapshot.testUrgentStaleDetailFiveHourVersusWeekly),
+    ("testWeeklyStaleAtResetBoundary", widgetSnapshot.testWeeklyStaleAtResetBoundary),
     ("testWeeklyStaleLabelNilWhenNoWeeklyPercent", widgetSnapshot.testWeeklyStaleLabelNilWhenNoWeeklyPercent),
     ("testWeeklyStaleLabelTenHoursAgo", widgetSnapshot.testWeeklyStaleLabelTenHoursAgo),
     ("testWeeklyStaleLabelFutureSkew", widgetSnapshot.testWeeklyStaleLabelFutureSkew),
@@ -1523,6 +1530,10 @@ runSuite("SurfRound6Tests", [
     ("testColabFailureMapsNotLoggedInFromStderr", surf6.testColabFailureMapsNotLoggedInFromStderr),
     ("testColabFailureMapsAuthExpiredFromStderr", surf6.testColabFailureMapsAuthExpiredFromStderr),
     ("testColabFailureMapsTimeoutFromStderr", surf6.testColabFailureMapsTimeoutFromStderr),
+    ("testColabFetchDrainsStderrWhilePrintingStdout", surf6.testColabFetchDrainsStderrWhilePrintingStdout),
+    ("testColabFetchRejectsOversizedStdout", surf6.testColabFetchRejectsOversizedStdout),
+    ("testColabFetchRejectsOversizedStderrOnExit1", surf6.testColabFetchRejectsOversizedStderrOnExit1),
+    ("testColabFetchClassifiesTimeoutFromStderrOnExit1", surf6.testColabFetchClassifiesTimeoutFromStderrOnExit1),
 ])
 
 let surf7 = SurfRound7Tests()

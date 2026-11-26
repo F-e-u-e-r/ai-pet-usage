@@ -165,6 +165,8 @@ public enum ColabCreditsFetcher {
             return ColabCreditsEngine.parse(stdout: out, now: now)
         } catch let err as NSError where err.domain == "ColabCreditsFetcher" && err.code == -1 {
             return .timedOut
+        } catch is ColabCreditsOutputOverflowError {
+            return .badReply
         } catch let err as ColabCreditsRunError {
             return ColabCreditsEngine.classifyFailure(stderr: err.stderr, exitCode: err.exitCode)
         } catch {
@@ -185,36 +187,70 @@ public enum ColabCreditsFetcher {
         let err = Pipe()
         proc.standardOutput = out
         proc.standardError = err
-        let collected = CollectedOutput()
+        let collected = CollectedOutput(maxBytes: ColabCreditsEngine.maxOutputBytes)
+        let stderr = CollectedOutput(maxBytes: ColabCreditsEngine.maxOutputBytes)
         let exited = DispatchSemaphore(value: 0)
         let reader = out.fileHandleForReading
+        let errReader = err.fileHandleForReading
         reader.readabilityHandler = { handle in
             let chunk = handle.availableData
             if chunk.isEmpty { handle.readabilityHandler = nil; collected.finish() } else { collected.append(chunk) }
         }
+        errReader.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { handle.readabilityHandler = nil; stderr.finish() } else { stderr.append(chunk) }
+        }
         proc.terminationHandler = { _ in exited.signal() }
-        defer { reader.readabilityHandler = nil }
+        defer {
+            reader.readabilityHandler = nil
+            errReader.readabilityHandler = nil
+        }
         try proc.run()
         let deadline = DispatchTime.now() + .seconds(25)
         if exited.wait(timeout: deadline) == .timedOut {
             proc.terminate()
             throw NSError(domain: "ColabCreditsFetcher", code: -1)
         }
-        _ = collected.eof.wait(timeout: min(deadline, DispatchTime.now() + .seconds(2)))
-        let stderr = err.fileHandleForReading.readDataToEndOfFile()
+        let drainDeadline = min(deadline, DispatchTime.now() + .seconds(2))
+        _ = collected.eof.wait(timeout: drainDeadline)
+        _ = stderr.eof.wait(timeout: drainDeadline)
         guard proc.terminationStatus == 0 else {
-            throw ColabCreditsRunError(exitCode: proc.terminationStatus, stderr: stderr)
+            if stderr.didOverflow { throw ColabCreditsOutputOverflowError() }
+            throw ColabCreditsRunError(exitCode: proc.terminationStatus, stderr: stderr.snapshot())
+        }
+        if collected.didOverflow {
+            throw ColabCreditsOutputOverflowError()
         }
         return collected.snapshot()
     }
+
+    private struct ColabCreditsOutputOverflowError: Error {}
 
     private final class CollectedOutput: @unchecked Sendable {
         private let lock = NSLock()
         private var data = Data()
         private var finished = false
+        private var overflowed = false
+        private let maxBytes: Int?
         let eof = DispatchSemaphore(value: 0)
 
-        func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
+        init(maxBytes: Int? = nil) { self.maxBytes = maxBytes }
+
+        var didOverflow: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return overflowed
+        }
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let cap = maxBytes else { data.append(chunk); return }
+            let room = cap - data.count
+            guard room > 0 else { overflowed = true; return }
+            if chunk.count > room { overflowed = true }
+            data.append(chunk.prefix(room))
+        }
         func finish() {
             lock.lock(); let first = !finished; finished = true; lock.unlock()
             if first { eof.signal() }

@@ -190,7 +190,39 @@ public struct WidgetSnapshotRow: Codable, Sendable, Equatable, Identifiable {
         return StatuslineAge.asOfLabel(observedAt: observed, now: now)
     }
 
-    public func isWeeklyStale(now: Date) -> Bool { weeklyStaleLabel(now: now) != nil }
+    /// Period-window stale detail for widget copy/a11y (observation age or reset expiry).
+    public func periodStaleDetail(now: Date) -> String? {
+        if let label = weeklyStaleLabel(now: now) { return label }
+        if let reset = weeklyResetAt, weeklyPercent != nil, now >= reset {
+            return "past reset"
+        }
+        return nil
+    }
+
+    /// Five-hour stale detail after reset time (widget copy/a11y).
+    public func fiveHourStaleLabel(now: Date) -> String? {
+        isFiveHourStale(now: now) ? "past reset" : nil
+    }
+
+    public func isWeeklyStale(now: Date) -> Bool {
+        if let reset = weeklyResetAt, weeklyPercent != nil, now >= reset { return true }
+        return weeklyStaleLabel(now: now) != nil
+    }
+
+    /// Frozen snapshot five-hour reading after its reset time must not compete as live urgency.
+    public func isFiveHourStale(now: Date) -> Bool {
+        guard fiveHourPercent != nil, !widgetSinglePeriodColumn else { return false }
+        guard let reset = fiveHourResetAt else { return false }
+        return now >= reset
+    }
+
+    /// Hero detail when the chosen urgent reading is stale (matches the urgent window, not the other column).
+    public func urgentStaleDetail(window: WidgetUrgentLimit.Window, now: Date) -> String? {
+        switch window {
+        case .fiveHour: return fiveHourStaleLabel(now: now)
+        case .period: return periodStaleDetail(now: now)
+        }
+    }
 
     /// Providers whose weekly column can age out while the widget re-renders on a frozen JSON snapshot.
     static func carryWeeklyObservation(providerId: String, weeklyPercent: Int?) -> Bool {
@@ -498,7 +530,7 @@ public struct WidgetUrgentLimit: Equatable, Sendable {
     public var percent: Int
     public var resetAt: Date?
     public var estimated: Bool
-    /// Weekly reading past its as-of age; only chosen when no live reading exists.
+    /// Urgent reading is stale (observation age or past reset); used when no live reading wins.
     public var stale: Bool
 
     /// Short window tag: `5h`, `wk`, or `mo` (Cursor plan quota).
@@ -517,7 +549,8 @@ extension WidgetSnapshot {
         var out: [WidgetUrgentLimit] = []
         if !row.widgetSinglePeriodColumn, let p = row.fiveHourPercent {
             out.append(WidgetUrgentLimit(row: row, window: .fiveHour, percent: min(100, max(0, p)),
-                                         resetAt: row.fiveHourResetAt, estimated: false, stale: false))
+                                         resetAt: row.fiveHourResetAt, estimated: false,
+                                         stale: row.isFiveHourStale(now: now)))
         }
         if let p = row.weeklyPercent {
             out.append(WidgetUrgentLimit(row: row, window: .period, percent: min(100, max(0, p)),
@@ -527,8 +560,8 @@ extension WidgetSnapshot {
         return out
     }
 
-    /// Highest percent wins; ties → earlier reset (nil last) → earlier row. Stale weekly readings
-    /// count only when no live reading exists. nil when no row has a reading.
+    /// Highest percent wins; ties → earlier reset (nil last) → earlier row. Stale readings
+    /// (observation age or past reset) count only when no live reading exists. nil when no row has a reading.
     public func mostUrgentLimit(now: Date) -> WidgetUrgentLimit? {
         let all = rows.flatMap { Self.urgentCandidates($0, now: now) }
         let live = all.filter { !$0.stale }

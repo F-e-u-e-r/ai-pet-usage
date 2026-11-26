@@ -339,10 +339,96 @@ final class WidgetSnapshotTests: XCTestCase {
             fiveHourPercent: 10,
             weeklyPercent: 40,
             idle: false,
-            weeklyAsOf: nil
+            weeklyAsOf: nil,
+            weeklyResetAt: now.addingTimeInterval(3600)
         )
         XCTAssertNil(row.weeklyStaleLabel(now: now))
         XCTAssertFalse(row.isWeeklyStale(now: now))
+    }
+
+    func testWeeklyStaleWhenResetPassedAndNoAsOf() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "codex",
+            shortName: "Codex",
+            code: "cx",
+            dotColor: 0,
+            fiveHourPercent: 10,
+            weeklyPercent: 99,
+            idle: false,
+            weeklyAsOf: nil,
+            weeklyResetAt: now.addingTimeInterval(-1)
+        )
+        XCTAssertNil(row.weeklyStaleLabel(now: now))
+        XCTAssertTrue(row.isWeeklyStale(now: now))
+    }
+
+    func testFiveHourStaleAtResetBoundary() {
+        let reset = Date(timeIntervalSince1970: 3_000_000)
+        let row = WidgetSnapshotRow(
+            providerId: "codex",
+            shortName: "Codex",
+            code: "cx",
+            dotColor: 0,
+            fiveHourPercent: 90,
+            weeklyPercent: 10,
+            idle: false,
+            fiveHourResetAt: reset
+        )
+        XCTAssertFalse(row.isFiveHourStale(now: reset.addingTimeInterval(-1)))
+        XCTAssertTrue(row.isFiveHourStale(now: reset))
+        XCTAssertEqual(row.fiveHourStaleLabel(now: reset), "past reset")
+        XCTAssertNil(row.fiveHourStaleLabel(now: reset.addingTimeInterval(-1)))
+    }
+
+    func testPeriodStaleDetailPastResetWithoutAsOf() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "codex",
+            shortName: "Codex",
+            code: "cx",
+            dotColor: 0,
+            fiveHourPercent: 1,
+            weeklyPercent: 80,
+            idle: false,
+            weeklyAsOf: nil,
+            weeklyResetAt: now.addingTimeInterval(-60)
+        )
+        XCTAssertEqual(row.periodStaleDetail(now: now), "past reset")
+        XCTAssertEqual(row.urgentStaleDetail(window: .period, now: now), "past reset")
+    }
+
+    func testUrgentStaleDetailFiveHourVersusWeekly() {
+        let now = Date()
+        let row = WidgetSnapshotRow(
+            providerId: "codex",
+            shortName: "Codex",
+            code: "cx",
+            dotColor: 0,
+            fiveHourPercent: 99,
+            weeklyPercent: 40,
+            idle: false,
+            weeklyAsOf: now.addingTimeInterval(-3600),
+            fiveHourResetAt: now.addingTimeInterval(-1)
+        )
+        XCTAssertEqual(row.urgentStaleDetail(window: .fiveHour, now: now), "past reset")
+        XCTAssertEqual(row.urgentStaleDetail(window: .period, now: now), "as of 1h ago")
+    }
+
+    func testWeeklyStaleAtResetBoundary() {
+        let reset = Date(timeIntervalSince1970: 2_000_000)
+        let row = WidgetSnapshotRow(
+            providerId: "codex",
+            shortName: "Codex",
+            code: "cx",
+            dotColor: 0,
+            fiveHourPercent: nil,
+            weeklyPercent: 50,
+            idle: false,
+            weeklyResetAt: reset
+        )
+        XCTAssertFalse(row.isWeeklyStale(now: reset.addingTimeInterval(-1)))
+        XCTAssertTrue(row.isWeeklyStale(now: reset))
     }
 
     func testWeeklyStaleLabelNilWhenNoWeeklyPercent() {
@@ -485,10 +571,35 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(s.mostUrgentLimit(now: now)?.row.providerId, "a")
         XCTAssertEqual(s.mostUrgentLimit(now: now)?.window, .fiveHour)
         // Known reset beats unknown; full tie keeps row order.
-        let t = usnap([urow("x", five: 50, week: nil), urow("y", five: 50, week: nil, fiveReset: now)])
+        let t = usnap([urow("x", five: 50, week: nil), urow("y", five: 50, week: nil, fiveReset: now.addingTimeInterval(3600))])
         XCTAssertEqual(t.mostUrgentLimit(now: now)?.row.providerId, "y")
         let f = usnap([urow("x", five: 50, week: nil), urow("y", five: 50, week: nil)])
         XCTAssertEqual(f.mostUrgentLimit(now: now)?.row.providerId, "x")
+    }
+
+    func testMostUrgentSkipsExpiredWeeklyResetWhenLiveFiveHourExists() {
+        let now = Date()
+        let expiredWeek = now.addingTimeInterval(-3600)
+        let s = usnap([
+            urow("codex", five: 40, week: 99, weekReset: expiredWeek),
+            urow("claude-code", five: 95, week: 10, fiveReset: now.addingTimeInterval(3600)),
+        ])
+        let u = s.mostUrgentLimit(now: now)
+        XCTAssertEqual(u?.row.providerId, "claude-code")
+        XCTAssertEqual(u?.window, .fiveHour)
+    }
+
+    func testMostUrgentPicksLiveFiveHourOverExpiredFiveHourReading() {
+        let now = Date()
+        let expired5h = now.addingTimeInterval(-60)
+        let s = usnap([
+            urow("codex", five: 99, week: 40, fiveReset: expired5h),
+            urow("claude-code", five: 95, week: 30, fiveReset: now.addingTimeInterval(3600)),
+        ])
+        let u = s.mostUrgentLimit(now: now)
+        XCTAssertEqual(u?.row.providerId, "claude-code")
+        XCTAssertEqual(u?.window, .fiveHour)
+        XCTAssertFalse(u?.stale ?? true)
     }
 
     func testMostUrgentSkipsStaleWeeklyWhenLiveExists() {

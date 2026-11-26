@@ -118,7 +118,7 @@ private struct UrgentLimitText {
 
     /// `resets in 2d 4h`, or the stale age; nil when there is nothing useful to say.
     var detailLine: String? {
-        if urgent.stale { return urgent.row.weeklyStaleLabel(now: now) }
+        if urgent.stale { return urgent.row.urgentStaleDetail(window: urgent.window, now: now) }
         guard let r = urgent.resetAt, r > now else { return nil }
         return "resets in \(ResetLabel.countdown(to: r, now: now))"
     }
@@ -409,9 +409,12 @@ private struct WidgetRowCompact: View {
             } else {
                 Text(weeklyText)
             }
-        } else if row.isWeeklyStale(now: now) {
-            // One Text (not an HStack) so layout and the a11y label match the live case.
-            Text("\(fiveHourText)/") + Text(weeklyText).foregroundColor(.primary.opacity(0.55))
+        } else if row.isWeeklyStale(now: now) || row.isFiveHourStale(now: now) {
+            let fiveDim = row.isFiveHourStale(now: now)
+            let weekDim = row.isWeeklyStale(now: now)
+            Text(fiveHourText).foregroundColor(fiveDim ? .primary.opacity(0.55) : .primary)
+                + Text("/")
+                + Text(weeklyText).foregroundColor(weekDim ? .primary.opacity(0.55) : .primary)
         } else {
             Text("\(fiveHourText)/\(weeklyText)")
         }
@@ -429,18 +432,19 @@ private struct WidgetRowCompact: View {
     private var usageAccessibilityLabel: String {
         if row.idle { return "idle" }
         let b = row.weeklyPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
-        let age = row.weeklyStaleLabel(now: now).map { " (\($0))" } ?? ""
+        let periodAge = row.periodStaleDetail(now: now).map { " (\($0))" } ?? ""
         if singlePeriod {
             if row.weeklyEstimated {
-                return "billing period about \(b) estimated\(age)"
+                return "billing period about \(b) estimated\(periodAge)"
             }
-            return "\(row.periodWindowName) \(b)\(age)"
+            return "\(row.periodWindowName) \(b)\(periodAge)"
         }
         let a = row.fiveHourPercent.map { "\(min(100, max(0, $0))) percent" } ?? "no data"
+        let fiveAge = row.fiveHourStaleLabel(now: now).map { " (\($0))" } ?? ""
         if row.weeklyEstimated {
-            return "5 hour \(a), billing period about \(b) estimated\(age)"
+            return "5 hour \(a)\(fiveAge), billing period about \(b) estimated\(periodAge)"
         }
-        return "5 hour \(a), week \(b)\(age)"
+        return "5 hour \(a)\(fiveAge), week \(b)\(periodAge)"
     }
 }
 
@@ -527,7 +531,7 @@ private struct WidgetRowLine: View {
     let showBars: Bool
     let now: Date
 
-    private var weeklyStaleLabel: String? { row.weeklyStaleLabel(now: now) }
+    private var periodStaleDetail: String? { row.periodStaleDetail(now: now) }
     private var singlePeriod: Bool { row.widgetSinglePeriodColumn }
 
     private var weeklyPercentText: some View {
@@ -535,8 +539,17 @@ private struct WidgetRowLine: View {
             percent: row.weeklyPercent,
             window: row.periodWindowName,
             weeklyStale: row.isWeeklyStale(now: now),
-            weeklyStaleLabel: weeklyStaleLabel,
+            weeklyStaleLabel: periodStaleDetail,
             weeklyEstimated: row.weeklyEstimated
+        )
+    }
+
+    private var fiveHourPercentText: some View {
+        PercentText(
+            percent: row.fiveHourPercent,
+            window: "5 hour",
+            weeklyStale: row.isFiveHourStale(now: now),
+            weeklyStaleLabel: row.fiveHourStaleLabel(now: now)
         )
     }
 
@@ -570,23 +583,28 @@ private struct WidgetRowLine: View {
                     percent: row.weeklyPercent,
                     window: row.periodWindowName,
                     weeklyStale: row.isWeeklyStale(now: now),
-                    weeklyStaleLabel: weeklyStaleLabel,
+                    weeklyStaleLabel: periodStaleDetail,
                     weeklyEstimated: row.weeklyEstimated
                 )
             } else if singlePeriod {
                 weeklyPercentText
                     .frame(maxWidth: .infinity, alignment: .trailing)
             } else if showBars {
-                MeterBar(percent: row.fiveHourPercent, window: "5 hour")
+                MeterBar(
+                    percent: row.fiveHourPercent,
+                    window: "5 hour",
+                    weeklyStale: row.isFiveHourStale(now: now),
+                    weeklyStaleLabel: row.fiveHourStaleLabel(now: now)
+                )
                 MeterBar(
                     percent: row.weeklyPercent,
                     window: row.periodWindowName,
                     weeklyStale: row.isWeeklyStale(now: now),
-                    weeklyStaleLabel: weeklyStaleLabel,
+                    weeklyStaleLabel: periodStaleDetail,
                     weeklyEstimated: row.weeklyEstimated
                 )
             } else {
-                PercentText(percent: row.fiveHourPercent, window: "5 hour")
+                fiveHourPercentText
                 weeklyPercentText
             }
         }
