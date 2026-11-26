@@ -122,9 +122,9 @@ runSuite("CursorIdeAdapterTests", [
 
 let antigravityDisplay = AntigravityQuotaDisplayTests()
 runSuite("AntigravityQuotaDisplayTests", [
-    ("testExpandLimitStatesIntoThreeBuckets", antigravityDisplay.testExpandLimitStatesIntoThreeBuckets),
+    ("testExpandLimitStatesIntoTwoBuckets", antigravityDisplay.testExpandLimitStatesIntoTwoBuckets),
     ("testCollapseForPetRingsKeepsOneAntigravityRow", antigravityDisplay.testCollapseForPetRingsKeepsOneAntigravityRow),
-    ("testOrderedGroupsPutsGeminiBeforeClaudeBeforeArgon", antigravityDisplay.testOrderedGroupsPutsGeminiBeforeClaudeBeforeArgon),
+    ("testOrderedGroupsPutsGeminiBeforeClaudeAndStillShowsLegacyArgon", antigravityDisplay.testOrderedGroupsPutsGeminiBeforeClaudeAndStillShowsLegacyArgon),
     ("testAntigravityMenuSegmentsGroupBuckets", antigravityDisplay.testAntigravityMenuSegmentsGroupBuckets),
 ])
 

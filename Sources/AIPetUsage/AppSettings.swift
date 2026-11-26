@@ -76,7 +76,7 @@ struct AppSettings: Codable {
     /// Spawns `agy -p "/usage"` on refresh when Antigravity is enabled (opt-in; may open agy OAuth).
     var antigravityQuotaEnabled: Bool = false
     /// Which providers / Antigravity quota buckets appear in the menu bar, dropdown, and pet rings.
-    /// `nil` = all enabled providers (Antigravity splits into three buckets when `agy /usage` is available).
+    /// `nil` = all enabled providers (Antigravity splits into Gemini + Claude/GPT buckets when `agy /usage` is available).
     /// Non-empty = only these ids; empty set = hide all chrome limits.
     var chromeProviderSelection: Set<String>? = nil
     /// App 外觀偏好(Appearance V1):System / Light / Dark,經 `NSApp.appearance` 整 app 套用。

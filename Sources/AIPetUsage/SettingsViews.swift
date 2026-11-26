@@ -563,7 +563,7 @@ struct ProviderSettings: View {
                 Text("""
                 Off by default. When Antigravity is enabled, local token totals still come from agy \
                 brain transcripts with no network. Turning this on runs `agy -p "/usage"` during \
-                refresh to load official quota buckets (Gemini / Claude+GPT / Argon). If agy is not \
+                refresh to load official quota buckets (Gemini / Claude+GPT; Argon shares Gemini). If agy is not \
                 signed in, the CLI may open a browser OAuth window — complete it once in Terminal \
                 with `agy -p "/usage"` if you prefer to sign in outside the app. Token transcripts \
                 are never uploaded by this toggle; only the agy subprocess talks to Antigravity.

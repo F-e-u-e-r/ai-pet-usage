@@ -34,7 +34,7 @@ public struct DashboardState: Sendable {
     public var models: [ModelUsageSummary]
     public var dataQuality: [String]
     public var lastRefreshAt: Date?
-    /// Official multi-bucket quota from `agy /usage` (Gemini / Claude+GPT / Argon).
+    /// Official multi-bucket quota from `agy /usage` (Gemini / Claude+GPT).
     public var antigravityQuota: AntigravityQuotaSnapshot?
 
     /// 分享安全:GUI「Data quality」清單顯示用。每則過 fail-closed allowlist(`safeDataQuality`),

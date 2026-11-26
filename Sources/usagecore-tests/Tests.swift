@@ -3062,7 +3062,7 @@ final class CursorIdeAdapterTests: XCTestCase {
 // MARK: - Antigravity quota fetcher
 
 final class AntigravityQuotaDisplayTests: XCTestCase {
-    func testExpandLimitStatesIntoThreeBuckets() {
+    func testExpandLimitStatesIntoTwoBuckets() {
         let base = ProviderLimitState(
             providerId: "antigravity",
             fiveHour: LimitWindowState(usedPercent: 1, windowMinutes: 300, confidence: .high),
@@ -3073,16 +3073,15 @@ final class AntigravityQuotaDisplayTests: XCTestCase {
                 AntigravityQuotaGroup(name: "Gemini Models", buckets: [
                     AntigravityQuotaBucket(id: "g5", label: "5h", windowMinutes: 300,
                                              usedPercent: 2, remainingPercent: 98, resetsAt: nil)]),
-                AntigravityQuotaGroup(name: "Claude and GPT models", buckets: []),
-                AntigravityQuotaGroup(name: "Gemini 4 Argon", buckets: [
-                    AntigravityQuotaBucket(id: "ar", label: "w", windowMinutes: 10_080,
+                AntigravityQuotaGroup(name: "Claude and GPT models", buckets: [
+                    AntigravityQuotaBucket(id: "c5", label: "5h", windowMinutes: 300,
                                              usedPercent: 0, remainingPercent: 100, resetsAt: nil)]),
             ])
         let expanded = AntigravityQuotaDisplay.expandLimitStates([base], quota: quota,
                                                                now: date("2026-11-15T12:01:00Z"))
         XCTAssertEqual(expanded.map(\.providerId), AntigravityQuotaDisplay.quotaChromeOrder)
         XCTAssertEqual(expanded[0].fiveHour.usedPercent, 2)
-        XCTAssertEqual(expanded[2].weekly.usedPercent, 0)
+        XCTAssertEqual(expanded[1].fiveHour.usedPercent, 0)
     }
 
     func testCollapseForPetRingsKeepsOneAntigravityRow() {
@@ -3103,7 +3102,7 @@ final class AntigravityQuotaDisplayTests: XCTestCase {
         XCTAssertEqual(collapsed.map(\.providerId), [AntigravityQuotaDisplay.geminiId, "grok-code"])
     }
 
-    func testOrderedGroupsPutsGeminiBeforeClaudeBeforeArgon() {
+    func testOrderedGroupsPutsGeminiBeforeClaudeAndStillShowsLegacyArgon() {
         let groups = [
             AntigravityQuotaGroup(name: "Gemini 4 Argon", buckets: []),
             AntigravityQuotaGroup(name: "Gemini Models", buckets: []),
@@ -3142,8 +3141,8 @@ final class AntigravityQuotaFetcherTests: XCTestCase {
         {"name":"Gemini Models","buckets":[
           {"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.998,"reset_time":"2026-11-21T07:56:33Z"},
           {"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.997,"reset_time":"2026-11-15T15:58:10Z"}]},
-        {"name":"Gemini 4 Argon","buckets":[
-          {"id":"argon-w","name":"Gemini 4 Argon Weekly Limit","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-22T13:11:54Z"}]}
+        {"name":"Claude and GPT models","buckets":[
+          {"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-22T13:11:54Z"}]}
         ]}}}
         """.data(using: .utf8)!
         struct Fake: Decodable {}
