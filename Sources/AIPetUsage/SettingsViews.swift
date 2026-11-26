@@ -676,7 +676,7 @@ struct ProviderSettings: View {
                         .disabled(!model.settings.core.enabledProviders.contains("antigravity"))
                         Text("""
                         Off by default. Local token totals still come from agy brain transcripts with no network. \
-                        When on, refresh runs `agy -p "/usage"` for official buckets (Gemini / Claude+GPT / Argon). \
+                        When on, refresh runs `agy -p "/usage"` for official buckets (Gemini / Claude+GPT; Argon shares Gemini). \
                         Unsigned-in agy may open browser OAuth — run `agy -p "/usage"` once in Terminal if you prefer. \
                         Only the agy subprocess talks to Antigravity; transcripts are not uploaded by this toggle.
                         """)

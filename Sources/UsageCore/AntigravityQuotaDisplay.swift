@@ -1,14 +1,16 @@
 import Foundation
 
-/// Splits official `agy /usage` into three chrome surfaces (menu badges, pet rings, menu panel).
+/// Splits official `agy /usage` into chrome surfaces (menu badges, pet rings, menu panel).
+/// Current agy exposes **Gemini Models** and **Claude and GPT models** (Argon models share the Gemini buckets).
 public enum AntigravityQuotaDisplay {
     public static let geminiId = "antigravity-gemini"
     public static let claudeGptId = "antigravity-claude-gpt"
+    /// Legacy id when an old `antigravity-quota.json` still has a separate **Gemini 4 Argon** group.
     public static let argonId = "antigravity-argon"
 
     public static let categoryName = "Antigravity"
 
-    public static let quotaChromeOrder = [geminiId, claudeGptId, argonId]
+    public static let quotaChromeOrder = [geminiId, claudeGptId]
 
     public static func groupId(forGroupName name: String) -> String? {
         switch name {
@@ -48,11 +50,21 @@ public enum AntigravityQuotaDisplay {
         }
     }
 
-    /// Dashboard / expand order (matches Antigravity Usage UI).
+    /// Dashboard / expand order (matches Antigravity Usage UI; appends legacy groups from old snapshots).
     public static func orderedGroups(_ groups: [AntigravityQuotaGroup]) -> [AntigravityQuotaGroup] {
-        quotaChromeOrder.compactMap { pid in
-            groups.first { groupId(forGroupName: $0.name) == pid }
+        var seen = Set<String>()
+        var out: [AntigravityQuotaGroup] = []
+        for pid in quotaChromeOrder {
+            if let g = groups.first(where: { groupId(forGroupName: $0.name) == pid }) {
+                out.append(g)
+                seen.insert(g.name)
+            }
         }
+        for g in groups where !seen.contains(g.name) {
+            guard groupId(forGroupName: g.name) != nil else { continue }
+            out.append(g)
+        }
+        return out
     }
 
     public static func shortCode(forGroupId id: String) -> String? {

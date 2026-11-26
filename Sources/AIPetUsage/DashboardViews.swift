@@ -743,9 +743,9 @@ struct ProjectShareRow: View {
     }
 }
 
-// MARK: - Antigravity official quota (three buckets)
+// MARK: - Antigravity official quota
 
-/// Matches Antigravity Usage: **Gemini Models**, **Claude and GPT models**, **Gemini 4 Argon**.
+/// Matches Antigravity Usage: **Gemini Models**, **Claude and GPT models**.
 struct AntigravityQuotaGroupsView: View {
     enum Presentation { case compact, limits }
 
