@@ -558,6 +558,9 @@ struct TodayView: View {
                         AgentCard(snapshot: snap,
                                   limit: dash.limitStates.first { $0.providerId == snap.providerId },
                                   reported: dash.reportedLimits.first { $0.providerId == snap.providerId },
+                                  antigravityQuota: snap.providerId == "antigravity" ? dash.antigravityQuota : nil,
+                                  cursorQuota: snap.providerId == "cursor-ide" && model.settings.cursorQuotaEnabled
+                                    ? model.cursorQuota.status.snapshot : nil,
                                   now: now)
                     }
                 }
@@ -695,12 +698,280 @@ struct ProjectShareRow: View {
     }
 }
 
+// MARK: - Antigravity official quota
+
+/// Matches Antigravity Usage: **Gemini Models**, **Claude and GPT models**.
+struct AntigravityQuotaGroupsView: View {
+    enum Presentation { case compact, limits }
+
+    let quota: AntigravityQuotaSnapshot
+    let now: Date
+    var presentation: Presentation = .compact
+    var warn: Double = 80
+    var danger: Double = 99.5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: presentation == .limits ? 14 : 8) {
+            Text((presentation == .limits
+                  ? "Official quota — Antigravity buckets (from agy /usage)"
+                  : "\(AntigravityQuotaDisplay.categoryName) official quota")
+                 + (StatuslineAge.asOfLabel(observedAt: quota.fetchedAt, now: now).map { " · \($0)" } ?? ""))
+                .font(.caption2).foregroundStyle(Theme.textMuted)
+            ForEach(Array(AntigravityQuotaDisplay.orderedGroups(quota.groups).enumerated()),
+                    id: \.element.id) { index, group in
+                if index > 0 { Divider() }
+                groupBlock(group)
+            }
+        }
+        .font(Theme.FontScale.secondaryInfo)
+        .foregroundStyle(Theme.textSecondary)
+    }
+
+    @ViewBuilder
+    private func groupBlock(_ group: AntigravityQuotaGroup) -> some View {
+        switch presentation {
+        case .compact:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(AntigravityQuotaDisplay.meterLabel(forGroupId:
+                    AntigravityQuotaDisplay.groupId(forGroupName: group.name) ?? "") ?? group.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.leading, 8)
+                ForEach(group.buckets) { bucket in
+                    compactBucketRow(bucket)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        case .limits:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(group.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
+                HStack(alignment: .top, spacing: 24) {
+                    ForEach(group.buckets) { bucket in
+                        limitBucketBar(bucket)
+                    }
+                }
+            }
+        }
+    }
+
+    private func compactBucketRow(_ bucket: AntigravityQuotaBucket) -> some View {
+        HStack(spacing: 6) {
+            Text(bucket.windowMinutes == 300 ? "5h" : "weekly")
+                .frame(width: 46, alignment: .leading)
+                .foregroundStyle(Theme.textMuted)
+            Text(AntigravityQuotaDisplay.bucketSummary(bucket, fetchedAt: quota.fetchedAt, now: now))
+        }
+    }
+
+    private func limitBucketBar(_ bucket: AntigravityQuotaBucket) -> some View {
+        let win = bucket.windowMinutes == 300 ? "5-hour" : "Weekly"
+        let expired = AntigravityQuotaDisplay.isExpired(bucket, fetchedAt: quota.fetchedAt, now: now)
+        return ReportedLimitBar(
+            title: "\(win) window",
+            main: expired ? "—" : "\(Int(bucket.remainingPercent.rounded()))% left",
+            secondary: expired
+                ? "awaiting agy /usage refresh"
+                : ResetLabel.countdown(to: AntigravityQuotaFetcher.normalizedResetTime(bucket.resetsAt), now: now),
+            gaugePercent: expired ? nil : bucket.usedPercent,
+            corrected: false,
+            warn: warn,
+            danger: danger)
+    }
+}
+
+/// Claude Code: **Account** (5h / weekly) plus model-scoped buckets (e.g. **Fable**), nested like Antigravity groups.
+struct ClaudeProviderReportedLimitsView: View {
+    enum Presentation { case compact, limits }
+
+    let reported: ProviderReportedLimits?
+    let scoped: [ModelScopedLimitWindow]
+    let now: Date
+    var presentation: Presentation = .compact
+    var warn: Double = 80
+    var danger: Double = 99.5
+
+    private var cue: ReportedLimitCue { reported?.cue ?? .none }
+
+    private var accountHidden: Bool {
+        guard let reported else { return true }
+        return isNotProvided(reported.fiveHour) && isNotProvided(reported.weekly)
+    }
+
+    var body: some View {
+        if accountHidden && scoped.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Limits")
+                Text("Not provided by this source")
+            }
+            .font(Theme.FontScale.secondaryInfo).foregroundStyle(Theme.textMuted)
+        } else {
+            VStack(alignment: .leading, spacing: presentation == .limits ? 14 : 8) {
+                Text(presentation == .limits
+                     ? ReportedLimitText.header(providerId: "claude-code")
+                     : "Provider-reported limits")
+                    .font(.caption2).foregroundStyle(Theme.textMuted)
+                if let reported, !accountHidden {
+                    accountBlock(reported)
+                }
+                ForEach(scoped) { row in
+                    scopedBlock(row)
+                }
+            }
+            .font(Theme.FontScale.secondaryInfo)
+            .foregroundStyle(Theme.textSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private func accountBlock(_ reported: ProviderReportedLimits) -> some View {
+        switch presentation {
+        case .compact:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Account")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.leading, 8)
+                compactReportedRow("5h", reported.fiveHour)
+                compactReportedRow("weekly", reported.weekly)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        case .limits:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Account").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
+                HStack(alignment: .top, spacing: 24) {
+                    limitBar("5-hour window", reported.fiveHour)
+                    limitBar("Weekly window", reported.weekly)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func scopedBlock(_ row: ModelScopedLimitWindow) -> some View {
+        let field: ReportedLimitField = .provided(
+            percent: row.usedPercent, resetsAt: row.resetsAt,
+            confidence: .high, corrected: false)
+        switch presentation {
+        case .compact:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.leading, 8)
+                compactReportedRow("weekly", field)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        case .limits:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(row.displayName).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
+                HStack(alignment: .top, spacing: 24) {
+                    limitBar("Weekly window", field)
+                }
+            }
+        }
+    }
+
+    private func compactReportedRow(_ label: String, _ field: ReportedLimitField) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .frame(width: 46, alignment: .leading)
+                .foregroundStyle(Theme.textMuted)
+            Text(ReportedLimitText.inline(field: field, cue: cue, now: now))
+        }
+    }
+
+    private func limitBar(_ title: String, _ field: ReportedLimitField) -> some View {
+        let r = ReportedLimitText.render(field: field, cue: cue, now: now)
+        var corrected = false
+        if case .provided(_, _, _, let c) = field { corrected = c }
+        return ReportedLimitBar(title: title, main: r.main, secondary: r.secondary,
+                                gaugePercent: r.gaugePercent, corrected: corrected, warn: warn, danger: danger)
+    }
+
+    private func isNotProvided(_ field: ReportedLimitField) -> Bool {
+        if case .notProvidedBySource = field { return true }
+        return false
+    }
+}
+
+/// Cursor Usage UI: **Cursor models** vs **Other models** (monthly billing period).
+struct CursorQuotaMetersView: View {
+    enum Presentation { case compact, limits }
+
+    let quota: CursorQuotaSnapshot
+    let now: Date
+    var presentation: Presentation = .compact
+    var warn: Double = 80
+    var danger: Double = 99.5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: presentation == .limits ? 14 : 8) {
+            Text((presentation == .limits
+                  ? "Official quota — Cursor plan usage (from Cursor dashboard)"
+                  : "Official quota — monthly plan usage")
+                 + (StatuslineAge.asOfLabel(observedAt: quota.fetchedAt, now: now).map { " · \($0)" } ?? ""))
+                .font(.caption2).foregroundStyle(Theme.textMuted)
+            switch presentation {
+            case .compact:
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(CursorQuotaDisplay.categoryName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    meterRow(CursorQuotaDisplay.meterLabel(forChromeId: CursorQuotaDisplay.autoId) ?? "Models",
+                             quota.autoPercentUsed, indented: true)
+                    meterRow(CursorQuotaDisplay.meterLabel(forChromeId: CursorQuotaDisplay.apiId) ?? "Other models",
+                             quota.apiPercentUsed, indented: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+            case .limits:
+                HStack(alignment: .top, spacing: 24) {
+                    limitBar("Cursor models", quota.autoPercentUsed)
+                    limitBar("Other models", quota.apiPercentUsed)
+                }
+            }
+        }
+        .font(Theme.FontScale.secondaryInfo)
+        .foregroundStyle(Theme.textSecondary)
+    }
+
+    private func meterRow(_ label: String, _ used: Double, indented: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .padding(.leading, indented ? 8 : 0)
+                .frame(width: 46, alignment: .leading).foregroundStyle(Theme.textMuted)
+            Text(CursorQuotaDisplay.meterSummary(used, quota: quota, now: now))
+        }
+    }
+
+    private func limitBar(_ title: String, _ used: Double) -> some View {
+        let expired = quota.isPastBillingEnd(now: now)
+        return ReportedLimitBar(
+            title: "\(title) · monthly",
+            main: expired ? "—" : "\(Int(used.rounded()))% used",
+            secondary: expired ? "awaiting Cursor refresh" : ResetLabel.countdown(to: quota.billingCycleEnd, now: now),
+            gaugePercent: expired ? nil : used,
+            corrected: false,
+            warn: warn,
+            danger: danger)
+    }
+}
+
 struct AgentCard: View {
     @Environment(\.openSettings) private var openSettings
     let snapshot: UsageSnapshot
     let limit: ProviderLimitState?
     /// provider-reported 四態投影(usage ≠ limits split,M1);與本機用量是兩個資料域。
     let reported: ProviderReportedLimits?
+    let antigravityQuota: AntigravityQuotaSnapshot?
+    let cursorQuota: CursorQuotaSnapshot?
     /// 相對時間片段的單一時刻(D46/D51:投影不自讀 `Date()`)。
     let now: Date
 
@@ -763,9 +1034,19 @@ struct AgentCard: View {
     /// 讓兩列數值對齊)。provided / temporarilyUnavailable / 混合皆帶真實資訊。缺載體 → 單行中性佔位。
     @ViewBuilder
     private var limitsLine: some View {
-        if let reported {
+        if let quota = antigravityQuota, !quota.groups.isEmpty {
+            AntigravityQuotaGroupsView(quota: quota, now: now, presentation: .compact)
+        } else if let cursorQuota {
+            CursorQuotaMetersView(quota: cursorQuota, now: now, presentation: .compact)
+        } else if snapshot.providerId == "claude-code",
+                  reported != nil || !(limit?.modelScopedWeekly ?? []).isEmpty {
+            ClaudeProviderReportedLimitsView(
+                reported: reported,
+                scoped: limit?.modelScopedWeekly ?? [],
+                now: now,
+                presentation: .compact)
+        } else if let reported {
             if isNotProvided(reported.fiveHour) && isNotProvided(reported.weekly) {
-                // owner spike#3 §3:整組不提供 → 兩列(語意同「單行 Not provided」,純呈現)。
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Limits")
                     Text("Not provided by this source")
@@ -841,6 +1122,9 @@ struct LimitsView: View {
                     LimitRow(limit: limit,
                              snapshot: dash.snapshots.first { $0.providerId == limit.providerId },
                              reported: dash.reportedLimits.first { $0.providerId == limit.providerId },
+                             antigravityQuota: limit.providerId == "antigravity" ? dash.antigravityQuota : nil,
+                             cursorQuota: limit.providerId == "cursor-ide" && model.settings.cursorQuotaEnabled
+                                ? model.cursorQuota.status.snapshot : nil,
                              now: now,
                              warn: model.settings.core.warnThresholdPercent,
                              danger: model.settings.core.dangerThresholdPercent)
@@ -865,6 +1149,8 @@ struct LimitRow: View {
     let snapshot: UsageSnapshot?
     /// provider-reported 四態投影;與本機估算是兩個資料域。
     let reported: ProviderReportedLimits?
+    let antigravityQuota: AntigravityQuotaSnapshot?
+    let cursorQuota: CursorQuotaSnapshot?
     /// 相對時間片段的單一時刻(D46/D51)。
     let now: Date
     let warn: Double
@@ -884,12 +1170,28 @@ struct LimitRow: View {
             }
             .help("\(brand.displayName) — shown as \(brand.code) in the menu bar and pet gauges")
             // provider-reported 標題(封閉字串;與 Today 卡同一張表)
-            Text(ReportedLimitText.header(providerId: limit.providerId))
-                .font(.caption2).foregroundStyle(Theme.textMuted)
-            // provider-reported 兩條 bar:只吃投影輸出 + corrected chrome(D27:型別上進不了 affordance)
-            HStack(alignment: .top, spacing: 24) {
-                reportedBar("5-hour window", reported?.fiveHour ?? .unknownCapability)
-                reportedBar("Weekly window", reported?.weekly ?? .unknownCapability)
+            if limit.providerId == "antigravity", let quota = antigravityQuota, !quota.groups.isEmpty {
+                AntigravityQuotaGroupsView(quota: quota, now: now, presentation: .limits,
+                                           warn: warn, danger: danger)
+            } else if limit.providerId == "cursor-ide", let cursorQuota {
+                CursorQuotaMetersView(quota: cursorQuota, now: now, presentation: .limits,
+                                      warn: warn, danger: danger)
+            } else if limit.providerId == "claude-code",
+                      reported != nil || !(limit.modelScopedWeekly ?? []).isEmpty {
+                ClaudeProviderReportedLimitsView(
+                    reported: reported,
+                    scoped: limit.modelScopedWeekly ?? [],
+                    now: now,
+                    presentation: .limits,
+                    warn: warn,
+                    danger: danger)
+            } else {
+                Text(ReportedLimitText.header(providerId: limit.providerId))
+                    .font(.caption2).foregroundStyle(Theme.textMuted)
+                HStack(alignment: .top, spacing: 24) {
+                    reportedBar("5-hour window", reported?.fiveHour ?? .unknownCapability)
+                    reportedBar("Weekly window", reported?.weekly ?? .unknownCapability)
+                }
             }
             // 本機估算 bar(v0.8 A2b:新 EstimateBar,文字全來自 EstimateRowText、reset 由注入 now 控制):
             // 只 claude、只該窗 estimate active 時渲染(D16/D30)

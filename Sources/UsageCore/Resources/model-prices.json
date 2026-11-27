@@ -15,6 +15,20 @@
   },
   {
     "providerId": "claude-code",
+    "modelId": "claude-fable-5-2*",
+    "displayName": "Claude Fable 5.2",
+    "inputPerMillion": 10,
+    "outputPerMillion": 50,
+    "cacheReadPerMillion": 0.25,
+    "cacheWrite5mPerMillion": 12.5,
+    "cacheWrite1hPerMillion": 20,
+    "currency": "USD",
+    "effectiveFrom": "2026-11-01",
+    "source": "model-prices-generated.json (OpenRouter catalog snapshot); aligned with Fable 5.1 list pricing",
+    "userOverride": false
+  },
+  {
+    "providerId": "claude-code",
     "modelId": "claude-fable-5*",
     "displayName": "Claude Fable 5",
     "inputPerMillion": 10,

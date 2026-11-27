@@ -24,7 +24,7 @@ public struct CoreSettings: Codable, Sendable {
 
     // grok-code 預設啟用:未安裝 grok 時 adapter 回報 unavailable,
     // 由既有的 OnboardingCard 呈現「未偵測到」;已存檔的使用者設定不受預設值影響。
-    public init(enabledProviders: Set<String> = ["codex", "claude-code", "grok-code"],
+    public init(enabledProviders: Set<String> = ["codex", "claude-code", "grok-code", "cursor-ide"],
                 warnThresholdPercent: Double = 80,
                 dangerThresholdPercent: Double = 95,
                 staleAfterMinutes: Int = 30,
@@ -780,7 +780,7 @@ public final class LimitEngine {
         let burn = ledger.burnRatePerHour(providerId: providerId, window: 3600, now: now)
 
         // Claude Code:官方 statusline 讀值逐窗口優先;窗口過期後由 hasUsableWindow
-        // 逐窗口決定何時退回帳本預算估算(閒置寬限 24h;有 reset 後活動則立即退回)。
+        // 逐窗口決定何時退回帳本預算估算(5h 窗 reset 即退回;週窗閒置寬限 24h、有 reset 後活動則立即退回)。
         if providerId == "claude-code" {
             return claudeStateWithOfficialFallback(ledger: ledger, settings: settings,
                                                    now: now, lastEvent: lastEvent, burn: burn)
@@ -795,12 +795,21 @@ public final class LimitEngine {
 
     /// 單一官方窗口是否仍值得信任:
     /// 1. 窗口尚未 reset → 可信。
+    /// 1b. 5h 窗:reset 已過 → 不可信;無 resets_at 時只信任一個窗長(5h)內的讀數。
+    ///     以下 2、3 只適用週窗。
     /// 2. 已過期,但帳本在 reset 之後有新活動、而官方檔一直沒再更新 → hook 已停,
     ///    立即不可信(交回預算估算),不得讓 recovered 0% 撐滿 24h。
     /// 3. 已過期且無活動反證(閒置)→ reset 後 24h 內仍代表「已恢復」的最近狀態。
     private func hasUsableWindow(_ window: PersistedWindow?, now: Date, lastEventAt: Date?) -> Bool {
         guard let window else { return false }
         if let reset = window.resetsAt, reset > now { return true }
+        // 5h 窗:reset 已過、或無 resets_at 且讀數已超過一個窗長 → 不可信(未知)。
+        // 帳本看不到共用同一額度的其他用量(claude.ai、headless desktop session 不刷新 hook),
+        // 「recovered 0%」與「舊值」都是捏造;交回估算路徑(無 budget 時百分比為 nil)。
+        if window.windowMinutes <= 300 {
+            if window.resetsAt != nil { return false }
+            return now.timeIntervalSince(window.observedAt) <= Double(window.windowMinutes) * 60
+        }
         if let reset = window.resetsAt, let lastEventAt,
            lastEventAt > reset,
            lastEventAt.timeIntervalSince(window.observedAt) > Self.expiredEvidenceTolerance {
@@ -881,7 +890,8 @@ public final class LimitEngine {
                                     windowMinutes: w.windowMinutes, confidence: confidence,
                                     corrected: correctionVisible,
                                     correctedAt: correctionVisible ? w.correctedAt : nil,
-                                    correctedReason: correctionVisible ? w.correctedReason : nil)
+                                    correctedReason: correctionVisible ? w.correctedReason : nil,
+                                    observedAt: w.observedAt)
         }
 
         let fiveHour = windowState(provider?.primary, defaultMinutes: 300)

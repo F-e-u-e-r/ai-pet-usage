@@ -34,6 +34,8 @@ public struct DashboardState: Sendable {
     public var models: [ModelUsageSummary]
     public var dataQuality: [String]
     public var lastRefreshAt: Date?
+    /// Official multi-bucket quota from `agy /usage` (Gemini / Claude+GPT).
+    public var antigravityQuota: AntigravityQuotaSnapshot?
 
     /// 分享安全:GUI「Data quality」清單顯示用。每則過 fail-closed allowlist(`safeDataQuality`),
     /// 絕不外洩路徑/原始錯誤/絕對時間。原文 `dataQuality` 保留給 CLI `aipet status --full` 與報告 sink。
@@ -44,7 +46,8 @@ public struct DashboardState: Sendable {
     public static let empty = DashboardState(
         generatedAt: .distantPast, snapshots: [], limitStates: [], reportedLimits: [], todayTotals: .zero,
         todayCost: .zero, todayByProvider: [], burnRateTokensPerHour: 0, burnCostPerHour: 0,
-        hourly: [], topProjects: [], models: [], dataQuality: [], lastRefreshAt: nil
+        hourly: [], topProjects: [], models: [], dataQuality: [], lastRefreshAt: nil,
+        antigravityQuota: nil
     )
 
     public init(generatedAt: Date, snapshots: [UsageSnapshot], limitStates: [ProviderLimitState],
@@ -52,7 +55,8 @@ public struct DashboardState: Sendable {
                 todayTotals: TokenBreakdown, todayCost: CostResult, todayByProvider: [ProviderDaySummary],
                 burnRateTokensPerHour: Double, burnCostPerHour: Double, hourly: [HourBucket],
                 topProjects: [ProjectSummary], models: [ModelUsageSummary],
-                dataQuality: [String], lastRefreshAt: Date?) {
+                dataQuality: [String], lastRefreshAt: Date?,
+                antigravityQuota: AntigravityQuotaSnapshot? = nil) {
         self.generatedAt = generatedAt
         self.snapshots = snapshots
         self.limitStates = limitStates
@@ -67,6 +71,7 @@ public struct DashboardState: Sendable {
         self.models = models
         self.dataQuality = dataQuality
         self.lastRefreshAt = lastRefreshAt
+        self.antigravityQuota = antigravityQuota
     }
 }
 
@@ -192,7 +197,7 @@ public struct WatchPlan: Sendable, Equatable {
 public actor UsageCoordinator {
     public let dataDir: URL
     private var settings: CoreSettings
-    private let adapters: [ProviderAdapter]
+    private var adapters: [ProviderAdapter]
     private let ledger: UsageLedger
     private let limits: LimitEngine
     private var scanStates: [String: ScanState]
@@ -346,6 +351,32 @@ public actor UsageCoordinator {
 
     /// R5:成功腿統一經此 adopt——ack 寫入「此刻已 durable committed/confirmed」的 generation;
     /// full intent(若在)一併清除(reconciliation 完成 = intent 履行,R7 amended)。
+    /// After `agy` → `antigravity` rename, persisted scan-state can carry `ackGeneration` ahead of limits.
+    private func repairStaleAntigravityAckAfterProviderRename() {
+        let pid = "antigravity"
+        guard scanStates["agy"] == nil, var scan = scanStates[pid], let ack = scan.ackGeneration else { return }
+        let gen = limits.reconcileGeneration(for: pid) ?? 0
+        guard ack > gen else { return }
+        scan.ackGeneration = nil
+        scan.pendingFullReconcile = nil
+        scanStates[pid] = scan
+        refreshQualityNotes.append(
+            "\(pid): cleared stale scan acknowledgement after provider rename (agy → antigravity); acknowledgement will be re-established")
+    }
+
+    /// Provider id `agy` → `antigravity`: preserve incremental scan watermarks (ledger already canonicalizes).
+    private static func migrateLegacyScanStateKeys(_ states: inout [String: ScanState]) {
+        guard let legacy = states.removeValue(forKey: "agy") else { return }
+        let current = states["antigravity"]
+        if current == nil || current?.files.isEmpty == true {
+            var adopted = legacy
+            // `agy` scan-state may carry limits ack under the old key; do not poison `antigravity`.
+            adopted.ackGeneration = nil
+            adopted.pendingFullReconcile = nil
+            states["antigravity"] = adopted
+        }
+    }
+
     private func adoptScanState(_ pid: String, _ newState: ScanState) {
         var adopted = newState
         adopted.ackGeneration = limits.reconcileGeneration(for: pid)
@@ -613,9 +644,15 @@ public actor UsageCoordinator {
 
     /// production wiring 的 adapter 列表(internal:tests 走訪它驗 capability 宣告集合,不另抄一份)。
     /// adapter init 皆無 I/O(只組 URL)。
-    static let defaultProductionAdapters: [any ProviderAdapter] = [
-        CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter(), OpenCodeAdapter(),
-    ]
+    public static func productionAdapters(antigravityOfficialQuota: Bool = false) -> [any ProviderAdapter] {
+        [
+            CodexAdapter(), ClaudeCodeAdapter(), GrokCodeAdapter(), OpenCodeAdapter(),
+            AgyAdapter(enableOfficialQuotaFetch: antigravityOfficialQuota),
+            CursorIdeAdapter(),
+        ]
+    }
+
+    static let defaultProductionAdapters: [any ProviderAdapter] = productionAdapters()
 
     /// internal(tests-only via `@testable`,mirror #64 DP-3):注入 LimitEngine barrier 失敗排程;
     /// production 一律經 public init(針 .production,無注入面)。
@@ -640,7 +677,9 @@ public actor UsageCoordinator {
         self.anchorStore = CumulativeAnchorStore(fileURL: dir.appendingPathComponent("cumulative-anchors.json"),
                                                  durabilityOps: anchorDurabilityOps ?? .production)
         do {
-            self.scanStates = try AtomicJSON.readOrThrow([String: ScanState].self, from: dir.appendingPathComponent("scan-state.json")) ?? [:]
+            var loaded = try AtomicJSON.readOrThrow([String: ScanState].self, from: dir.appendingPathComponent("scan-state.json")) ?? [:]
+            Self.migrateLegacyScanStateKeys(&loaded)
+            self.scanStates = loaded
         } catch {
             self.scanStates = [:]
             self.scanStateLoadError = error   // 存在但讀不到/損壞:刷新時據此中止寫入,不覆寫
@@ -652,6 +691,16 @@ public actor UsageCoordinator {
 
     public func updateSettings(_ new: CoreSettings) {
         settings = new
+    }
+
+    /// GUI opt-in for `agy /usage` (default off — avoids unsolicited agy OAuth during refresh).
+    public func setAntigravityOfficialQuotaEnabled(_ enabled: Bool) {
+        guard let idx = adapters.firstIndex(where: { $0.providerId == "antigravity" }) else { return }
+        adapters[idx] = AgyAdapter(enableOfficialQuotaFetch: enabled)
+    }
+
+    private var antigravityOfficialQuotaEnabled: Bool {
+        (adapters.first { $0.providerId == "antigravity" } as? AgyAdapter)?.officialQuotaFetchEnabled ?? false
     }
 
     public func currentSettings() -> CoreSettings { settings }
@@ -840,6 +889,8 @@ public actor UsageCoordinator {
                 if let s = scanStates[adapter.providerId] { acc[adapter.providerId] = s }
             }
         scanStates = diskStates ?? [:]
+        Self.migrateLegacyScanStateKeys(&scanStates)
+        repairStaleAntigravityAckAfterProviderRename()
         for (pid, s) in cumulativeInMemory { scanStates[pid] = s }   // cumulative 整段保留記憶體(忽略磁碟採用)
         // #48 gate-r1(luna L1/L2):compact 前的 raw 完整性 precheck + 失敗訊號。
         // (a) typed 重寫會消滅 malformed/duplicate/unknown-key raw 行——compact「將動作」且 raw 層
@@ -924,6 +975,9 @@ public actor UsageCoordinator {
                     // 注意:僅 rebuildableHistory 走此路;cumulativeSnapshotOnly(OpenCode)落到 else 走增量、
                     // 保留既有切片,絕不把累計總量塌成「現在的一筆」(codex MF2)。
                     let (result, newState) = try adapter.refreshUsage(state: ScanState())
+                    if pid == "antigravity", let quota = result.antigravityQuota {
+                        AntigravityQuotaStore.save(quota, dataDir: dataDir)
+                    }
                     switch result.completeness {
                     case .complete:
                         // #48 Option C gate(pivot §1/§3,owner 交易順序):
@@ -1190,6 +1244,9 @@ public actor UsageCoordinator {
                 } else {
                     let state = scanStates[pid] ?? ScanState()
                     let (result, newState) = try adapter.refreshUsage(state: state)
+                    if pid == "antigravity", let quota = result.antigravityQuota {
+                        AntigravityQuotaStore.save(quota, dataDir: dataDir)
+                    }
                     inserted += ledger.append(result.events)         // 交易式落盤(記憶體僅落盤成功才提交)
                     if let we = ledger.writeError { throw we }        // 落盤失敗 → 不提交下面(契約 B/M5)
                     // #49 R2 commit chain:durable ledger(append 已 barrier)→ durable limits →
@@ -1220,7 +1277,7 @@ public actor UsageCoordinator {
                         refreshErrors[pid] = String(describing: err)
                     }
                     parseErrorCounts[pid] = result.parseErrors
-                    providerLastOkAt[pid] = now   // F17:成功觀測
+                    providerLastOkAt[pid] = now   // F17:成功觀
                     if fullReindex {
                         // 走到 else 且 fullReindex → 必為 cumulativeSnapshotOnly(OpenCode):保留累計歷史、僅增量(不重建)。
                         // #83 W5(owner contract):ledger append 成功 ∧ limits fold 失敗 ⇒ **omit** 該
@@ -1358,7 +1415,22 @@ public actor UsageCoordinator {
         for adapter in adapters where settings.enabledProviders.contains(adapter.providerId) {
             let pid = adapter.providerId
             let availability = adapter.detectAvailability()
-            let limit = limits.limitState(providerId: pid, ledger: ledger, settings: settings, now: now)
+            let acc = todayByProviderAcc[pid] ?? ProviderAcc()
+            let tokens = acc.tokens
+            var limit = limits.limitState(providerId: pid, ledger: ledger, settings: settings, now: now)
+            if let claude = adapter as? ClaudeCodeAdapter {
+                limit.modelScopedWeekly = ClaudeCodeAdapter.readModelScopedLimits(from: claude.statuslineFiles)
+            }
+            if TokenActivityRing.providersWithTokenOnlyMeters.contains(pid) {
+                let hasOfficialWeekly = pid == "grok-code"
+                    && limit.weekly.usedPercent != nil
+                    && limit.weekly.confidence == .high
+                if !hasOfficialWeekly {
+                    limit.todayActivityPercent = TokenActivityRing.percent(todayTokens: tokens.total)
+                } else {
+                    limit.todayActivityPercent = nil
+                }
+            }
             limitStates.append(limit)
             // provider-reported 投影:capability 來自 adapter、official 來自 engine 新欄位、
             // statuslinePresent 只有 claude-code 非 nil(其他 provider 永遠跳過 rule 4)。
@@ -1367,9 +1439,6 @@ public actor UsageCoordinator {
                 limit: limit,
                 statuslinePresent: (adapter as? ClaudeCodeAdapter)?.statuslineFilePresent,
                 sourceHealth: sourceHealthById[pid]))
-
-            let acc = todayByProviderAcc[pid] ?? ProviderAcc()
-            let tokens = acc.tokens
             byProvider.append(ProviderDaySummary(providerId: pid, displayName: adapter.displayName,
                                                  tokens: tokens, cost: acc.cost))
 
@@ -1466,7 +1535,10 @@ public actor UsageCoordinator {
             topProjects: Array(ledger.projectSummaries(in: today, pricing: pricing).prefix(8)),
             models: ledger.modelSummaries(in: today, pricing: pricing),
             dataQuality: quality,
-            lastRefreshAt: lastRefreshAt
+            lastRefreshAt: lastRefreshAt,
+            // Only while `agy /usage` is actually being fetched: with the opt-in off, the file on disk is a
+            // frozen past reading and must not be presented as the live official quota.
+            antigravityQuota: antigravityOfficialQuotaEnabled ? AntigravityQuotaStore.load(dataDir: dataDir) : nil
         )
     }
 

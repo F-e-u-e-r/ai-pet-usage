@@ -94,6 +94,15 @@ public enum StatusRenderer {
                 let windows = "5h: " + cliReportedCell(reported.fiveHour, cue: reported.cue, now: now)
                     + "   weekly: " + cliReportedCell(reported.weekly, cue: reported.cue, now: now)
                 lines.append(padTo(left, windowColumn) + windows)
+                if reported.providerId == "claude-code", let limit,
+                   let scoped = limit.modelScopedWeekly, !scoped.isEmpty {
+                    let bits = scoped.map { row in
+                        let tail = row.resetsAt.map { " (resets in " + ResetLabel.countdown(to: $0, now: now) + ")" } ?? ""
+                        return "\(row.displayName) weekly: \(String(format: "%.1f%%", row.usedPercent))\(tail)"
+                    }
+                    lines.append(padTo("  " + padTo("model-scoped:", 19), windowColumn)
+                                 + bits.joined(separator: "   "))
+                }
                 // 本機估算列(既有 Claude budget 估算):只 claude-code、至少一窗 active 時才輸出
                 if reported.providerId == "claude-code",
                    reported.fiveHourEstimateActive || reported.weeklyEstimateActive, let limit {
