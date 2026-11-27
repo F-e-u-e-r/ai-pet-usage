@@ -824,7 +824,9 @@ struct AntigravityQuotaGroupsView: View {
         return ReportedLimitBar(
             title: "\(win) window",
             main: expired ? "—" : "\(Int(bucket.remainingPercent.rounded()))% left",
-            secondary: expired ? "awaiting agy /usage refresh" : ResetLabel.countdown(to: bucket.resetsAt, now: now),
+            secondary: expired
+                ? "awaiting agy /usage refresh"
+                : ResetLabel.countdown(to: AntigravityQuotaFetcher.normalizedResetTime(bucket.resetsAt), now: now),
             gaugePercent: expired ? nil : bucket.usedPercent,
             corrected: false,
             warn: warn,

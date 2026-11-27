@@ -10,6 +10,25 @@ public struct AntigravityQuotaSnapshot: Codable, Sendable, Equatable {
         self.fetchedAt = fetchedAt
         self.groups = groups
     }
+
+    /// Strip agy’s “no reset scheduled” sentinel from every bucket (for display + persistence).
+    public func normalizingEpochResetTimes() -> AntigravityQuotaSnapshot {
+        AntigravityQuotaSnapshot(
+            fetchedAt: fetchedAt,
+            groups: groups.map { group in
+                AntigravityQuotaGroup(
+                    name: group.name,
+                    buckets: group.buckets.map { bucket in
+                        AntigravityQuotaBucket(
+                            id: bucket.id,
+                            label: bucket.label,
+                            windowMinutes: bucket.windowMinutes,
+                            usedPercent: bucket.usedPercent,
+                            remainingPercent: bucket.remainingPercent,
+                            resetsAt: AntigravityQuotaFetcher.normalizedResetTime(bucket.resetsAt))
+                    })
+            })
+    }
 }
 
 public struct AntigravityQuotaGroup: Codable, Sendable, Equatable, Identifiable {
@@ -88,7 +107,7 @@ public enum AntigravityQuotaFetcher {
                 let used = min(100, max(0, 100 - remPct))
                 // Unknown window (e.g. a new "24h" bucket): skip rather than mislabel it as the weekly quota.
                 guard let windowMin = windowMinutes(b.window) else { continue }
-                let resets = b.reset_time.flatMap { ISO8601.parse($0) }
+                let resets = b.reset_time.flatMap { parseResetTime($0) }
                 buckets.append(AntigravityQuotaBucket(id: bid, label: label, windowMinutes: windowMin,
                                                       usedPercent: used, remainingPercent: remPct,
                                                       resetsAt: resets))
@@ -98,7 +117,7 @@ public enum AntigravityQuotaFetcher {
             }
         }
         guard !groups.isEmpty else { return nil }
-        return AntigravityQuotaSnapshot(fetchedAt: now, groups: groups)
+        return AntigravityQuotaSnapshot(fetchedAt: now, groups: groups).normalizingEpochResetTimes()
     }
 
     /// Primary 5h / weekly reading for limit engine: **Gemini Models** group (default agy routing).
@@ -129,6 +148,17 @@ public enum AntigravityQuotaFetcher {
             return url
         }
         return nil
+    }
+
+    /// agy emits `1970-01-01T00:00:00Z` when a bucket has no scheduled reset (common on Claude/GPT third-party pools).
+    static func parseResetTime(_ raw: String) -> Date? {
+        normalizedResetTime(ISO8601.parse(raw))
+    }
+
+    /// Epoch / absent reset sentinel — same rule on fresh fetch and on disk reload.
+    public static func normalizedResetTime(_ date: Date?) -> Date? {
+        guard let date, date.timeIntervalSince1970 > 0 else { return nil }
+        return date
     }
 
     private static func windowMinutes(_ window: String?) -> Int? {
@@ -198,13 +228,20 @@ public enum AntigravityQuotaStore {
     }
 
     public static func load(dataDir: URL) -> AntigravityQuotaSnapshot? {
-        AtomicJSON.read(AntigravityQuotaSnapshot.self, from: url(dataDir: dataDir))
+        guard let raw = AtomicJSON.read(AntigravityQuotaSnapshot.self, from: url(dataDir: dataDir)) else {
+            return nil
+        }
+        let snap = raw.normalizingEpochResetTimes()
+        if snap != raw {
+            try? AtomicJSON.write(snap, to: url(dataDir: dataDir))
+        }
+        return snap
     }
 
     public static func save(_ snapshot: AntigravityQuotaSnapshot?, dataDir: URL) {
         let file = url(dataDir: dataDir)
         if let snapshot {
-            try? AtomicJSON.write(snapshot, to: file)
+            try? AtomicJSON.write(snapshot.normalizingEpochResetTimes(), to: file)
         } else {
             try? FileManager.default.removeItem(at: file)
         }

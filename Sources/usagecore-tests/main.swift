@@ -1521,6 +1521,10 @@ let surf5 = SurfRound5Tests()
 runSuite("SurfRound5Tests", [
     ("testMirrorReadRejectsSymlinkedRoot", surf5.testMirrorReadRejectsSymlinkedRoot),
     ("testMirrorReadRejectsRootFailingPolicy", surf5.testMirrorReadRejectsRootFailingPolicy),
+    ("testAgyEpochResetTimeTreatedAsAbsentSoThirdPartyBucketsShow", surf5.testAgyEpochResetTimeTreatedAsAbsentSoThirdPartyBucketsShow),
+    ("testPersistedSnapshotStripsEpochResetSoThirdPartyBucketsShow", surf5.testPersistedSnapshotStripsEpochResetSoThirdPartyBucketsShow),
+    ("testLiveAgyThirdPartyResetsNormalized", surf5.testLiveAgyThirdPartyResetsNormalized),
+    ("testLiveAgySaveStripsEpochFromDisk", surf5.testLiveAgySaveStripsEpochFromDisk),
     ("testAgyUnknownWindowIsSkippedNotWeekly", surf5.testAgyUnknownWindowIsSkippedNotWeekly),
     ("testCursorNullBillingEndIsSchemaBreaking", surf5.testCursorNullBillingEndIsSchemaBreaking),
 ])

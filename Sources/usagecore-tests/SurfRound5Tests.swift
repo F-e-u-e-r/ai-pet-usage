@@ -39,6 +39,76 @@ final class SurfRound5Tests: XCTestCase {
 
     // MARK: - agy /usage window labels
 
+    func testAgyEpochResetTimeTreatedAsAbsentSoThirdPartyBucketsShow() {
+        let json = Data(#"""
+        {"command":{"data":{"groups":[{"name":"Claude and GPT models","buckets":[
+          {"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.88,"reset_time":"1970-01-01T00:00:00Z"},
+          {"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.95,"reset_time":"1970-01-01T00:00:00Z"}]}]}}}
+        """#.utf8)
+        let now = date("2026-11-27T12:00:00Z")
+        let snap = AntigravityQuotaFetcher.fetch(now: now,
+                                                 executableURL: URL(fileURLWithPath: "/fake/agy")) { _ in json }
+        let bucket = snap?.groups.first?.buckets.first
+        XCTAssertNil(bucket?.resetsAt)
+        XCTAssertEqual(bucket?.usedPercent ?? -1, 12, accuracy: 0.01)
+        let base = ProviderLimitState(providerId: "antigravity",
+                                      fiveHour: LimitWindowState(windowMinutes: 300, confidence: .high),
+                                      weekly: LimitWindowState(windowMinutes: 10_080, confidence: .high))
+        let st = AntigravityQuotaDisplay.expandLimitStates([base], quota: snap, now: now)
+            .first { $0.providerId == AntigravityQuotaDisplay.claudeGptId }
+        XCTAssertNotNil(st)
+        XCTAssertEqual(st?.fiveHour.usedPercent, 12)
+        XCTAssertEqual(st?.weekly.usedPercent, 5)
+    }
+
+    func testPersistedSnapshotStripsEpochResetSoThirdPartyBucketsShow() throws {
+        let dir = makeTempDir()
+        let epoch = Date(timeIntervalSince1970: 0)
+        let snap = AntigravityQuotaSnapshot(
+            fetchedAt: date("2026-11-26T23:13:16Z"),
+            groups: [AntigravityQuotaGroup(name: "Claude and GPT models", buckets: [
+                AntigravityQuotaBucket(id: "3p-5h", label: "Five Hour Limit Remaining", windowMinutes: 300,
+                                       usedPercent: 0, remainingPercent: 100, resetsAt: epoch),
+                AntigravityQuotaBucket(id: "3p-weekly", label: "Weekly Limit Remaining", windowMinutes: 10_080,
+                                       usedPercent: 0, remainingPercent: 100, resetsAt: epoch),
+            ])])
+        AntigravityQuotaStore.save(snap, dataDir: dir)
+        let loaded = AntigravityQuotaStore.load(dataDir: dir)
+        XCTAssertNil(loaded?.groups.first?.buckets.first?.resetsAt,
+                     "on-disk epoch sentinel must normalize to absent reset")
+        let fetched = loaded!.fetchedAt
+        let now = fetched.addingTimeInterval(4 * 3600)
+        let five = loaded!.groups[0].buckets[0]
+        XCTAssertFalse(AntigravityQuotaDisplay.isExpired(five, fetchedAt: fetched, now: now),
+                         "epoch on disk must not instantly expire the 5h third-party bucket")
+        XCTAssertTrue(AntigravityQuotaDisplay.bucketSummary(five, fetchedAt: fetched, now: now)
+            .hasPrefix("100% left"))
+        let base = ProviderLimitState(providerId: "antigravity",
+                                      fiveHour: LimitWindowState(windowMinutes: 300, confidence: .high),
+                                      weekly: LimitWindowState(windowMinutes: 10_080, confidence: .high))
+        let st = AntigravityQuotaDisplay.expandLimitStates([base], quota: loaded, now: now)
+            .first { $0.providerId == AntigravityQuotaDisplay.claudeGptId }
+        XCTAssertEqual(st?.fiveHour.usedPercent, 0)
+        XCTAssertEqual(st?.fiveHourOfficial, .usable)
+    }
+
+    func testLiveAgyThirdPartyResetsNormalized() {
+        guard let snap = AntigravityQuotaFetcher.fetch() else { return }
+        let third = snap.groups.first { $0.name == "Claude and GPT models" }
+        XCTAssertNotNil(third)
+        for b in third?.buckets ?? [] {
+            XCTAssertNil(b.resetsAt, "bucket \(b.id) resetsAt must be absent, not agy epoch sentinel")
+        }
+    }
+
+    func testLiveAgySaveStripsEpochFromDisk() throws {
+        guard let snap = AntigravityQuotaFetcher.fetch() else { return }
+        let dir = makeTempDir()
+        AntigravityQuotaStore.save(snap, dataDir: dir)
+        let raw = try String(contentsOf: AntigravityQuotaStore.url(dataDir: dir), encoding: .utf8)
+        XCTAssertFalse(raw.contains("1970"), raw)
+    }
+
     func testAgyUnknownWindowIsSkippedNotWeekly() {
         let json = Data(#"""
         {"command":{"data":{"groups":[{"name":"Gemini Models","buckets":[
