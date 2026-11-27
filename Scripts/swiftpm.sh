@@ -20,6 +20,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLT="/Library/Developer/CommandLineTools"
+XCODE_APP="/Applications/Xcode.app/Contents/Developer"
+# xcode-select may still point at CLT while Xcode.app is installed — use Xcode for SwiftUI macros.
+if [ -d "$XCODE_APP" ] && [ "${DEVELOPER_DIR:-}" = "" ]; then
+  export DEVELOPER_DIR="$XCODE_APP"
+fi
 FIX="$ROOT/.build/clt-fix"
 mkdir -p "$FIX"
 

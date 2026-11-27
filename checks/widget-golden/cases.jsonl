@@ -1,0 +1,4 @@
+{"id":"codex-only","enabled":["codex"],"limits":[{"id":"codex","five":40,"week":55},{"id":"grok-code","five":10,"week":null}],"expectRows":["codex"]}
+{"id":"agy-order","enabled":["codex","antigravity"],"limits":[{"id":"codex","five":30,"week":20},{"id":"antigravity-gemini","five":12,"week":44}],"expectRows":["codex","antigravity-gemini"]}
+{"id":"empty-disabled","enabled":[],"limits":[{"id":"opencode","five":5,"week":5}],"expectRows":[]}
+{"id":"idle-row","enabled":["grok-code"],"limits":[{"id":"grok-code","five":null,"week":null,"idle":true}],"expectRows":["grok-code"]}

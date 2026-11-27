@@ -232,8 +232,8 @@ final class AppearanceWiringGuardTests: XCTestCase {
     func testMenuBarBadgeRendererIsPureAndTakesInjectedSystemAppearance() throws {
         let text = try read(appSource("MenuBarBadge.swift"))
         XCTAssertTrue(text.contains("systemIsDark: Bool"), "renderer must take the resolved system appearance as input")
-        XCTAssertTrue(text.contains("MenuBarBadgeInk.baseWhite(systemIsDark: systemIsDark)"),
-                      "ink must come from the pure PetCore decision")
+        XCTAssertTrue(text.contains("ink.baseColor(systemIsDark: systemIsDark"),
+                      "renderer must resolve ink via MenuBarBadgeInkPreference (delegates to PetCore MenuBarBadgeInk)")
         for forbidden in ["effectiveAppearance", "currentDrawing", "AppleInterfaceStyle",
                           "UserDefaults", "CFPreferences", "NSApp.", "AppearancePreference"] {
             XCTAssertFalse(text.contains(forbidden), "MenuBarBadge.swift must not contain `\(forbidden)`")

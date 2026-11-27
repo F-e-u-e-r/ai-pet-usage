@@ -1,6 +1,10 @@
 .build/
 .swiftpm/
 *.xcodeproj
+# Widget extension is an Xcode target (not user-local); keep in repo.
+!macOS/
+!macOS/AIPetUsageWidget.xcodeproj/
+!macOS/AIPetUsageWidget.xcodeproj/**
 DerivedData/
 dist/
 *.app

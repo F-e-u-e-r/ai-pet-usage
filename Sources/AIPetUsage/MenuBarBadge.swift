@@ -41,6 +41,8 @@ struct MenuBarBadgeView: View {
     let showsPlaceholder: Bool
     /// 一般文字色,依選單列深淺決定(烤圖時無法用動態色)。
     let baseColor: Color
+    /// 非 automatic 時百分比也用 `baseColor`(不用 warn/danger 橘紅),使用者自訂墨色才看得到。
+    let uniformInk: Bool
 
     var body: some View {
         HStack(spacing: 6) {
@@ -62,7 +64,7 @@ struct MenuBarBadgeView: View {
                             }
                         }
                         .frame(width: 7, height: 7)
-                    Text(badge.code)
+                    Text(badge.badgeLabel)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(baseColor.opacity(0.85))
                     if badge.idle {
@@ -94,7 +96,7 @@ struct MenuBarBadgeView: View {
             Text("\(w.percent)%")
                 .font(.system(size: 11, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(severityColor(w.severity) ?? baseColor)
+                .foregroundStyle(uniformInk ? baseColor : (severityColor(w.severity) ?? baseColor))
         } else {
             Text("-")
                 .font(.system(size: 11, weight: .semibold))
@@ -112,11 +114,13 @@ enum MenuBarBadgeRenderer {
     /// 上述禁令由 AppearanceWiringGuardTests 以字面掃描鎖住(含註解)。
     /// 選單列深淺以系統外觀近似(罕見的桌布淺色選單列 + 深色系統外觀組合會有對比落差,屬已知限制)。
     static func image(petEmoji: String, badges: [MenuBadge], showsPlaceholder: Bool,
+                      ink: MenuBarBadgeInkPreference, customInkHex: UInt32?,
                       systemIsDark: Bool) -> NSImage? {
-        let base = Color(white: MenuBarBadgeInk.baseWhite(systemIsDark: systemIsDark))
+        let base = ink.baseColor(systemIsDark: systemIsDark, customHex: customInkHex)
+        let uniformInk = ink != .automatic
         let renderer = ImageRenderer(content: MenuBarBadgeView(
             petEmoji: petEmoji, badges: badges,
-            showsPlaceholder: showsPlaceholder, baseColor: base))
+            showsPlaceholder: showsPlaceholder, baseColor: base, uniformInk: uniformInk))
         renderer.scale = 2
         guard let image = renderer.nsImage else { return nil }
         image.isTemplate = false
