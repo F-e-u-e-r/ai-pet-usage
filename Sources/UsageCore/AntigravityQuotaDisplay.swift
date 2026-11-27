@@ -151,7 +151,7 @@ public enum AntigravityQuotaDisplay {
 
     /// Past its reset, or (no reset time) older than its own window.
     public static func isExpired(_ bucket: AntigravityQuotaBucket, fetchedAt: Date, now: Date) -> Bool {
-        if let resetsAt = bucket.resetsAt { return resetsAt <= now }
+        if let resetsAt = AntigravityQuotaFetcher.normalizedResetTime(bucket.resetsAt) { return resetsAt <= now }
         return now.timeIntervalSince(fetchedAt) > Double(bucket.windowMinutes) * 60
     }
 
@@ -167,7 +167,7 @@ public enum AntigravityQuotaDisplay {
             return LimitWindowState(windowMinutes: defaultMinutes, confidence: .high, idle: false)
         }
         return LimitWindowState(usedPercent: bucket.usedPercent,
-                                resetAt: bucket.resetsAt,
+                                resetAt: AntigravityQuotaFetcher.normalizedResetTime(bucket.resetsAt),
                                 windowMinutes: bucket.windowMinutes,
                                 confidence: .high,
                                 idle: false,
