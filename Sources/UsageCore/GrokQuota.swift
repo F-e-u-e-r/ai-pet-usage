@@ -183,7 +183,8 @@ public enum GrokQuotaEngine {
     /// - root 非物件 → schemaBreaking(唯一 evidence-backed 結構破壞;立即 kill)
     /// - root 含 `error`(非 null)→ .badReply(明確 error-envelope,無論 config 是否在)
     /// - 無 `config` 物件 → .badReply(無法辨識/error;transient,不清 401 門檻、不 kill)
-    /// - 有 `config` 物件 → .noUsageData —— creditUsagePercent 已證**非** weekly quota(見下),Track A 不 render
+    /// - 有 `config` 且含 `creditUsagePercent` → `.success`(與 unified.jsonl billing 行同語意)
+    /// - 有 `config` 但缺 % → .noUsageData
     /// - JSON 壞 → invalidBody(×3 才 kill,狀態機管);未知欄位 = additive → 容忍。
     public static func parseResponse(statusCode: Int, data: Data, now: Date) -> GrokQuotaOutcome {
         switch statusCode {
@@ -211,18 +212,40 @@ public enum GrokQuotaEngine {
         if let err = root["error"], !(err is NSNull) { return .badReply }
         // 必須是可辨識的 billing envelope(有 `config` 物件);無 config → .badReply(transient:不標健康、
         // 不清 401 門檻、保留 last-good、不 kill)。
-        guard root["config"] is [String: Any] else { return .badReply }
-        // Track B ground truth(2026-08-10):`creditUsagePercent` = credit/product 用量,**不是** Grok
-        // weekly quota —— 實測同 weekly window 內 100%→absent;官方 `grok /usage` 另有 weekly signal
-        // (0% + reset)。故 Track A 一律**不**以 creditUsagePercent 驅動 weekly-% UI(無論在否)→
-        // .noUsageData(honestly unavailable);真正 weekly substrate 由 REDESIGN(定位 grok /usage 之來源)接。
-        // Track A 只撤除此已證偽的 semantic mapping,不定位/實作新 source(見 f3-grok-quota-real-schema memo)。
+        guard let config = root["config"] as? [String: Any] else { return .badReply }
+        if let snap = snapshot(fromBillingConfig: config, now: now) {
+            return .success(snap)
+        }
         return .noUsageData
     }
 
-    // NOTE:creditUsagePercent 已於 Track A 撤除為 weekly-quota source(見 parseResponse 註)。原本用於
-    // 解析該 % 與 period 的 asDouble/usablePercent/asDate 亦一併移除;REDESIGN 接真正 grok /usage 來源時
-    // 再按該來源實際形狀重寫解析(GrokISO8601 保留,現由 auth 的 expires_at 選擇使用)。
+    private static func snapshot(fromBillingConfig config: [String: Any], now: Date) -> GrokQuotaSnapshot? {
+        let raw: Double?
+        if let n = config["creditUsagePercent"] as? NSNumber {
+            // JSON `true`/`false` are CFBoolean; integral percents (0/1/…) are CFNumber (also `is Bool` in Swift).
+            if CFGetTypeID(n as CFTypeRef) == CFBooleanGetTypeID() {
+                raw = nil
+            } else {
+                raw = n.doubleValue
+            }
+        } else if let d = config["creditUsagePercent"] as? Double {
+            raw = d
+        } else if let s = config["creditUsagePercent"] as? String, let d = Double(s) {
+            raw = d
+        } else {
+            raw = nil
+        }
+        guard let pct = raw, pct.isFinite else { return nil }
+        let overflow = pct > 100
+        let used = min(100, max(0, pct))
+        var endStr = config["billingPeriodEnd"] as? String
+        if endStr == nil, let period = config["currentPeriod"] as? [String: Any] {
+            endStr = period["end"] as? String
+        }
+        let end = endStr.flatMap(GrokISO8601.date(from:))
+        return GrokQuotaSnapshot(usedPercent: used, reportedPercentOverflow: overflow,
+                                 periodStart: nil, periodEnd: end, planName: nil, fetchedAt: now)
+    }
 }
 
 // MARK: - credential 讀取結果(契約 §4 生命週期表的三分;r1 三鏡:全塌 noKey 會把
@@ -344,5 +367,59 @@ public struct CredentialChangeGate: Equatable, Sendable {
     public func shouldAttempt(currentStat: FileStat) -> Bool {
         guard let rejected = rejectedAtStat else { return true }
         return currentStat != rejected
+    }
+}
+
+// MARK: - Menu / pet chrome (one Grok row, weekly meter only)
+
+public enum GrokChromeDisplay {
+    public static let providerId = "grok-code"
+
+  /// Grok has no 5h provider quota; optional official credits land on the weekly column only.
+    public static func usesWeeklyOnlyMeter(_ id: String) -> Bool {
+        id == providerId
+    }
+
+    public static func normalizeLimitState(_ state: ProviderLimitState,
+                                           officialQuota: GrokQuotaSnapshot?) -> ProviderLimitState {
+        guard state.providerId == providerId else { return state }
+        var s = state
+        // Grok 無 5h 配額:不論有無官方 credits,5h 一律清空(契約:永不發佈 5h %)
+        s.fiveHour = LimitWindowState(windowMinutes: 300, confidence: .unknown)
+        if let q = officialQuota {
+            // Billing credits (`creditUsagePercent`) — not Grok's 5h/weekly rate-limit windows (Track A memo 2026-08-10).
+            // Rendered on the weekly chrome column as a billing-period meter (docs/DATA_SOURCES.md); always estimated.
+            s.weekly = LimitWindowState(usedPercent: q.usedPercent,
+                                        resetAt: q.periodEnd,
+                                        windowMinutes: 10_080,
+                                        confidence: .estimated)
+            s.todayActivityPercent = nil
+            return s
+        }
+        if state.weekly.usedPercent != nil, state.weekly.confidence == .high {
+            s.todayActivityPercent = nil
+        }
+        return s
+    }
+}
+
+/// Menu bar, widget, and badges: providers that never show a 5-hour meter column.
+public enum LimitMeterChrome {
+    public static func skipsFiveHourMeter(_ providerId: String) -> Bool {
+        GrokChromeDisplay.usesWeeklyOnlyMeter(providerId)
+            || CursorChromeDisplay.usesMonthlyOnlyMeter(providerId)
+            || providerId == AntigravityQuotaDisplay.argonId
+    }
+
+    /// Chrome + reported capability: hide the 5h row/bar when the source never reports that window.
+    public static func showsFiveHourLimitUI(providerId: String, reported: ProviderReportedLimits?) -> Bool {
+        if skipsFiveHourMeter(providerId) { return false }
+        if let reported, case .notProvidedBySource = reported.fiveHour { return false }
+        return true
+    }
+
+    public static func periodLimitLabel(providerId: String) -> String {
+        if CursorChromeDisplay.usesMonthlyOnlyMeter(providerId) { return "monthly" }
+        return "weekly"
     }
 }

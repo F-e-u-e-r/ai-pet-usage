@@ -29,12 +29,14 @@ struct AIPetUsageApp: App {
         Window("AI Pet Usage", id: "dashboard") {
             DashboardRoot()
                 .environment(model)
+                .id(model.fontStyleTick)
         }
         .defaultSize(width: 920, height: 660)
 
         Settings {
             SettingsRoot()
                 .environment(model)
+                .id(model.fontStyleTick)
         }
     }
 }
@@ -73,15 +75,21 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        // 讀取 appearanceTick,使系統深/淺色切換與手動 Appearance 偏好變更(同一條 tick 路徑)時重新烤圖;
-        // 徽章墨色跟隨解析好的**系統**外觀(選單列是系統的),不隨 app 偏好。
+        // 讀取 tick,使設定 / 系統外觀變更時重烤 badge(`MenuBarExtra` label 快取積極,需 `.id`)。
+        let chromeKey = model.menuBarChromeTick
         let _ = model.appearanceTick
+        let ink = model.settings.menuBarBadgeInk
+        let inkHex = model.settings.menuBarBadgeInkHex
         return Group {
             if let image = MenuBarBadgeRenderer.image(petEmoji: model.menuBarPetEmoji,
                                                       badges: model.menuBarBadges,
+                                                      creditBadges: model.menuBarCreditBadges,
                                                       showsPlaceholder: model.menuBarShowsPlaceholder,
+                                                      ink: ink,
+                                                      customInkHex: inkHex,
                                                       systemIsDark: model.systemIsDark) {
                 Image(nsImage: image)
+                    .id("\(chromeKey)-\(ink.rawValue)-\(inkHex ?? 0)")
             } else {
                 Text(model.menuBarTitle).monospacedDigit()
             }

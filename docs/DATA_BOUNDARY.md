@@ -17,6 +17,8 @@ Columns:
 | Auth files, API keys, tokens | **No** — except the reviewed narrow credential rows below (‡, §) | No | No | No | **No** |
 | opencode `auth.json` → the `openrouter` API key (only while the **opt-in** credits monitor is on) | Narrow ‡ | No | No | No | **Only** as the `Authorization` header to `openrouter.ai` (HTTPS, redirects refused) |
 | OpenRouter credit totals (purchased / used / derived remaining) | Received from openrouter.ai (opt-in) | No — memory only | No | No | Received only; never re-sent |
+| Colab CLI OAuth (Keychain `google-colab-cli` or legacy `token.json`) | **No** — subprocess-only; app never reads credentials | No | No | No | **No** (subprocess uses the CLI's own session) |
+| Colab compute-unit balance / burn rate / active VMs | Parsed from `colab usage` stdout (opt-in) | No — memory only | No | No | CLI talks to Google; app does not open its own HTTPS connection |
 | Grok CLI `auth.json` → the session token (only while the **opt-in** Grok quota card is on; *Phase 1, shipped* §) | Narrow § | No | No | No | **Only** as auth headers to `cli-chat-proxy.grok.com` (HTTPS, redirects refused) |
 | Codex `auth.json` → the access token + account id (only while the **opt-in** Codex usage card is on; *Phase 1, approved ahead of implementation* §) | Narrow § | No | No | No | **Only** as the `Authorization` header to `chatgpt.com` (HTTPS, redirects refused) |
 | Grok / Codex quota, credits & plan responses (received) | Received (opt-in) | No — memory only; **exception:** Codex official rate-limit readings fold into the existing "Limit percentages" row (`limits-state.json`) above | No | No | Received only; never re-sent |
@@ -69,30 +71,40 @@ in the memory of a single request — never persisted, shown, or exported. Provi
 Disabling a toggle cancels in-flight work and clears that provider's in-memory snapshot.
 Errors render from the fixed closed vocabulary — never raw error/response text.
 
-### Network egress (four opt-in calls, all off by default; two shipped + two approved for Phase 1)
+### Network egress (opt-in integrations, all off by default)
 
 1. The **opt-in** GitHub Releases update check (Settings → General; a manual "Check for Updates…" makes the
    same request). Its request body/query carries **no usage data**; the headers the app sets are
    `User-Agent: AIPetUsage/<app-version>` and `Accept: application/vnd.github+json` (the GitHub API media
    type) — no OS, no usage.
-2. The **opt-in** OpenRouter credits check (Settings → Providers): `GET https://openrouter.ai/api/v1/credits`
+2. The **opt-in** Colab credits check (Settings → Providers): spawns `colab usage` about every 15 minutes.
+   The subprocess uses the CLI's cached OAuth; this app never reads the token. Only the three labeled
+   stdout fields are parsed. No usage data leaves the machine via this app.
+3. The **opt-in** OpenRouter credits check (Settings → Providers): `GET https://openrouter.ai/api/v1/credits`
    about every 15 minutes and on manual Refresh, with headers `Authorization` (the opencode key, ‡ above),
    `Accept: application/json`, and `User-Agent: AIPetUsage/<app-version>` — no usage data, no OS string. The
    response (credit totals) stays in memory and is never re-sent, persisted, or exported. Hardcoded HTTPS
    host, system TLS trust; no certificate pinning.
-3. *(Phase 1, shipped)* The **opt-in** Grok quota check:
+4. *(Phase 1, shipped)* The **opt-in** Grok quota check:
    `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` on the same ~15-minute/manual cadence,
    auth headers from the Grok CLI login (§ above) — no usage data sent. Response (usage %, period, plan)
    is memory-only.
-4. *(Phase 1, approved ahead of implementation)* The **opt-in** Codex usage check:
+5. *(Phase 1, approved ahead of implementation)* The **opt-in** Codex usage check:
    `GET https://chatgpt.com/backend-api/wham/usage` on the same cadence, `Authorization` from the Codex
    CLI login (§ above) — no usage data sent. Credits/plan stay memory-only; official rate-limit readings
    feed the existing LimitEngine and its persisted `limits-state.json` (an already-allowed class). The
    read-only reset-credits display may share this call's auth; a credit-**consuming** endpoint is never
    called.
+6. *(Phase 1, shipped)* The **opt-in** Cursor plan usage check (Settings → Providers → **Cursor**, **Show plan usage %**;
+   default **off**; no automatic enable when a bearer file exists):
+   `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` about every 15 minutes
+   and on manual Refresh. The JWT is read only from a user-maintained bearer file (or env `CURSOR_ACCESS_TOKEN`,
+   or plaintext `state.vscdb`) — **never Keychain inside the app**. The Bearer header is sent only to
+   `api2.cursor.sh`; response percentages stay in memory and are not persisted. Turn the sub-toggle off to
+   disable network calls entirely while keeping local log metering.
 
 As with any HTTPS request over the system's standard networking, the contacted host also sees ordinary
-connection metadata (e.g. IP) and any system-managed headers. Beyond the four opt-in calls listed above, the app contacts
+connection metadata (e.g. IP) and any system-managed headers. Beyond the opt-in integrations listed above, the app contacts
 no other host; the bundled price list is generated offline — the pricing pipeline never runs at runtime.
 
 ### Not share-hardened

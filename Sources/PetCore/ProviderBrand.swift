@@ -1,4 +1,5 @@
 import Foundation
+import UsageCore
 
 // Provider 識別徽章系統(UIUX spec):
 //   dot 顏色 = provider 身分,恆定不變,絕不隨用量改色;
@@ -37,7 +38,15 @@ public enum ProviderBrands {
     public static let known: [ProviderBrand] = [
         ProviderBrand(id: "antigravity", code: "AG", shortName: "Antigravity", displayName: "Antigravity",
                       dotColor: 0x8B5CF6, needsOutline: false),
+        ProviderBrand(id: "antigravity-gemini", code: "Gm", shortName: "Antigravity", displayName: "Antigravity · Gemini models",
+                      dotColor: 0x8B5CF6, needsOutline: false),
+        ProviderBrand(id: "antigravity-claude-gpt", code: "3P", shortName: "Antigravity",
+                      displayName: "Antigravity · Claude & GPT", dotColor: 0x8B5CF6, needsOutline: false),
+        ProviderBrand(id: "antigravity-argon", code: "Ar", shortName: "Antigravity",
+                      displayName: "Antigravity · Argon", dotColor: 0x8B5CF6, needsOutline: false),
         ProviderBrand(id: "claude-code", code: "CC", shortName: "Claude", displayName: "Claude Code",
+                      dotColor: 0xE8823A, needsOutline: false),
+        ProviderBrand(id: "claude-code-fable", code: "Fb", shortName: "Claude", displayName: "Claude Code · Fable",
                       dotColor: 0xE8823A, needsOutline: false),
         ProviderBrand(id: "codex", code: "CX", shortName: "Codex", displayName: "Codex",
                       dotColor: 0x3B82F6, needsOutline: false),
@@ -46,6 +55,14 @@ public enum ProviderBrands {
         // 深黃(yellow-600):與 CC 橘同暖色系但明度/色相可辨;淺色選單列對比足(R1 codex C11)。
         ProviderBrand(id: "opencode", code: "OC", shortName: "OpenCode", displayName: "OpenCode",
                       dotColor: 0xCA8A04, needsOutline: false),
+        ProviderBrand(id: "cursor-ide", code: "CU", shortName: "Cursor", displayName: "Cursor",
+                      dotColor: 0x1E1E1E, needsOutline: true),
+        ProviderBrand(id: "cursor-ide-auto", code: "C1", shortName: "Cursor", displayName: "Cursor · models",
+                      dotColor: 0x1E1E1E, needsOutline: true),
+        ProviderBrand(id: "cursor-ide-api", code: "C3", shortName: "Cursor", displayName: "Cursor · other models",
+                      dotColor: 0x1E1E1E, needsOutline: true),
+        ProviderBrand(id: "colab", code: "Co", shortName: "Colab", displayName: "Colab credits",
+                      dotColor: 0xF9AB00, needsOutline: false),
     ]
 
     public static func brand(for providerId: String, displayName: String? = nil) -> ProviderBrand {
@@ -95,6 +112,8 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
 
     public let providerId: String
     public let code: String
+    /// Text beside the dot in the menu bar badge (may differ from `code` when the user customizes labels).
+    public let badgeLabel: String
     public let displayName: String
     public let dotColor: UInt32
     public let needsOutline: Bool
@@ -107,10 +126,11 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
 
     public var id: String { providerId }
 
-    public init(providerId: String, code: String, displayName: String, dotColor: UInt32,
-                needsOutline: Bool, fiveHour: Window?, weekly: Window?, idle: Bool = false) {
+    public init(providerId: String, code: String, badgeLabel: String? = nil, displayName: String,
+                dotColor: UInt32, needsOutline: Bool, fiveHour: Window?, weekly: Window?, idle: Bool = false) {
         self.providerId = providerId
         self.code = code
+        self.badgeLabel = badgeLabel ?? code
         self.displayName = displayName
         self.dotColor = dotColor
         self.needsOutline = needsOutline
@@ -128,6 +148,23 @@ public struct MenuBadge: Sendable, Equatable, Identifiable {
     }
 }
 
+/// Opt-in account credit on the menu bar (Colab CU, etc.) — single value, not 5h/wk.
+public struct MenuCreditBadge: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let badgeLabel: String
+    public let dotColor: UInt32
+    public let needsOutline: Bool
+    public let value: String
+
+    public init(id: String, badgeLabel: String, dotColor: UInt32, needsOutline: Bool = false, value: String) {
+        self.id = id
+        self.badgeLabel = badgeLabel
+        self.dotColor = dotColor
+        self.needsOutline = needsOutline
+        self.value = value
+    }
+}
+
 public enum MenuBadgeBuilder {
     /// 由 (providerId, displayName, 5h%, weekly%) 建出選單列徽章。規則(spec §2/§5):
     /// 依顯示名稱字母序穩定排序(不得依 severity 重排)、identity 色恆定、
@@ -135,7 +172,8 @@ public enum MenuBadgeBuilder {
     /// (否則高 weekly 會在 compact 模式消失 —— 正是本功能要防的漏報)。
     /// 兩窗皆無資料:idle → 顯示中性「idle」徽章(compact 省略);非 idle → 略過(未偵測/無資料)。
     public static func badges(
-        from states: [(id: String, displayName: String?, fiveHour: Double?, weekly: Double?, idle: Bool)],
+        from states: [(id: String, displayName: String?, badgeLabel: String?, fiveHour: Double?, weekly: Double?,
+                       idle: Bool, todayActivityPercent: Double?)],
         warn: Double, danger: Double,
         onlyWarnings: Bool = false
     ) -> [MenuBadge] {
@@ -145,16 +183,32 @@ public enum MenuBadgeBuilder {
         }
         return states.compactMap { st -> MenuBadge? in
             let brand = ProviderBrands.brand(for: st.id, displayName: st.displayName)
-            let fiveHour = window(st.fiveHour)
+            let chromeLabel: String = {
+                let trimmed = st.badgeLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return trimmed.isEmpty ? brand.code : String(trimmed.prefix(14))
+            }()
+            let weeklyOnly = LimitMeterChrome.skipsFiveHourMeter(st.id)
+            var fiveHour = weeklyOnly ? nil : window(st.fiveHour)
             let weekly = window(st.weekly)
-            // 兩窗皆無資料:idle 顯示中性徽章(compact 除外);否則整筆略過(無資料)。
+            // 兩窗皆無資料:本機今日 token 刻度 → 5h 槽顯示 activity%;週/月-only provider 改放 weekly 槽。
             if fiveHour == nil, weekly == nil {
+                if let act = st.todayActivityPercent, let w = window(act) {
+                    let badge = MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
+                                          displayName: brand.displayName,
+                                          dotColor: brand.dotColor, needsOutline: brand.needsOutline,
+                                          fiveHour: weeklyOnly ? nil : w,
+                                          weekly: weeklyOnly ? w : nil, idle: false)
+                    if onlyWarnings, badge.aggregateSeverity == .normal { return nil }
+                    return badge
+                }
                 guard st.idle, !onlyWarnings else { return nil }
-                return MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+                return MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
+                                 displayName: brand.displayName,
                                  dotColor: brand.dotColor, needsOutline: brand.needsOutline,
                                  fiveHour: nil, weekly: nil, idle: true)
             }
-            let badge = MenuBadge(providerId: st.id, code: brand.code, displayName: brand.displayName,
+            let badge = MenuBadge(providerId: st.id, code: brand.code, badgeLabel: chromeLabel,
+                                  displayName: brand.displayName,
                                   dotColor: brand.dotColor, needsOutline: brand.needsOutline,
                                   fiveHour: fiveHour, weekly: weekly, idle: false)
             // compact:任一窗達 warn 才顯示。
@@ -177,6 +231,10 @@ public enum MenuBadgeBuilder {
                 func say(_ label: String, _ w: MenuBadge.Window?) -> String {
                     w.map { "\(label) \($0.percent) percent, \($0.severity.accessibilityWord)" }
                         ?? "\(label) no data"
+                }
+                if LimitMeterChrome.skipsFiveHourMeter(badge.providerId) {
+                    let label = CursorChromeDisplay.usesMonthlyOnlyMeter(badge.providerId) ? "monthly" : "weekly"
+                    return "\(badge.displayName) \(say(label, badge.weekly))"
                 }
                 return "\(badge.displayName) \(say("5-hour", badge.fiveHour)), \(say("weekly", badge.weekly))"
             })

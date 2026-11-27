@@ -51,6 +51,42 @@ struct GeneralSettings: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                Picker("Font style", selection: Binding(
+                    get: { model.settings.fontDesign },
+                    set: { v in model.updateSettings { $0.fontDesign = v } }
+                )) {
+                    ForEach(FontDesignPreference.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Picker("Text size", selection: Binding(
+                    get: { model.settings.fontSize },
+                    set: { v in model.updateSettings { $0.fontSize = v } }
+                )) {
+                    ForEach(FontSizePreference.allCases, id: \.self) { size in
+                        Text(size.displayName).tag(size)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Dashboard text color", selection: Binding(
+                    get: { model.settings.dashboardTextColor },
+                    set: { v in model.updateSettings { $0.dashboardTextColor = v } }
+                )) {
+                    ForEach(DashboardTextColorPreference.allCases, id: \.self) { pref in
+                        Text(pref.displayName).tag(pref)
+                    }
+                }
+                if model.settings.dashboardTextColor == .custom {
+                    ColorPicker("Main text", selection: hexColorBinding(
+                        get: { model.settings.dashboardTextPrimaryHex },
+                        set: { v in model.updateSettings { $0.dashboardTextPrimaryHex = v } }))
+                    ColorPicker("Secondary text", selection: hexColorBinding(
+                        get: { model.settings.dashboardTextSecondaryHex },
+                        set: { v in model.updateSettings { $0.dashboardTextSecondaryHex = v } }))
+                }
+                Text("Font and colors apply to the dashboard, limits, and trends. Menu bar badge options are below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -62,8 +98,79 @@ struct GeneralSettings: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
-                Text("Full lists every detected provider (● CC 91%). Compact keeps only providers at or above the warning threshold. Percent colors: orange ≥ warn, red ≥ alert threshold.")
+                Picker("Badge label", selection: Binding(
+                    get: { model.settings.menuBarBadgeLabelStyle },
+                    set: { v in model.updateSettings { $0.menuBarBadgeLabelStyle = v } }
+                )) {
+                    ForEach(MenuBarBadgeLabelStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Picker("Badge text color", selection: Binding(
+                    get: { model.settings.menuBarBadgeInk },
+                    set: { v in
+                        model.updateSettings { s in
+                            s.menuBarBadgeInk = v
+                            if v == .custom, s.menuBarBadgeInkHex == nil {
+                                s.menuBarBadgeInkHex = model.systemIsDark ? 0xF2F4F6 : 0x1A1A1A
+                            }
+                        }
+                    }
+                )) {
+                    ForEach(MenuBarBadgeInkPreference.allCases, id: \.self) { ink in
+                        Text(ink.displayName).tag(ink)
+                    }
+                }
+                if model.settings.menuBarBadgeInk == .custom {
+                    ColorPicker("Badge ink", selection: hexColorBinding(
+                        get: { model.settings.menuBarBadgeInkHex },
+                        set: { v in model.updateSettings { $0.menuBarBadgeInkHex = v } }))
+                }
+                Text("Full lists every detected provider. Override badge labels per provider in the section below. Percent colors: orange ≥ warn, red ≥ alert.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Text("Limits shown in the menu bar, menu dropdown, and pet rings (Today and Limits pages always list enabled providers).")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.chromeLimitStateOptions.isEmpty {
+                    Text("Enable providers on the Providers tab, then refresh.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    let split = ChromeMenuGrouping.partition(model.chromeLimitStateOptions)
+                    ForEach(split.others, id: \.providerId) { st in
+                        chromeLimitRow(st)
+                    }
+                    if !split.antigravity.isEmpty {
+                        Text(AntigravityQuotaDisplay.categoryName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(split.antigravity, id: \.providerId) { st in
+                            chromeLimitRow(st, indented: true)
+                        }
+                    }
+                    if !split.claude.isEmpty {
+                        Text("Claude Code")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(split.claude, id: \.providerId) { st in
+                            chromeLimitRow(st, indented: true)
+                        }
+                    }
+                    if !split.cursor.isEmpty {
+                        Text(CursorQuotaDisplay.categoryName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(split.cursor, id: \.providerId) { st in
+                            chromeLimitRow(st, indented: true)
+                        }
+                    }
+                    Button("Show all") { model.resetChromeProviderSelection() }
+                        .disabled(model.settings.chromeProviderSelection == nil)
+                }
             }
 
             Section {
@@ -105,6 +212,60 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func chromeLimitRow(_ st: ProviderLimitState, indented: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            chromeVisibilityToggle(st, indented: indented)
+            chromeBadgeLabelField(st.providerId, indented: indented)
+        }
+    }
+
+    private func chromeBadgeLabelField(_ providerId: String, indented: Bool) -> some View {
+        TextField("Badge label (optional)", text: Binding(
+            get: { model.settings.chromeBadgeLabelOverrides?[providerId] ?? "" },
+            set: { new in
+                model.updateSettings { s in
+                    var map = s.chromeBadgeLabelOverrides ?? [:]
+                    let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        map.removeValue(forKey: providerId)
+                    } else {
+                        map[providerId] = String(trimmed.prefix(14))
+                    }
+                    s.chromeBadgeLabelOverrides = map.isEmpty ? nil : map
+                }
+            }
+        ))
+        .textFieldStyle(.roundedBorder)
+        .font(.caption)
+        .padding(.leading, indented ? 28 : 0)
+    }
+
+    private func hexColorBinding(get: @escaping () -> UInt32?, set: @escaping (UInt32?) -> Void) -> Binding<Color> {
+        Binding(
+            get: { ColorHexCodec.color(from: get()) ?? Color.primary },
+            set: { set(ColorHexCodec.hex(from: $0)) })
+    }
+
+    @ViewBuilder
+    private func chromeVisibilityToggle(_ st: ProviderLimitState, indented: Bool = false) -> some View {
+        let label: String = {
+            if st.providerId == "claude-code" { return "Account" }
+            return AntigravityQuotaDisplay.meterLabel(forGroupId: st.providerId)
+                ?? ClaudeScopedDisplay.meterLabel(forChromeId: st.providerId)
+                ?? CursorQuotaDisplay.meterLabel(forChromeId: st.providerId)
+                ?? model.providerName(st.providerId)
+        }()
+        let code = ProviderBrands.brand(for: st.providerId).code
+        Toggle(isOn: Binding(
+            get: { model.isChromeProviderVisible(st.providerId) },
+            set: { on in model.setChromeProviderVisible(st.providerId, on) }
+        )) {
+            Text("\(label) (\(code))")
+                .padding(.leading, indented ? 12 : 0)
+        }
     }
 }
 
@@ -243,7 +404,12 @@ struct DataHealthSettings: View {
             } header: {
                 Text("Where every number comes from")
             } footer: {
-                Text("Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. Network sources are the opt-in OpenRouter credits and Grok quota checks (Providers tab, both off by default). A degraded source never blanks the rest of the dashboard.")
+                Text("""
+                Each dashboard number is traceable to one of these sources. Local logs are read on this Mac only. \
+                Cursor local logs use the provider toggle (on by default); official Cursor plan % is opt-in under Providers → Cursor (toggle + Allow). \
+                Other network sources (OpenRouter, Colab, Grok credit %, Antigravity plan %) are opt-in under Providers. \
+                A degraded source never blanks the rest of the dashboard.
+                """)
                     .font(Theme.FontScale.note)
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -373,9 +539,48 @@ private struct SourceHealthRow: View {
 struct ProviderSettings: View {
     @Environment(AppModel.self) private var model
     @State private var infos: [(providerId: String, displayName: String, availability: ProviderAvailability, dataSources: String, permissions: String)] = []
+    @State private var showCursorPlanConsent = false
+
+    /// Consent copy only inspects bearer *files* — no env, state DB, or network until the user allows.
+    private var cursorPlanConsentMessage: String {
+        let paths = CursorBearerFile.discoverReadableFilePaths(
+            explicitPath: model.settings.cursorQuotaBearerFilePath)
+        let defaultPath = CursorBearerFile.defaultBearerFilePath()
+        let detect = paths.isEmpty
+            ? "No bearer file found yet. After you allow, the app can also use CURSOR_ACCESS_TOKEN or read-only Cursor state (never Keychain). Paste a JWT into:\n\(defaultPath)"
+            : "Found bearer file:\n\(paths[0])\nPlan usage loads immediately after you allow."
+        return """
+        Uses https://api2.cursor.sh for official Cursor models and Other models percentages. \
+        Nothing is sent until you tap Allow. \(detect)
+        """
+    }
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Show Colab compute-unit balance (colab CLI)", isOn: Binding(
+                    get: { model.settings.colabCreditsEnabled },
+                    set: { v in model.updateSettings { $0.colabCreditsEnabled = v } }
+                ))
+            } header: {
+                Text("Colab credits")
+            } footer: {
+                Text("Runs `colab usage` about every 15 minutes. Also appears on Today, menu bar, and Data Health when enabled.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+
+            Section("OpenRouter credits") {
+                Toggle("Show OpenRouter credit balance (opencode)", isOn: Binding(
+                    get: { model.settings.openRouterCreditsEnabled },
+                    set: { v in model.updateSettings { $0.openRouterCreditsEnabled = v } }
+                ))
+                Text("""
+                Off by default. Reads opencode's OpenRouter API key and asks openrouter.ai for prepaid \
+                credit totals — about every 15 minutes and on manual Refresh.
+                """)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             ForEach(infos, id: \.providerId) { info in
                 Section(info.displayName) {
                     Toggle("Enabled", isOn: Binding(
@@ -383,57 +588,118 @@ struct ProviderSettings: View {
                         set: { on in
                             model.updateSettings {
                                 if on { $0.core.enabledProviders.insert(info.providerId) }
-                                else { $0.core.enabledProviders.remove(info.providerId) }
+                                else {
+                                    $0.core.enabledProviders.remove(info.providerId)
+                                    if info.providerId == "cursor-ide" {
+                                        $0.cursorQuotaEnabled = false
+                                    }
+                                    if info.providerId == "antigravity" {
+                                        $0.antigravityQuotaEnabled = false
+                                    }
+                                    if info.providerId == "grok-code" {
+                                        $0.grokQuotaEnabled = false
+                                    }
+                                }
                             }
                             Task { await model.refreshNow() }
                         }
                     ))
+                    if info.providerId == "cursor-ide" {
+                        Group {
+                            Toggle("Show plan usage % (Cursor dashboard)", isOn: Binding(
+                                get: { model.settings.cursorQuotaEnabled },
+                                set: { v in
+                                    if v {
+                                        if model.settings.cursorPlanQuotaNetworkConsentGiven {
+                                            model.setCursorPlanQuotaEnabled(true, networkConsentGiven: false)
+                                        } else {
+                                            showCursorPlanConsent = true
+                                        }
+                                    } else {
+                                        model.setCursorPlanQuotaEnabled(false, networkConsentGiven: false)
+                                    }
+                                }
+                            ))
+                            .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
+                            if model.settings.cursorQuotaEnabled,
+                               !model.settings.cursorPlanQuotaNetworkConsentGiven {
+                                Label("Allow api2.cursor.sh to load plan %", systemImage: "exclamationmark.circle")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.orange)
+                                Button("Allow network access…") { showCursorPlanConsent = true }
+                                    .font(.caption)
+                            } else if model.cursorPlanQuotaActive {
+                                Label("Official plan % from Cursor — live from api2.cursor.sh (about every 15 minutes and on Refresh).", systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if model.settings.core.enabledProviders.contains("cursor-ide") {
+                                Label("Plan usage % is off — menu bar and Today may show local token activity only, not your Cursor subscription %. Those numbers can look misleading (often high or unlike the dashboard). Turn on plan % and Allow for real plan meters.", systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .alert("Enable Cursor plan usage?", isPresented: $showCursorPlanConsent) {
+                            Button("Allow (api2.cursor.sh)") {
+                                model.setCursorPlanQuotaEnabled(true, networkConsentGiven: true)
+                            }
+                            Button("Not Now", role: .cancel) {}
+                        } message: {
+                            Text(cursorPlanConsentMessage)
+                        }
+                        TextField("Bearer file (optional)", text: Binding(
+                            get: { model.settings.cursorQuotaBearerFilePath ?? "" },
+                            set: { v in
+                                model.updateSettings {
+                                    let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    $0.cursorQuotaBearerFilePath = t.isEmpty ? nil : t
+                                }
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.settings.core.enabledProviders.contains("cursor-ide"))
+                        Text("""
+                        Local token totals come from Cursor structured logs (no network). Official plan % needs \
+                        the toggle above, a one-time Allow (api2.cursor.sh) — saved across reboots — and a \
+                        dashboard JWT (bearer file, CURSOR_ACCESS_TOKEN, or read-only Cursor state; never \
+                        Keychain in this app). Default bearer file: \
+                        ~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt. After Allow, \
+                        the app fetches immediately, then about every 15 minutes. Meters: Cursor models and \
+                        Other models.
+                        """)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if info.providerId == "antigravity" {
+                        Toggle("Show plan usage % (agy /usage)", isOn: Binding(
+                            get: { model.settings.antigravityQuotaEnabled },
+                            set: { v in model.updateSettings { $0.antigravityQuotaEnabled = v } }
+                        ))
+                        .disabled(!model.settings.core.enabledProviders.contains("antigravity"))
+                        Text("""
+                        Off by default. Local token totals still come from agy brain transcripts with no network. \
+                        When on, refresh runs `agy -p "/usage"` for official buckets (Gemini / Claude+GPT; Argon shares Gemini). \
+                        Unsigned-in agy may open browser OAuth — run `agy -p "/usage"` once in Terminal if you prefer. \
+                        Only the agy subprocess talks to Antigravity; transcripts are not uploaded by this toggle.
+                        """)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if info.providerId == "grok-code" {
+                        Toggle("Show credit usage % (grok CLI)", isOn: Binding(
+                            get: { model.settings.grokQuotaEnabled },
+                            set: { v in model.updateSettings { $0.grokQuotaEnabled = v } }
+                        ))
+                        .disabled(!model.settings.core.enabledProviders.contains("grok-code"))
+                        Text("""
+                        Off by default. Uses the API key from your grok CLI `auth.json` (active account only) \
+                        and asks cli-chat-proxy.grok.com for weekly credit % — about every 15 minutes and on \
+                        Refresh. Token is sent only there over HTTPS; not stored by this app. On 401, run \
+                        `grok` once to re-log in. Appears on the Grok weekly meter and in Data Health.
+                        """)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     LabeledContent("Detected", value: info.availability.available ? "yes — \(info.availability.detail)" : "no")
                     Text(info.dataSources).font(.caption).foregroundStyle(.secondary)
                     Text(info.permissions).font(.caption2).foregroundStyle(.tertiary)
                 }
-            }
-
-            // Grok 官方額度(F3;opt-in;boundary #73 —— 揭露文案說清楚讀什麼、送哪裡)。
-            Section("Grok quota (official)") {
-                Toggle("Show Grok credit usage (grok CLI)", isOn: Binding(
-                    get: { model.settings.grokQuotaEnabled },
-                    set: { v in model.updateSettings { $0.grokQuotaEnabled = v } }
-                ))
-                Text("""
-                Off by default. When on, the app reads the session token the grok CLI saved in \
-                ~/.grok/auth.json (or $GROK_HOME/auth.json; an issuer→account store read as bytes, from \
-                which only the nested "key" field — plus its expiry, to pick the active account — is \
-                decoded, never the refresh token or profile fields) and asks \
-                https://cli-chat-proxy.grok.com for your credit usage and reset time — about every \
-                15 minutes and on manual Refresh. The token is sent only to that host as auth \
-                headers over HTTPS (system TLS, redirects refused) and is never stored, logged, \
-                exported, displayed, or refreshed — if it expires (401), the app only shows a \
-                "run grok once to re-log in" hint and stops calling until the credential file \
-                changes or you press Refresh. Quota responses stay in memory (only this toggle and a \
-                format-protection marker are saved in settings — never the token or quota). Source health appears under Data Health as its \
-                own row, separate from Grok local logs.
-                """)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            // OpenRouter credits(opt-in;boundary 變更 —— 揭露文案必須說清楚讀什麼、送哪裡)。
-            Section("OpenRouter credits") {
-                Toggle("Show OpenRouter credit balance (opencode)", isOn: Binding(
-                    get: { model.settings.openRouterCreditsEnabled },
-                    set: { v in model.updateSettings { $0.openRouterCreditsEnabled = v } }
-                ))
-                Text("""
-                Off by default. When on, the app reads the OpenRouter API key that opencode saved in \
-                ~/.local/share/opencode/auth.json (or $XDG_DATA_HOME/opencode/auth.json when set; the \
-                file is read as bytes and only the "openrouter" entry is decoded) and asks \
-                https://openrouter.ai for your prepaid credit totals — about every 15 minutes and on \
-                manual Refresh. The key is sent only to openrouter.ai as the \
-                Authorization header over HTTPS (system TLS, redirects refused) and is never stored, \
-                logged, exported, or displayed. The balance appears in the menu-bar dropdown and the \
-                pet's bubble; nothing about it is written to disk. No other account data is fetched.
-                """)
-                    .font(.caption).foregroundStyle(.secondary)
             }
 
             // 選單列/量表短代號圖例(UIUX spec P2):dot = 身分色,恆定不變
@@ -448,7 +714,11 @@ struct ProviderSettings: View {
                         Spacer()
                     }
                 }
-                Text("The dot color identifies the provider and never changes; the percent text turns orange/red with usage severity. Antigravity and Grok Code appear automatically once their adapters ship.")
+                Text("""
+                Dot color = provider identity (fixed). Percent text uses orange/red for severity. Cursor: without \
+                plan % + Allow, badge % is local token activity, not subscription %. Antigravity: no local quota \
+                rings — turn on plan % under Providers → Antigravity for official buckets.
+                """)
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }

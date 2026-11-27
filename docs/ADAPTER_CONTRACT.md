@@ -62,6 +62,7 @@ advanced scan state. It is **incremental** (never re-reads from zero on every ti
    | Claude Code | `cc:<message.id>:<requestId>` (streaming rewrites the same message; first wins) |
    | Grok Code | `gk:<eventId>` (fallback `gk:<session-id>:<byte-offset>`) |
    | OpenCode | `oc:<session-id>:<epoch>:<from>` (epoch bumps on counter regression; `from` = pre-delta cumulative — replays dedupe toward undercount, never overcount) |
+   | Cursor IDE | `cu:<log-stem>:<byte-offset>` |
 
    Never key on wall-clock time or array index. A provider's own stable event id is best; a
    `file-stem + byte-offset` pair is the fallback when none exists.

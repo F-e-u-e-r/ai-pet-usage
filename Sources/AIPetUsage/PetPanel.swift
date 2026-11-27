@@ -578,7 +578,7 @@ struct PetView: View {
             GeometryReader { geo in
                 ZStack {
                     // 用量環:每家 provider 一圈,identity 色(R2 B2)。
-                    UsageRing(limits: model.orderedLimitStates, petSize: size)
+                    UsageRing(limits: model.petRingLimitStates, petSize: size)
                         .frame(width: capD, height: capD)
 
                     // inner:sprite + mood 徽章 + confetti(既有語彙原封)。
@@ -692,20 +692,44 @@ struct PetView: View {
     /// 行預算走 BubblePages.compose(≤4 行,決定性「+N more」,絕不靜默截斷);
     /// OpenRouter credits 行(opt-in)佔最後一槽,錯誤/無資料時整行省略(不顯示假值)。
     private func bubblePageText(_ page: Int) -> String {
+        let now = Date()
         let orPresentation = model.settings.openRouterCreditsEnabled
-            ? model.orCredits.status.presentation(now: Date()) : nil
+            ? model.orCredits.status.presentation(now: now) : nil
+        let colabPresentation = model.settings.colabCreditsEnabled
+            ? model.colabCredits.status.presentation(now: now) : nil
+        let creditsExtraLine: String? = {
+            var parts: [String] = []
+            if let l = orPresentation?.bubbleUsageLine { parts.append(l) }
+            if let l = colabPresentation?.bubbleUsageLine { parts.append(l) }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }()
+        let creditsDataExtra: String? = {
+            var parts: [String] = []
+            if let l = orPresentation?.bubbleDataLine { parts.append(l) }
+            if let l = colabPresentation?.bubbleDataLine { parts.append(l) }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }()
         switch page {
         case 0:
-            let providerLines = model.orderedLimitStates.map { st -> String in
+            let providerLines = model.orderedChromeLimitStates.map { st -> String in
                 let code = shortProviderCode(st.providerId)
                 if st.fiveHour.idle { return "\(code) idle 5h" }
-                guard let p = st.fiveHour.usedPercent else { return "\(code) — no data" }
-                var line = "\(code) \(Int(p.rounded()))% 5h"
-                if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }
-                return line
+                if let p = st.fiveHour.usedPercent {
+                    var line = "\(code) \(Int(p.rounded()))% 5h"
+                    if let w = st.weekly.usedPercent { line += " · \(Int(w.rounded()))% wk" }
+                    if let fab = st.modelScopedWeekly?.first(where: { $0.displayName.lowercased().contains("fable") }) {
+                        line += " · Fable \(Int(fab.usedPercent.rounded()))%"
+                    }
+                    if let reset = st.fiveHour.resetAt { line += " · \(countdown(to: reset))" }
+                    return line
+                }
+                if let act = st.todayActivityPercent {
+                    return "\(code) \(Int(act.rounded()))% today"
+                }
+                return "\(code) — no data"
             }
             let lines = BubblePages.compose(providerLines: providerLines,
-                                            extraLine: orPresentation?.bubbleUsageLine)
+                                            extraLine: creditsExtraLine)
             return lines.isEmpty ? "no usage data yet" : lines.joined(separator: "\n")
         case 1:
             // 「pet」頁:一行**精簡**原因(item 8;心情名冗餘於 sprite/badge,略去)+ Lv/full/treats/burn。
@@ -716,15 +740,14 @@ struct PetView: View {
                 + "\(model.treatsAvailable) treats · \(tk(Int(model.dashboard.burnRateTokensPerHour)))/h"
         default:
             let refreshed = timeAgo(model.dashboard.lastRefreshAt)
-            let flags = model.orderedLimitStates.map { st in
+            let flags = model.orderedChromeLimitStates.map { st in
                 "\(shortProviderCode(st.providerId)) \(confidenceWord(st.fiveHour.confidence))"
             }
             // flags 預算恆為 3:加上 refreshed 行,資料頁**任何狀態**都 ≤4 行
             // (R2 grok F3 + codex F5:預算若鍵在 OR 行是否存在,checking…/停用時
             // 會回到 refreshed + 4 flags = 5 行的溢位)。≤3 家 provider 時輸出不變;
             // 第 4 家(未來 antigravity)收進決定性的「+N more」,不靜默截斷。
-            let orLine = orPresentation?.bubbleDataLine
-            let flagLines = BubblePages.compose(providerLines: flags, extraLine: orLine,
+            let flagLines = BubblePages.compose(providerLines: flags, extraLine: creditsDataExtra,
                                                 maxLines: 3)
             return (["refreshed \(refreshed)"] + flagLines).joined(separator: "\n")
         }
@@ -845,8 +868,8 @@ struct UsageRing: View {
                 }
             }
         }
-        .help(helpText(entries))
-        .accessibilityLabel(helpText(entries))
+        .help(helpText(entries, limits: limits))
+        .accessibilityLabel(helpText(entries, limits: limits))
         .allowsHitTesting(false)
     }
 
@@ -872,11 +895,16 @@ struct UsageRing: View {
                      blue: Double(brand.dotColor & 0xFF) / 255)
     }
 
-    private func helpText(_ entries: [UsageRingModel.Entry]) -> String {
-        guard !entries.isEmpty else { return "No 5h limit data" }
+    private func helpText(_ entries: [UsageRingModel.Entry], limits: [ProviderLimitState]) -> String {
+        guard !entries.isEmpty else { return "No usage ring data" }
+        let byId = Dictionary(uniqueKeysWithValues: limits.map { ($0.providerId, $0) })
         return entries.map { e in
-            "\(ProviderBrands.brand(for: e.providerId).displayName) \(Int(e.percent.rounded()))%"
-        }.joined(separator: " · ") + " (5h)"
+            let name = ProviderBrands.brand(for: e.providerId).displayName
+            if byId[e.providerId]?.fiveHour.usedPercent != nil {
+                return "\(name) \(Int(e.percent.rounded()))% (5h limit)"
+            }
+            return "\(name) \(Int(e.percent.rounded()))% today"
+        }.joined(separator: " · ")
     }
 }
 

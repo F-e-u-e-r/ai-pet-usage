@@ -399,13 +399,12 @@ final class CanonicalLedgerTests: XCTestCase {
         // 1_753_000_000 = 2025-07-20T08:26:40Z:baseline 與 encoder 產物**只**差小數秒表示
         // (impl-r2 luna SHOULD:先前 fixture 年份寫錯,比對因年份就失敗,對小數秒不具鑑別力)。
         XCTAssertEqual(encodedTS, "2025-07-20T08:26:40Z", "fixture 前提:encoder 產物為此整秒字串")
-        let fracBaseline = Data(("{" +
-            "\"accountId\":\"acct-A\",\"id\":\"e9\",\"modelId\":\"m-one\"," +
+        let fracJSON = "{\"accountId\":\"acct-A\",\"id\":\"e9\",\"modelId\":\"m-one\"," +
             "\"providerCostUSD\":0.25,\"providerId\":\"mx\",\"sourceKind\":\"mx\"," +
-            "\"sourcePath\":\"\\/mx\\/s.jsonl\"," +
-            "\"timestamp\":\"2025-07-20T08:26:40.500Z\"," +
+            "\"sourcePath\":\"/mx/s.jsonl\",\"timestamp\":\"2025-07-20T08:26:40.500Z\"," +
             "\"tokens\":{\"cacheRead\":0,\"cacheWrite1h\":0,\"cacheWrite5m\":0," +
-            "\"cacheWriteUnknown\":0,\"input\":1,\"output\":0}}\n").utf8)
+            "\"cacheWriteUnknown\":0,\"input\":1,\"output\":0}}\n"
+        let fracBaseline = Data(fracJSON.utf8)
         guard case .success(let fracSlice) = CanonicalLedgerV1.canonicalizeRawLines(fracBaseline) else {
             XCTAssertTrue(false, "小數秒 baseline 行本身合法"); return
         }

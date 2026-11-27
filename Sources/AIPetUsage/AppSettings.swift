@@ -70,11 +70,39 @@ struct AppSettings: Codable {
     /// OpenRouter credits 監控(opt-in,**預設關**;boundary 變更見 docs/DATA_SOURCES.md)。
     /// GUI-only 設定,刻意不放 `core` —— CLI 維持零網路。
     var openRouterCreditsEnabled: Bool = false
+    /// Colab compute-unit balance via `colab usage` (opt-in, default off).
+    var colabCreditsEnabled: Bool = false
     var grokQuotaEnabled: Bool = false
     var grokQuotaKilledAtVersion: String? = nil
+    /// Fetches Cursor models / Other models % from dashboard (opt-in; bearer JWT required).
+    var cursorQuotaEnabled: Bool = false
+    /// User approved network calls to api2.cursor.sh for plan usage (one-time per install).
+    var cursorPlanQuotaNetworkConsentGiven: Bool = false
+    /// First-launch privacy / local-only default explained.
+    var usageMonitorWelcomeAcknowledged: Bool = false
+    /// Optional JWT file for Cursor dashboard (app never uses Keychain). Default: `~/Library/Application Support/AIPetUsage/cursor-dashboard-bearer.txt`.
+    var cursorQuotaBearerFilePath: String? = nil
+    /// Spawns `agy -p "/usage"` on refresh when Antigravity is enabled (opt-in; may open agy OAuth).
+    var antigravityQuotaEnabled: Bool = false
+    /// Which providers / Antigravity quota buckets appear in the menu bar, dropdown, and pet rings.
+    /// `nil` = all enabled providers (Antigravity splits into Gemini + Claude/GPT buckets when `agy /usage` is available).
+    /// Non-empty = only these ids; empty set = hide all chrome limits.
+    var chromeProviderSelection: Set<String>? = nil
     /// App 外觀偏好(Appearance V1):System / Light / Dark,經 `NSApp.appearance` 整 app 套用。
     /// GUI-only,刻意不放 `core`(CLI 無外觀);缺鍵 / 未知值 fail-soft → `.system`。
     var appearance: AppearancePreference = .system
+    /// 儀表板 / 設定 / 趨勢頁字體設計(Theme.FontScale);選單列徽章固定系統字體。
+    var fontDesign: FontDesignPreference = .system
+    var fontSize: FontSizePreference = .standard
+    var dashboardTextColor: DashboardTextColorPreference = .system
+    /// RGB 0xRRGGBB when `dashboardTextColor == .custom`.
+    var dashboardTextPrimaryHex: UInt32?
+    var dashboardTextSecondaryHex: UInt32?
+    var menuBarBadgeInk: MenuBarBadgeInkPreference = .automatic
+    var menuBarBadgeInkHex: UInt32?
+    var menuBarBadgeLabelStyle: MenuBarBadgeLabelStyle = .code
+    /// Per `providerId` override shown on menu bar badges (e.g. `CC` → `Claude`).
+    var chromeBadgeLabelOverrides: [String: String]? = nil
     var core = CoreSettings()
 
     // MARK: - EngineV2 pack id 相容 facade(M2 §3-A;語意委派 PetSpecies,PetCore 端可測)
@@ -101,10 +129,17 @@ struct AppSettings: Codable {
         case menuBarDisplayMode, alertsSnoozedUntil
         case dailyExportEnabled, dailyExportHour, dailyExportMinute, dailyExportRangeDays, dailyExportFolderPath
         case speciesPackIdOverride
-        case openRouterCreditsEnabled
+        case openRouterCreditsEnabled, colabCreditsEnabled
         case grokQuotaEnabled
         case grokQuotaKilledAtVersion
+        case cursorQuotaEnabled, cursorPlanQuotaNetworkConsentGiven, usageMonitorWelcomeAcknowledged
+        case cursorQuotaBearerFilePath
+        case antigravityQuotaEnabled
+        case chromeProviderSelection
         case appearance
+        case fontDesign, fontSize
+        case dashboardTextColor, dashboardTextPrimaryHex, dashboardTextSecondaryHex
+        case menuBarBadgeInk, menuBarBadgeInkHex, menuBarBadgeLabelStyle, chromeBadgeLabelOverrides
         case core
     }
 
@@ -136,11 +171,82 @@ struct AppSettings: Codable {
         dailyExportFolderPath = (try? c.decodeIfPresent(String.self, forKey: .dailyExportFolderPath)) ?? nil
         speciesPackIdOverride = (try? c.decodeIfPresent(String.self, forKey: .speciesPackIdOverride)) ?? nil
         openRouterCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .openRouterCreditsEnabled)) ?? false ?? false
+        colabCreditsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .colabCreditsEnabled)) ?? false ?? false
         grokQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .grokQuotaEnabled)) ?? false ?? false
         grokQuotaKilledAtVersion = (try? c.decodeIfPresent(String.self, forKey: .grokQuotaKilledAtVersion)) ?? nil ?? nil
+        cursorQuotaEnabled = c.contains(.cursorQuotaEnabled)
+            ? ((try? c.decode(Bool.self, forKey: .cursorQuotaEnabled)) ?? false)
+            : false
+        cursorPlanQuotaNetworkConsentGiven = c.contains(.cursorPlanQuotaNetworkConsentGiven)
+            ? ((try? c.decode(Bool.self, forKey: .cursorPlanQuotaNetworkConsentGiven)) ?? false)
+            : false
+        usageMonitorWelcomeAcknowledged = c.contains(.usageMonitorWelcomeAcknowledged)
+            ? ((try? c.decode(Bool.self, forKey: .usageMonitorWelcomeAcknowledged)) ?? false)
+            : false
+        cursorQuotaBearerFilePath = try? c.decodeIfPresent(String.self, forKey: .cursorQuotaBearerFilePath)
+        antigravityQuotaEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .antigravityQuotaEnabled)) ?? false ?? false
+        chromeProviderSelection = try? c.decodeIfPresent(Set<String>.self, forKey: .chromeProviderSelection)
         // 先讀 raw 字串再對映:未知值("ocean")→ .system,不拋、不毒化 sibling(PetCore 可測)。
         appearance = AppearancePreference.decodeTolerant(from: c, forKey: .appearance)
+        fontDesign = FontDesignPreference.decodeTolerant(from: c, forKey: .fontDesign)
+        fontSize = FontSizePreference.decodeTolerant(from: c, forKey: .fontSize)
+        dashboardTextColor = DashboardTextColorPreference.decodeTolerant(from: c, forKey: .dashboardTextColor)
+        dashboardTextPrimaryHex = try? c.decodeIfPresent(UInt32.self, forKey: .dashboardTextPrimaryHex)
+        dashboardTextSecondaryHex = try? c.decodeIfPresent(UInt32.self, forKey: .dashboardTextSecondaryHex)
+        menuBarBadgeInk = MenuBarBadgeInkPreference.decodeTolerant(from: c, forKey: .menuBarBadgeInk)
+        menuBarBadgeInkHex = try? c.decodeIfPresent(UInt32.self, forKey: .menuBarBadgeInkHex)
+        menuBarBadgeLabelStyle = MenuBarBadgeLabelStyle.decodeTolerant(from: c, forKey: .menuBarBadgeLabelStyle)
+        chromeBadgeLabelOverrides = try? c.decodeIfPresent([String: String].self, forKey: .chromeBadgeLabelOverrides)
         core = (try? c.decodeIfPresent(CoreSettings.self, forKey: .core)) ?? CoreSettings() ?? CoreSettings()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(appMode, forKey: .appMode)
+        try c.encode(species, forKey: .species)
+        try c.encode(petVisible, forKey: .petVisible)
+        try c.encode(petSize, forKey: .petSize)
+        try c.encode(petOpacity, forKey: .petOpacity)
+        try c.encode(clickThrough, forKey: .clickThrough)
+        try c.encode(petWanderEnabled, forKey: .petWanderEnabled)
+        try c.encode(petWanderRangePercent, forKey: .petWanderRangePercent)
+        try c.encode(petEngineV2Enabled, forKey: .petEngineV2Enabled)
+        try c.encode(petSpeechEnabled, forKey: .petSpeechEnabled)
+        try c.encode(quietMode, forKey: .quietMode)
+        try c.encode(refreshIntervalSeconds, forKey: .refreshIntervalSeconds)
+        try c.encode(notificationsEnabled, forKey: .notificationsEnabled)
+        try c.encode(launchAtLogin, forKey: .launchAtLogin)
+        try c.encodeIfPresent(petPositionX, forKey: .petPositionX)
+        try c.encodeIfPresent(petPositionY, forKey: .petPositionY)
+        try c.encode(menuBarDisplayMode, forKey: .menuBarDisplayMode)
+        try c.encodeIfPresent(alertsSnoozedUntil, forKey: .alertsSnoozedUntil)
+        try c.encode(dailyExportEnabled, forKey: .dailyExportEnabled)
+        try c.encode(dailyExportHour, forKey: .dailyExportHour)
+        try c.encode(dailyExportMinute, forKey: .dailyExportMinute)
+        try c.encode(dailyExportRangeDays, forKey: .dailyExportRangeDays)
+        try c.encodeIfPresent(dailyExportFolderPath, forKey: .dailyExportFolderPath)
+        try c.encodeIfPresent(speciesPackIdOverride, forKey: .speciesPackIdOverride)
+        try c.encode(openRouterCreditsEnabled, forKey: .openRouterCreditsEnabled)
+        try c.encode(colabCreditsEnabled, forKey: .colabCreditsEnabled)
+        try c.encode(grokQuotaEnabled, forKey: .grokQuotaEnabled)
+        try c.encodeIfPresent(grokQuotaKilledAtVersion, forKey: .grokQuotaKilledAtVersion)
+        try c.encode(cursorQuotaEnabled, forKey: .cursorQuotaEnabled)
+        try c.encode(cursorPlanQuotaNetworkConsentGiven, forKey: .cursorPlanQuotaNetworkConsentGiven)
+        try c.encode(usageMonitorWelcomeAcknowledged, forKey: .usageMonitorWelcomeAcknowledged)
+        try c.encodeIfPresent(cursorQuotaBearerFilePath, forKey: .cursorQuotaBearerFilePath)
+        try c.encode(antigravityQuotaEnabled, forKey: .antigravityQuotaEnabled)
+        try c.encodeIfPresent(chromeProviderSelection, forKey: .chromeProviderSelection)
+        try c.encode(appearance, forKey: .appearance)
+        try c.encode(fontDesign, forKey: .fontDesign)
+        try c.encode(fontSize, forKey: .fontSize)
+        try c.encode(dashboardTextColor, forKey: .dashboardTextColor)
+        try c.encodeIfPresent(dashboardTextPrimaryHex, forKey: .dashboardTextPrimaryHex)
+        try c.encodeIfPresent(dashboardTextSecondaryHex, forKey: .dashboardTextSecondaryHex)
+        try c.encode(menuBarBadgeInk, forKey: .menuBarBadgeInk)
+        try c.encodeIfPresent(menuBarBadgeInkHex, forKey: .menuBarBadgeInkHex)
+        try c.encode(menuBarBadgeLabelStyle, forKey: .menuBarBadgeLabelStyle)
+        try c.encodeIfPresent(chromeBadgeLabelOverrides, forKey: .chromeBadgeLabelOverrides)
+        try c.encode(core, forKey: .core)
     }
 }
 

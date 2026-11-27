@@ -1,6 +1,10 @@
 .build/
 .swiftpm/
 *.xcodeproj
+# Widget extension is an Xcode target (not user-local); keep in repo.
+!macOS/
+!macOS/AIPetUsageWidget.xcodeproj/
+!macOS/AIPetUsageWidget.xcodeproj/**
 DerivedData/
 dist/
 *.app
@@ -47,6 +51,10 @@ id_rsa
 id_rsa.*
 id_ed25519
 id_ed25519.*
+
+# Pre-commit / review gate artifacts (local only)
+checks/.artifacts/
+00-BRIEF.md
 
 # Generated local reports / logs
 *.log

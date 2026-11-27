@@ -12,7 +12,7 @@ import Foundation
 /// token 語意:`totalTokens` 追蹤的是 context 大小而非帳單用量,壓縮後會倒退(寫入較小值,
 /// 歷史不重寫)。每回合事件 = 此計數器相對上一回合的「正成長」;倒退即重設基準、不產生事件。
 /// 因此這裡的 token 數是「低估帳單用量」的估計,且無 input/output/cache 拆分(全計為 input)。
-/// grok 本機不提供限額,故不回報任何 rate limit / 使用率百分比。
+/// Weekly subscription % comes from the tail of `logs/unified.jsonl` (`creditUsagePercent`), not session tokens.
 ///
 /// 已知限制(v1):
 ///   1. 多個 agent 共用同一 updates.jsonl 時計數器可能交錯;v1 每檔單一基準,
@@ -20,8 +20,8 @@ import Foundation
 ///   2. session 中途換 model 時,本次掃描產生的事件一律歸屬 summary.json 目前的 model。
 public struct GrokCodeAdapter: ProviderAdapter {
     public let providerId = "grok-code"
-    /// 只有 plan-only 讀值;官方 status-line 無 rate-limit summary(M0-2)→ 沒有 provider-reported limit 來源。
-    public var reportedLimitCapability: ReportedLimitCapability { .notProvided }
+    /// Weekly % from unified.jsonl; session tokens are separate estimates.
+    public var reportedLimitCapability: ReportedLimitCapability { .provides(windows: [.weekly]) }
     public var historyModel: ProviderHistoryModel { .rebuildableHistory }   // JSONL 逐事件 → 可重掃重建
     public let displayName = "Grok Code"
 
@@ -63,11 +63,11 @@ public struct GrokCodeAdapter: ProviderAdapter {
     }
 
     public func explainDataSources() -> String {
-        "Reads Grok CLI session logs (updates.jsonl) under ~/.grok/sessions (or GROK_HOME) — only the cumulative token counter (_meta.totalTokens) plus model ID and project path from sibling summary.json/signals.json. Also reads the tail of logs/unified.jsonl for the subscription tier label (one key narrowly decoded from billing lines; other log content is never parsed). Token figures are context-growth estimates that undercount billed usage and have no input/output split. Prompts and message contents are never read; no network; credential files are never touched. Grok exposes no usage percent locally, so none is shown."
+        "Reads Grok CLI session logs (updates.jsonl) under ~/.grok/sessions (or GROK_HOME) — only the cumulative token counter (_meta.totalTokens) plus model ID and project path from sibling summary.json/signals.json. Also reads the tail of logs/unified.jsonl for subscription tier and weekly creditUsagePercent (narrow billing-line decode only). Token figures are context-growth estimates; weekly % matches the Grok CLI billing snapshot. Prompts and message contents are never read; no network; credential files are never touched."
     }
 
     public func explainRequiredPermissions() -> String {
-        "Read-only access to ~/.grok/sessions (or GROK_HOME), plus the tail of ~/.grok/logs/unified.jsonl for the subscription tier label only. Needed to estimate local Grok token usage per project and model. No credentials are read and nothing is uploaded."
+        "Read-only access to ~/.grok/sessions (or GROK_HOME), plus the tail of ~/.grok/logs/unified.jsonl for tier and weekly usage percent. Needed for local Grok token estimates and subscription meter. No credentials are read and nothing is uploaded."
     }
 
     public func refreshUsage(state: ScanState) throws -> (AdapterRefreshResult, ScanState) {
@@ -116,12 +116,17 @@ public struct GrokCodeAdapter: ProviderAdapter {
                 }
             }
         }
-        // grok 本機無「用量百分比」來源(percent 恆為 unknown 屬設計);
-        // 但 CLI 的 billing 行含訂閱層級 → 以 plan-only reading 落地標籤,不進窗口仲裁。
         var readings: [RateLimitReading] = []
-        if let tier = Self.readSubscriptionTier(from: billingLogFiles) {
-            readings.append(RateLimitReading(providerId: "grok-code", observedAt: Date(),
-                                             primary: nil, secondary: nil, planType: tier))
+        let observedAt = Date()
+        let tier = Self.readSubscriptionTier(from: billingLogFiles)
+        let weekly = Self.readWeeklyCreditsUsage(from: billingLogFiles)
+        if tier != nil || weekly != nil {
+            let secondary = weekly.map {
+                RateLimitWindowReading(usedPercent: $0.usedPercent, windowMinutes: 10_080, resetsAt: $0.resetAt)
+            }
+            readings.append(RateLimitReading(providerId: "grok-code", observedAt: observedAt,
+                                             primary: nil, secondary: secondary, planType: tier,
+                                             sourcePath: "grok:unified.jsonl"))
         }
         return (AdapterRefreshResult(events: events, rateLimits: readings, scannedFiles: scanned, parseErrors: parseErrors,
                                      completeness: (complete && parseErrors == 0) ? .complete : .incomplete("some sources unreadable or unparsable")), newState)
@@ -129,10 +134,53 @@ public struct GrokCodeAdapter: ProviderAdapter {
 
     // MARK: - 訂閱方案標籤(billing 行窄解碼)
 
-    /// unified.jsonl 行的窄解碼:僅 `ctx.subscriptionTier` 一鍵;其餘 log 內容不物化。
+    public struct GrokWeeklyCreditsUsage: Equatable, Sendable {
+        public var usedPercent: Double
+        public var resetAt: Date?
+    }
+
+    /// unified.jsonl billing 行窄解碼(僅 tier + weekly % / period end)。
     struct BillingLine: Decodable {
-        struct Ctx: Decodable { let subscriptionTier: String? }
+        struct Config: Decodable {
+            let creditUsagePercent: Double?
+            let billingPeriodEnd: String?
+            struct Period: Decodable { let end: String? }
+            let currentPeriod: Period?
+        }
+        struct Ctx: Decodable {
+            let subscriptionTier: String?
+            let config: Config?
+        }
         let ctx: Ctx?
+    }
+
+    /// 最後一筆含 `creditUsagePercent` 的 billing config 行(與 Grok CLI /usage 一致)。
+    public static func readWeeklyCreditsUsage(from urls: [URL], tailBytes: Int = 2 * 1024 * 1024) -> GrokWeeklyCreditsUsage? {
+        let decoder = JSONDecoder()
+        for url in urls {
+            guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            let size = (try? handle.seekToEnd()) ?? 0
+            let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+            try? handle.seek(toOffset: start)
+            guard let data = try? handle.readToEnd(), !data.isEmpty else { continue }
+            var latest: GrokWeeklyCreditsUsage?
+            var scanStart = data.startIndex
+            while scanStart < data.endIndex {
+                let lineEnd = data[scanStart...].firstIndex(of: 0x0A) ?? data.endIndex
+                let line = data[scanStart..<lineEnd]
+                scanStart = lineEnd < data.endIndex ? data.index(after: lineEnd) : data.endIndex
+                guard line.range(of: Data("creditUsagePercent".utf8)) != nil else { continue }
+                guard let parsed = try? decoder.decode(BillingLine.self, from: line),
+                      let cfg = parsed.ctx?.config,
+                      let raw = cfg.creditUsagePercent else { continue }
+                let endStr = cfg.billingPeriodEnd ?? cfg.currentPeriod?.end
+                let reset = endStr.flatMap { ISO8601.parse($0) }
+                latest = GrokWeeklyCreditsUsage(usedPercent: min(100, max(0, raw)), resetAt: reset)
+            }
+            if let latest { return latest }
+        }
+        return nil
     }
 
     /// 讀 log 尾端(最後 ≤2MiB)的 billing 行,取**最後一筆非空** subscriptionTier。
