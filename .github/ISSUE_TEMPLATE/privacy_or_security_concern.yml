@@ -7,7 +7,7 @@ body:
       value: |
         ⚠️ **If this is an actual vulnerability or a suspected data leak, do NOT file a public issue.**
         Report it privately via a
-        [security advisory](https://github.com/F-e-u-e-r/ai-pet-usage/security/advisories/new)
+        [security advisory](https://github.com/S-E-C-C/ai-pet-usage/security/advisories/new)
         (see SECURITY.md). Use this template only for public, non-sensitive privacy/security *questions*.
         Never paste prompts, message bodies, tokens, or full local paths.
   - type: textarea

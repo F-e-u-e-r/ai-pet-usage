@@ -136,7 +136,7 @@ Deliverables:
 
 - Signed macOS app if possible (Developer ID + notarization — deferred; the only way to remove the first-launch Gatekeeper prompt).
 - DMG or ZIP release. ✅ ZIP releases shipped.
-- Homebrew cask. ✅ Shipped via a self-hosted tap (`brew install --cask F-e-u-e-r/tap/ai-pet-usage`).
+- Homebrew cask. ✅ Shipped via a self-hosted tap (`brew install --cask S-E-C-C/tap/ai-pet-usage`).
 - Auto-update strategy. ✅ In-app GitHub-release update notifier shipped; Sparkle (seamless in-app install) deferred until notarization.
 - Crash-safe settings storage.
 - First-run permission and privacy onboarding.
