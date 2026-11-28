@@ -55,10 +55,10 @@
 **Homebrew(Apple Silicon)** —— 推薦:
 
 ```bash
-brew install --cask F-e-u-e-r/tap/ai-pet-usage
+brew install --cask S-E-C-C/tap/ai-pet-usage
 ```
 
-一併處理安裝、`brew upgrade` 與 `brew uninstall`。**或**到 [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) 取得最新的 `AI-Pet-Usage-…-arm64.zip`,把 app 拖進 Applications。
+一併處理安裝、`brew upgrade` 與 `brew uninstall`。**或**到 [Releases](https://github.com/S-E-C-C/ai-pet-usage/releases) 取得最新的 `AI-Pet-Usage-…-arm64.zip`,把 app 拖進 Applications。
 
 **從舊版 `alpha-v*` 升級?**
 
@@ -71,7 +71,7 @@ brew install --cask F-e-u-e-r/tap/ai-pet-usage
 從原始碼建置(約一分鐘;Intel Mac 必須這樣做):
 
 ```bash
-git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
+git clone https://github.com/S-E-C-C/ai-pet-usage.git
 cd ai-pet-usage
 Scripts/build-app.sh
 open "dist/AI Pet Usage.app"

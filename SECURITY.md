@@ -20,7 +20,7 @@ builds receive no fixes. There is no long-term-support branch yet.
 **Please report suspected vulnerabilities or data leaks privately — do not open a public issue.**
 
 Use GitHub's private advisory flow:
-**[Report a vulnerability »](https://github.com/F-e-u-e-r/ai-pet-usage/security/advisories/new)**
+**[Report a vulnerability »](https://github.com/S-E-C-C/ai-pet-usage/security/advisories/new)**
 
 When reporting, please include enough to reproduce, but **never include**:
 

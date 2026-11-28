@@ -43,7 +43,7 @@ Implementations, kept in agreement by the frozen 75-vector fixture
 |---|---|---|
 | App (Swift) | `Sources/UsageCore/CanonicalVersion.swift`, a byte scanner (no regex) | `CanonicalVersionTests` runs the bash script on every vector |
 | Release workflow and build | `Scripts/release-version.sh` (bash, `LC_ALL=C`) | `Scripts/test-release-version.sh` |
-| Homebrew tap | `scripts/select-release.jq` in `F-e-u-e-r/homebrew-tap` (anchors `\A…\z`, digits `[0-9]`) | `scripts/test-bump.sh`, using a pinned copy of the fixture |
+| Homebrew tap | `scripts/select-release.jq` in `S-E-C-C/homebrew-tap` (anchors `\A…\z`, digits `[0-9]`) | `scripts/test-bump.sh`, using a pinned copy of the fixture |
 
 ## Ordering
 

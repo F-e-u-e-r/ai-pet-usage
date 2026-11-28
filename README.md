@@ -55,10 +55,10 @@ Your AI usage becomes a living companion — no dashboards to open, no commands 
 **Homebrew (Apple Silicon)** — recommended:
 
 ```bash
-brew install --cask F-e-u-e-r/tap/ai-pet-usage
+brew install --cask S-E-C-C/tap/ai-pet-usage
 ```
 
-This handles install, `brew upgrade`, and `brew uninstall`. **Or** grab the latest `AI-Pet-Usage-…-arm64.zip` from [Releases](https://github.com/F-e-u-e-r/ai-pet-usage/releases) and drag the app to Applications.
+This handles install, `brew upgrade`, and `brew uninstall`. **Or** grab the latest `AI-Pet-Usage-…-arm64.zip` from [Releases](https://github.com/S-E-C-C/ai-pet-usage/releases) and drag the app to Applications.
 
 **Coming from a legacy `alpha-v*` build?**
 
@@ -71,7 +71,7 @@ The retired versions are listed in [`docs/release/LEGACY-ALPHA-HISTORY.md`](docs
 Build from source (about a minute; required for Intel Macs):
 
 ```bash
-git clone https://github.com/F-e-u-e-r/ai-pet-usage.git
+git clone https://github.com/S-E-C-C/ai-pet-usage.git
 cd ai-pet-usage
 Scripts/build-app.sh
 open "dist/AI Pet Usage.app"

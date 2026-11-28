@@ -58,9 +58,9 @@ The retired `alpha-v*` namespace is never used again.
    - re-verifies the published tag, pre-release flag, asset and digest;
    - for a stable release, marks the highest canonical stable release Latest and confirms it after its own
      write (`Scripts/reconcile-latest.sh`).
-3. Bump the cask in `F-e-u-e-r/homebrew-tap`: run its `bump-cask` workflow, or wait about 6h. The cask
+3. Bump the cask in `S-E-C-C/homebrew-tap`: run its `bump-cask` workflow, or wait about 6h. The cask
    tracks the highest canonical beta / rc / stable release.
-   - Then run `brew style` and smoke `brew install --cask F-e-u-e-r/tap/ai-pet-usage`.
+   - Then run `brew style` and smoke `brew install --cask S-E-C-C/tap/ai-pet-usage`.
    - The in-app updater reads GitHub Releases directly, so a fresh release can be ahead of `brew upgrade`
      until the cask is bumped.
 
